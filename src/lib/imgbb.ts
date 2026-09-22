@@ -20,10 +20,20 @@ async function uploadWithKey(key: string, file: File): Promise<{ url: string; de
   const res = await fetch(`https://api.imgbb.com/1/upload?key=${encodeURIComponent(key)}`, {
     method: 'POST',
     body: form,
+    headers: {
+      // some CDNs (Cloudflare in front of ImgBB) reject default server UAs
+      'User-Agent':
+        'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+    },
     signal: AbortSignal.timeout(30_000),
   })
-  if (!res.ok) throw new Error(`ImgBB HTTP ${res.status}`)
-  const json = await res.json()
+  const json = (await res.json().catch(() => null)) as
+    | { success?: boolean; data?: { url?: string; display?: string; delete_url?: string }; error?: { message?: string } }
+    | null
+  if (!res.ok) {
+    const detail = json?.error?.message ? ` — ${json.error.message}` : ''
+    throw new Error(`ImgBB HTTP ${res.status}${detail}`)
+  }
   if (!json?.success || !json?.data?.url) throw new Error(json?.error?.message || 'ImgBB upload failed')
   return { url: json.data.display || json.data.url, deleteUrl: json.data.delete_url || '' }
 }
