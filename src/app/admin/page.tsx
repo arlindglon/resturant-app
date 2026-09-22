@@ -140,6 +140,8 @@ const LEDGER_TYPE_BN: Record<string, { label: string; cls: string }> = {
   BIRTHDAY_CLAIMED: { label: '🎂 জন্মদিন ছাড়', cls: 'bg-emerald-100 text-emerald-800' },
   BIRTHDAY_BLOCKED: { label: '🚫 জন্মদিন ব্লক', cls: 'bg-red-100 text-red-700' },
   BILL_PAID: { label: '✅ বিল পরিশোধ', cls: 'bg-green-100 text-green-800' },
+  TRANSACTION_EDITED: { label: '✏️ লেনদেন এডিট', cls: 'bg-amber-100 text-amber-800' },
+  TRANSACTION_DELETED: { label: '🗑️ লেনদেন ডিলিট', cls: 'bg-red-100 text-red-800' },
 }
 
 interface Category {
@@ -312,6 +314,13 @@ function DayChips({ value, onChange }: { value: number[]; onChange: (d: number[]
       ))}
     </div>
   )
+}
+
+/** ISO date → "YYYY-MM-DDTHH:mm" for <input type="datetime-local"> */
+function toLocalInputValue(iso: string | Date): string {
+  const d = new Date(iso)
+  const pad = (n: number) => String(n).padStart(2, '0')
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`
 }
 
 /** upload one image file to /api/upload → returns url */
@@ -2603,6 +2612,43 @@ function ReceiptsTab({ onAuthRequired }: TabProps) {
   const [to, setTo] = useState('')
   const [expandedId, setExpandedId] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
+  // edit / delete transaction history
+  const [editTarget, setEditTarget] = useState<ReceiptRow | null>(null)
+  const [editMethod, setEditMethod] = useState('CASH')
+  const [editPaidAt, setEditPaidAt] = useState('')
+  const [savingEdit, setSavingEdit] = useState(false)
+  const [deletingId, setDeletingId] = useState<string | null>(null)
+
+  const openEdit = (r: ReceiptRow) => {
+    setEditTarget(r)
+    setEditMethod(r.paymentMethod)
+    setEditPaidAt(toLocalInputValue(r.paidAt))
+  }
+
+  const saveEdit = async () => {
+    if (!editTarget) return
+    setSavingEdit(true)
+    const res = await api.put(`/api/admin/receipts/${editTarget.id}`, {
+      paymentMethod: editMethod,
+      paidAt: editPaidAt ? new Date(editPaidAt).toISOString() : undefined,
+    })
+    setSavingEdit(false)
+    if (isAuthError(res)) return onAuthRequired()
+    if (!res.ok) return toast.error(res.error || 'এডিট ব্যর্থ হয়েছে')
+    toast.success('রসিদ আপডেট হয়েছে ✅')
+    setEditTarget(null)
+    load()
+  }
+
+  const doDelete = async (r: ReceiptRow) => {
+    setDeletingId(r.id)
+    const res = await api.del(`/api/admin/receipts/${r.id}`)
+    setDeletingId(null)
+    if (isAuthError(res)) return onAuthRequired()
+    if (!res.ok) return toast.error(res.error || 'ডিলিট ব্যর্থ হয়েছে')
+    toast.success(`রসিদ #${r.receiptNo} পুরো লেনদেন মুছে ফেলা হয়েছে`)
+    load()
+  }
 
   const load = useCallback(async () => {
     setLoading(true)
@@ -2783,7 +2829,44 @@ function ReceiptsTab({ onAuthRequired }: TabProps) {
                         </div>
                       </div>
                     ))}
-                    <div className="flex justify-end">
+                    <div className="flex flex-wrap justify-end gap-2">
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        onClick={() => openEdit(r)}
+                        className="border-stone-300 font-black text-stone-700 hover:bg-stone-100"
+                      >
+                        ✏️ এডিট
+                      </Button>
+                      <AlertDialog>
+                        <AlertDialogTrigger asChild>
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            disabled={deletingId === r.id}
+                            className="border-red-200 font-black text-red-600 hover:bg-red-50"
+                          >
+                            {deletingId === r.id ? 'মুছছে…' : '🗑️ ডিলিট'}
+                          </Button>
+                        </AlertDialogTrigger>
+                        <AlertDialogContent>
+                          <AlertDialogHeader>
+                            <AlertDialogTitle>রসিদ #{toBn(String(r.receiptNo))} ডিলিট করবেন?</AlertDialogTitle>
+                            <AlertDialogDescription>
+                              এই লেনদেনের {bnTaka(r.total)}, সব অর্ডার ও আইটেম — হিস্ট্রি, ওভারভিউ ও অ্যানালিটিক্সসহ পুরো সিস্টেম থেকে মুছে যাবে। এটা আর ফেরানো যাবে না!
+                            </AlertDialogDescription>
+                          </AlertDialogHeader>
+                          <AlertDialogFooter>
+                            <AlertDialogCancel>বাতিল</AlertDialogCancel>
+                            <AlertDialogAction
+                              onClick={() => doDelete(r)}
+                              className="bg-red-600 font-black text-white hover:bg-red-700"
+                            >
+                              হ্যাঁ, ডিলিট করুন
+                            </AlertDialogAction>
+                          </AlertDialogFooter>
+                        </AlertDialogContent>
+                      </AlertDialog>
                       <Button
                         size="sm"
                         variant="outline"
@@ -2802,6 +2885,51 @@ function ReceiptsTab({ onAuthRequired }: TabProps) {
       )}
 
       {loading && <p className="text-center text-xs text-stone-400">লোড হচ্ছে…</p>}
+
+      {/* edit transaction dialog */}
+      <Dialog open={!!editTarget} onOpenChange={(o) => !o && setEditTarget(null)}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>রসিদ #{editTarget ? toBn(String(editTarget.receiptNo)) : ''} এডিট</DialogTitle>
+            <DialogDescription>
+              পেমেন্ট মেথড ও সময় ঠিক করুন — এই রসিদের সব অর্ডারেও একসাথে আপডেট হবে।
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4">
+            <div className="space-y-1.5">
+              <Label>পেমেন্ট মেথড</Label>
+              <Select value={editMethod} onValueChange={setEditMethod}>
+                <SelectTrigger>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {Object.entries(PAY_METHOD_BN).map(([k, v]) => (
+                    <SelectItem key={k} value={k}>
+                      {v}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="space-y-1.5">
+              <Label>পরিশোধের সময়</Label>
+              <Input type="datetime-local" value={editPaidAt} onChange={(e) => setEditPaidAt(e.target.value)} />
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setEditTarget(null)}>
+              বাতিল
+            </Button>
+            <Button
+              onClick={saveEdit}
+              disabled={savingEdit}
+              className="bg-amber-500 font-black text-white hover:bg-amber-600"
+            >
+              {savingEdit ? 'সেভ হচ্ছে…' : 'সেভ করুন'}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   )
 }
