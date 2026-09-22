@@ -113,7 +113,7 @@ type Phase = 'loading' | 'ok' | 'invalid' | 'error'
 
 export default function BillPage() {
   const cfg = useSiteConfig()
-  const restaurantName = cfg?.restaurantName || 'Spice Garden'
+  const restaurantName = cfg?.restaurantName || 'Smart QR Restaurant'
 
   const [phase, setPhase] = useState<Phase>('loading')
   const [bill, setBill] = useState<BillData | null>(null)

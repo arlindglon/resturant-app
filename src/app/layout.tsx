@@ -16,18 +16,25 @@ const geistMono = Geist_Mono({
 });
 
 // Page title follows the admin panel: "<রেস্টুরেন্টের নাম> — <title_suffix>"
+// force-dynamic → metadata (tab title + favicon) is resolved on EVERY request,
+// so a name/logo change in the admin panel shows up instantly — the old
+// build-time values (e.g. "Spice Garden") stay baked forever otherwise.
+export const dynamic = "force-dynamic";
+
 export async function generateMetadata(): Promise<Metadata> {
   const [name, suffix, logo] = await Promise.all([
     getSetting(SETTING_KEYS.RESTAURANT_NAME),
     getSetting(SETTING_KEYS.TITLE_SUFFIX),
     getSetting(SETTING_KEYS.RESTAURANT_LOGO_URL),
-  ])
-  const restaurantName = name || "Smart QR Restaurant"
-  const titleSuffix = suffix || "Smart Restaurant System"
+  ]);
+  const restaurantName = (name || "Smart QR Restaurant").trim();
+  const titleSuffix = (suffix || "Smart Restaurant System").trim();
   return {
-    title: `${restaurantName} - ${titleSuffix}`,
+    title: titleSuffix ? `${restaurantName} - ${titleSuffix}` : restaurantName,
     description: `${restaurantName} — Smart QR Restaurant Management, Sales Engine & CRM — স্ক্যান করুন, অর্ডার করুন, উপভোগ করুন!`,
-    icons: logo ? { icon: logo } : { icon: "https://z-cdn.chatglm.cn/z-ai/static/logo.svg" },
+    // logo uploaded in admin → use it as favicon; otherwise the bundled
+    // src/app/favicon.ico + icon.png + apple-icon.png are served
+    ...(logo ? { icons: { icon: logo, apple: logo } } : {}),
   };
 }
 

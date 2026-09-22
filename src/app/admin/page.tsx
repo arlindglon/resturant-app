@@ -323,11 +323,47 @@ function toLocalInputValue(iso: string | Date): string {
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`
 }
 
+/**
+ * Shrink big phone photos in the browser BEFORE uploading.
+ * Vercel serverless rejects request bodies over ~4.5MB (413) — a 8-12MP
+ * photo easily crosses that. Canvas-resize to ≤1800px / JPEG q85 keeps
+ * every upload well under the limit (and ImgBB-quick). Never throws.
+ */
+async function compressImage(file: File, maxSide = 1800, quality = 0.85): Promise<File> {
+  if (file.type === 'image/gif') return file // animated gif must stay intact
+  if (file.size <= 1_200_000) return file // already small → fast path
+  try {
+    const bitmap = await createImageBitmap(file)
+    const scale = Math.min(1, maxSide / Math.max(bitmap.width, bitmap.height))
+    const w = Math.max(1, Math.round(bitmap.width * scale))
+    const h = Math.max(1, Math.round(bitmap.height * scale))
+    const canvas = document.createElement('canvas')
+    canvas.width = w
+    canvas.height = h
+    const ctx = canvas.getContext('2d')
+    if (!ctx) return file
+    ctx.drawImage(bitmap, 0, 0, w, h)
+    bitmap.close()
+    const isPng = file.type === 'image/png'
+    const mime = isPng ? 'image/png' : 'image/jpeg'
+    const blob = await new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, mime, quality))
+    if (!blob || blob.size >= file.size) return file // compression didn't help
+    const name = file.name.replace(/\.[^.]+$/, '') + (isPng ? '.png' : '.jpg')
+    return new File([blob], name, { type: mime })
+  } catch {
+    return file // decode failed (e.g. HEIC) → let the server try the original
+  }
+}
+
 /** upload one image file to /api/upload → returns url */
 async function uploadImageFile(file: File): Promise<string> {
+  const up = await compressImage(file)
   const fd = new FormData()
-  fd.append('file', file)
+  fd.append('file', up)
   const res = await fetch('/api/upload', { method: 'POST', body: fd })
+  if (res.status === 413) {
+    throw new Error('ছবিটি খুব বড় — ছোট ছবি দিন (সর্বোচ্চ ~৪MB)')
+  }
   const json = (await res.json().catch(() => null)) as ApiResponse<{ url: string }> | null
   if (!json?.ok || !json.data?.url) throw new Error(json?.error || 'আপলোড ব্যর্থ')
   return json.data.url

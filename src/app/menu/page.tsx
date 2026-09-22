@@ -619,7 +619,7 @@ function ItemCustomizer({
 
 export default function MenuPage() {
   const cfg = useSiteConfig()
-  const restaurantName = cfg?.restaurantName || 'Spice Garden'
+  const restaurantName = cfg?.restaurantName || 'Smart QR Restaurant'
   const specialNoteEnabled = cfg?.specialNoteEnabled === true
 
   // session

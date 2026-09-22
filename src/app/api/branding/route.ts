@@ -17,7 +17,7 @@ export async function GET() {
       getSettingFresh(SETTING_KEYS.HOME_LINKS_ENABLED),
     ])
     return ok({
-      name: name || SETTING_DEFAULTS[SETTING_KEYS.RESTAURANT_NAME] || 'Spice Garden',
+      name: name || SETTING_DEFAULTS[SETTING_KEYS.RESTAURANT_NAME] || 'Smart QR Restaurant',
       logoUrl: logoUrl || '',
       devNote: {
         enabled: devEnabled !== 'false',
@@ -28,7 +28,7 @@ export async function GET() {
     })
   } catch {
     return ok({
-      name: SETTING_DEFAULTS[SETTING_KEYS.RESTAURANT_NAME] || 'Spice Garden',
+      name: SETTING_DEFAULTS[SETTING_KEYS.RESTAURANT_NAME] || 'Smart QR Restaurant',
       logoUrl: '',
       devNote: { enabled: true, text: '', link: '' },
       homeLinks: true,

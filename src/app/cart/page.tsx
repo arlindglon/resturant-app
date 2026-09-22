@@ -78,7 +78,7 @@ const emptySubscribe = () => () => {}
 export default function CartPage() {
   const router = useRouter()
   const cfg = useSiteConfig()
-  const restaurantName = cfg?.restaurantName || 'Spice Garden'
+  const restaurantName = cfg?.restaurantName || 'Smart QR Restaurant'
 
   const items = useCart((s) => s.items)
   const appliedVoucher = useCart((s) => s.appliedVoucher)

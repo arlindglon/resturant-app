@@ -26,7 +26,7 @@ export default function LandingPage() {
   const cfg = useSiteConfig()
   const [scanning, setScanning] = useState<number | null>(null)
   const [logoError, setLogoError] = useState(false)
-  const restaurantName = cfg?.restaurantName || 'Spice Garden'
+  const restaurantName = cfg?.restaurantName || 'Smart QR Restaurant'
 
   async function handleScan(tableNumber: number) {
     if (scanning !== null) return

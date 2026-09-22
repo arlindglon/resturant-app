@@ -21,13 +21,13 @@ export interface Branding {
 }
 
 export const DEFAULT_BRANDING: Branding = {
-  name: 'Spice Garden',
+  name: 'Smart QR Restaurant',
   logoUrl: '',
   devNote: { enabled: true, text: '', link: '' },
   homeLinks: true,
 }
 
-const LS_KEY = 'qr_branding_v3'
+const LS_KEY = 'qr_branding_v4' // v4: drops stale "Spice Garden" caches from older visits
 const REVALIDATE_MS = 5_000 // max one network hit per 5s across all pages
 
 let snapshot: Branding = DEFAULT_BRANDING
