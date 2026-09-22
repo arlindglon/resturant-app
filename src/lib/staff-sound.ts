@@ -122,12 +122,16 @@ export function staffConfirmBeep(): void {
 }
 
 /**
- * staffChime('order')  — 6 repeating pairs of triangle tones 1175 Hz + 1568 Hz
- *                        with soft harmonics, total ~1.4 s (bright "ding-ding").
- * staffChime('waiter') — alternating 880/622 Hz square + sawtooth pattern
- *                        (urgent doorbell-ish "bzz-bong").
+ * staffChime('order')   — 6 repeating pairs of triangle tones 1175 Hz + 1568 Hz
+ *                         with soft harmonics, total ~1.4 s (bright "ding-ding").
+ * staffChime('waiter')  — alternating 880/622 Hz square + sawtooth pattern
+ *                         (urgent doorbell-ish "bzz-bong").
+ * staffChime('cooking') — low warm double tone 523→392 Hz ("kitchen started").
+ * staffChime('ready')   — bright ascending triple 988→1319→1568 Hz ×2
+ *                         ("food READY — serve it!").
+ * staffChime('served')  — soft descending pair 784→587 Hz ("table served").
  */
-export function staffChime(kind: 'order' | 'waiter'): void {
+export function staffChime(kind: 'order' | 'waiter' | 'cooking' | 'ready' | 'served'): void {
   if (!armed) return
   try {
     if (kind === 'order') {
@@ -141,7 +145,7 @@ export function staffChime(kind: 'order' | 'waiter'): void {
         tone(2350, t, 0.07, 0.05, 'sine')
         tone(3136, t + 0.105, 0.06, 0.04, 'sine')
       }
-    } else {
+    } else if (kind === 'waiter') {
       // waiter: alternating 880/622, square + sawtooth, 4 beats
       const beats: Array<[number, OscillatorType]> = [
         [880, 'square'],
@@ -152,6 +156,23 @@ export function staffChime(kind: 'order' | 'waiter'): void {
       beats.forEach(([freq, type], i) => {
         tone(freq, i * 0.24, 0.18, 0.14, type)
       })
+    } else if (kind === 'cooking') {
+      // cooking started: warm low double
+      tone(523, 0, 0.16, 0.18, 'sine')
+      tone(392, 0.18, 0.2, 0.16, 'sine')
+    } else if (kind === 'ready') {
+      // order READY: bright ascending triple ×2 — impossible to miss
+      const seq = [988, 1319, 1568]
+      for (let rep = 0; rep < 2; rep++) {
+        seq.forEach((f, i) => {
+          tone(f, rep * 0.45 + i * 0.12, 0.11, 0.2, 'triangle')
+        })
+        tone(2093, rep * 0.45 + 2 * 0.12, 0.14, 0.08, 'sine')
+      }
+    } else {
+      // served: soft descending pair
+      tone(784, 0, 0.14, 0.12, 'sine')
+      tone(587, 0.15, 0.18, 0.1, 'sine')
     }
   } catch {
     /* audio must never crash the panel */

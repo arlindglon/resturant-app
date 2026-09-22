@@ -390,7 +390,11 @@ function OverviewTab({ onAuthRequired }: TabProps) {
 
   useEffect(() => {
     const t = setTimeout(load, 0)
-    return () => clearTimeout(t)
+    const iv = setInterval(load, 15000) // overview stats stay fresh automatically
+    return () => {
+      clearTimeout(t)
+      clearInterval(iv)
+    }
   }, [load])
 
   if (err) return <LoadError msg={err} onRetry={load} />
@@ -588,6 +592,7 @@ function TablesTab({ onAuthRequired }: TabProps) {
   // sound tracking: new orders / new waiter calls → chime + toast
   const knownOrderIdsRef = useRef<Set<string>>(new Set())
   const knownCallIdsRef = useRef<Set<string>>(new Set())
+  const knownStatusRef = useRef<Map<string, string>>(new Map())
   const hadDataRef = useRef(false)
 
   const load = useCallback(async () => {
@@ -600,14 +605,22 @@ function TablesTab({ onAuthRequired }: TabProps) {
     setErr('')
     setTables(res.data.tables)
 
-    // ---- detect NEW orders + NEW pending waiter calls → chime + toast ----
+    // ---- detect NEW orders, STATUS CHANGES + NEW pending waiter calls → chime + toast ----
     const freshOrders: { orderNo: number; tableNumber: number }[] = []
     const freshCalls: { type: string; tableNumber: number }[] = []
+    const statusChanges: { orderNo: number; tableNumber: number; to: string }[] = []
     for (const t of res.data.tables) {
       for (const o of t.session?.orders ?? []) {
         if (hadDataRef.current && !knownOrderIdsRef.current.has(o.id)) {
           freshOrders.push({ orderNo: o.orderNo, tableNumber: t.number })
         }
+        const prev = knownStatusRef.current.get(o.id)
+        // known order whose status moved (PLACED→COOKING→READY→SERVED…) —
+        // e.g. changed by another admin/sub-admin device or the KDS screen
+        if (hadDataRef.current && prev && prev !== o.status) {
+          statusChanges.push({ orderNo: o.orderNo, tableNumber: t.number, to: o.status })
+        }
+        knownStatusRef.current.set(o.id, o.status)
         knownOrderIdsRef.current.add(o.id)
       }
       for (const c of t.pendingCalls) {
@@ -626,11 +639,29 @@ function TablesTab({ onAuthRequired }: TabProps) {
       staffChime('waiter')
       toast.warning(`🔔 ${CALL_BN[freshCalls[0].type] || 'কল'} — টেবিল ${toBn(freshCalls[0].tableNumber)}`)
     }
+    // ---- live status changes: DISTINCT chime per stage so staff hears
+    //      exactly WHAT happened without looking at the screen ----
+    if (statusChanges.length > 0) {
+      const tos = statusChanges.map((c) => c.to)
+      // one chime only — the most important stage wins (no sound spam)
+      if (tos.includes('READY')) staffChime('ready')
+      else if (tos.includes('COOKING')) staffChime('cooking')
+      else if (tos.includes('SERVED')) staffChime('served')
+      for (const c of statusChanges.slice(0, 3)) {
+        const no = toBn(String(c.orderNo))
+        const tbl = toBn(c.tableNumber)
+        if (c.to === 'READY') toast.success(`✅ অর্ডার #${no} রেডি! পরিবেশন করুন — টেবিল ${tbl}`)
+        else if (c.to === 'COOKING') toast.info(`🔥 অর্ডার #${no} রান্না শুরু — টেবিল ${tbl}`)
+        else if (c.to === 'SERVED') toast.info(`🍽️ অর্ডার #${no} পরিবেশিত — টেবিল ${tbl}`)
+        else if (c.to === 'CANCELLED') toast.warning(`❌ অর্ডার #${no} বাতিল হয়েছে — টেবিল ${tbl}`)
+        else if (c.to === 'COMPLETED') toast.success(`✔️ অর্ডার #${no} সম্পন্ন — টেবিল ${tbl}`)
+      }
+    }
   }, [onAuthRequired])
 
   useEffect(() => {
     const t = setTimeout(load, 0)
-    const iv = setInterval(load, 10000) // live tracking
+    const iv = setInterval(load, 5000) // live tracking (was 10s — faster feedback)
     return () => {
       clearTimeout(t)
       clearInterval(iv)
@@ -3357,6 +3388,7 @@ function SettingsTab({ onAuthRequired }: TabProps) {
       [SETTING_KEYS.RECEIPT_SUBTITLE]: form[SETTING_KEYS.RECEIPT_SUBTITLE] ?? '',
       [SETTING_KEYS.RECEIPT_THANKS]: form[SETTING_KEYS.RECEIPT_THANKS] ?? '',
       [SETTING_KEYS.RECEIPT_FOOTER_NOTE]: form[SETTING_KEYS.RECEIPT_FOOTER_NOTE] ?? '',
+      [SETTING_KEYS.POWERED_BY]: form[SETTING_KEYS.POWERED_BY] ?? '',
       [SETTING_KEYS.DEVELOPER_NOTE_ENABLED]: form[SETTING_KEYS.DEVELOPER_NOTE_ENABLED] ?? 'true',
       [SETTING_KEYS.DEVELOPER_NOTE_TEXT]: form[SETTING_KEYS.DEVELOPER_NOTE_TEXT] ?? '',
       [SETTING_KEYS.DEVELOPER_NOTE_LINK]: form[SETTING_KEYS.DEVELOPER_NOTE_LINK] ?? '',
@@ -3591,6 +3623,15 @@ function SettingsTab({ onAuthRequired }: TabProps) {
               onChange={(e) => set(SETTING_KEYS.RECEIPT_FOOTER_NOTE, e.target.value)}
               placeholder="রসিদের একদম নিচে ছোট করে দেখাবে (যেমন: VAT অন্তর্ভুক্ত)"
               className="max-w-lg"
+            />
+          </div>
+          <div className="space-y-1">
+            <FieldLabel>"Powered by" লাইন</FieldLabel>
+            <Input
+              value={form[SETTING_KEYS.POWERED_BY] ?? ''}
+              onChange={(e) => set(SETTING_KEYS.POWERED_BY, e.target.value)}
+              placeholder="Powered by Smart QR — ফাঁকা রাখলে এই লাইনটাই দেখাবে না"
+              className="max-w-md"
             />
           </div>
         </CardContent>

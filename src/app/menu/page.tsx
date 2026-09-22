@@ -28,6 +28,7 @@ import { toast } from 'sonner'
 
 import { api } from '@/lib/client'
 import { armAudio, playStatusSound } from '@/lib/customer-sound'
+import { toBn } from '@/lib/bn'
 import { taka } from '@/lib/constants'
 import { cn } from '@/lib/utils'
 import { useCart, unitPrice, type CartItem } from '@/store/cart'
@@ -639,6 +640,8 @@ export default function MenuPage() {
   const [dialogItem, setDialogItem] = useState<MenuItemData | null>(null)
   const [dialogOpen, setDialogOpen] = useState(false)
   const [upsellSource, setUpsellSource] = useState<MenuItemData | null>(null)
+  // per-item count of upsell adds in this drawer session — drives the "✓ যোগ হয়েছে" feedback
+  const [addedUpsell, setAddedUpsell] = useState<Record<string, number>>({})
 
   // waiter
   const [waiterOpen, setWaiterOpen] = useState(false)
@@ -715,9 +718,12 @@ export default function MenuPage() {
     }
   }, [])
 
-  // initial load — session first, then menu + orders
+  // initial load — session + menu fetch run in PARALLEL, orders after session OK
   useEffect(() => {
     ;(async () => {
+      // menu is public → fetch in PARALLEL with the session check
+      // (one round-trip saved on every scan = noticeably faster first paint)
+      fetchMenu()
       const res = await api.get<SessionInfo>('/api/session')
       if (!res.ok || !res.data) {
         setPhase('error')
@@ -728,7 +734,6 @@ export default function MenuPage() {
         setExpiresAt(res.data.expiresAt)
         setMinutesLeft(res.data.minutesLeft)
         setPhase('ready')
-        fetchMenu()
         fetchOrders()
       } else {
         setPhase('expired')
@@ -844,7 +849,10 @@ export default function MenuPage() {
     toast.success('কার্টে যোগ হয়েছে')
     setDialogOpen(false)
     // UPSELL ENGINE — offer pairings right after adding
-    if (source.upsellIds.length > 0) setUpsellSource(source)
+    if (source.upsellIds.length > 0) {
+      setAddedUpsell({}) // fresh count for this drawer session
+      setUpsellSource(source)
+    }
   }
 
   function quickAddUpsell(u: MenuItemData) {
@@ -859,6 +867,9 @@ export default function MenuPage() {
       addons: [],
       specialNote: '',
     })
+    // CLEAR visual feedback — button turns green "✓ যোগ হয়েছে (n)" so the
+    // customer immediately SEES the item was added (was only a toast before)
+    setAddedUpsell((p) => ({ ...p, [u.id]: (p[u.id] || 0) + 1 }))
     toast.success(`"${u.name}" কার্টে যোগ হয়েছে`)
   }
 
@@ -1243,34 +1254,62 @@ export default function MenuPage() {
                   কোনো আপসেল আইটেম পাওয়া যায়নি
                 </p>
               ) : (
-                upsellItems.map((u) => (
-                  <div
-                    key={u.id}
-                    className="flex items-center gap-3 rounded-xl border border-amber-100 bg-amber-50/50 p-2.5"
-                  >
-                    <ItemThumb
-                      src={u.imageUrl}
-                      alt={u.name}
-                      className="size-12 shrink-0 rounded-lg"
-                      iconClassName="size-5"
-                    />
-                    <div className="min-w-0 flex-1">
-                      <p className="truncate text-sm font-semibold text-stone-800">{u.name}</p>
-                      <p className="text-sm font-bold text-amber-600">{taka(u.price)}</p>
-                    </div>
-                    <Button
-                      size="sm"
-                      onClick={() => quickAddUpsell(u)}
-                      className="bg-amber-500 font-bold text-white hover:bg-amber-600"
+                upsellItems.map((u) => {
+                  const added = addedUpsell[u.id] || 0
+                  return (
+                    <div
+                      key={u.id}
+                      className={`flex items-center gap-3 rounded-xl border p-2.5 transition-colors ${
+                        added > 0 ? 'border-emerald-300 bg-emerald-50' : 'border-amber-100 bg-amber-50/50'
+                      }`}
                     >
-                      <Plus className="size-3.5" />
-                      যোগ করুন
-                    </Button>
-                  </div>
-                ))
+                      <ItemThumb
+                        src={u.imageUrl}
+                        alt={u.name}
+                        className="size-12 shrink-0 rounded-lg"
+                        iconClassName="size-5"
+                      />
+                      <div className="min-w-0 flex-1">
+                        <p className="truncate text-sm font-semibold text-stone-800">{u.name}</p>
+                        <p className={`text-sm font-bold ${added > 0 ? 'text-emerald-600' : 'text-amber-600'}`}>
+                          {taka(u.price)}
+                        </p>
+                      </div>
+                      <Button
+                        size="sm"
+                        onClick={() => quickAddUpsell(u)}
+                        className={`font-bold text-white ${
+                          added > 0 ? 'bg-emerald-500 hover:bg-emerald-600' : 'bg-amber-500 hover:bg-amber-600'
+                        }`}
+                      >
+                        {added > 0 ? (
+                          <>
+                            <Check className="size-3.5" />
+                            {added > 1 ? `যোগ হয়েছে ×${toBn(added)}` : 'যোগ হয়েছে ✓'}
+                          </>
+                        ) : (
+                          <>
+                            <Plus className="size-3.5" />
+                            যোগ করুন
+                          </>
+                        )}
+                      </Button>
+                    </div>
+                  )
+                })
               )}
             </div>
-            <div className="p-4">
+            <div className="p-4 pt-2">
+              {Object.values(addedUpsell).some((n) => n > 0) && (
+                <Link
+                  href="/cart"
+                  onClick={() => setUpsellSource(null)}
+                  className="mb-2 flex w-full items-center justify-center gap-1.5 rounded-xl bg-emerald-500 px-4 py-2.5 text-sm font-bold text-white transition-colors hover:bg-emerald-600"
+                >
+                  <Check className="size-4" />
+                  {toBn(Object.values(addedUpsell).reduce((a, b) => a + b, 0))} টি কার্টে যোগ হয়েছে — কার্ট দেখুন
+                </Link>
+              )}
               <Button
                 variant="outline"
                 onClick={() => setUpsellSource(null)}

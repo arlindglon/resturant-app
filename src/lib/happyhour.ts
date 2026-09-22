@@ -12,6 +12,24 @@ export interface HappyHourInfo {
   finalPrice: number
 }
 
+/** Shape of an active happy-hour rule (subset used by the engine) */
+export interface HappyHourRule {
+  id: string
+  name: string
+  discountPercent: number
+  daysOfWeek: string
+  startTime: string
+  endTime: string
+  startDate: Date | null
+  endDate: Date | null
+  itemIds: string | null
+}
+
+/** Load every active rule in ONE query — callers compute prices in memory. */
+export async function loadActiveRules(): Promise<HappyHourRule[]> {
+  return db.happyHour.findMany({ where: { active: true } })
+}
+
 function minutesOfDay(d: Date): number {
   return d.getHours() * 60 + d.getMinutes()
 }
@@ -42,37 +60,38 @@ export function isDateRangeRule(r: { startDate?: Date | null; endDate?: Date | n
   return Boolean(r.startDate && r.endDate)
 }
 
-/** Returns the best active happy-hour for an item right now (null if none) */
-export async function getActiveHappyHourForItem(
+/** schedule gate shared by both rule modes (date-range OR weekly-days) */
+function ruleDayOk(r: HappyHourRule, now: Date): boolean {
+  if (isDateRangeRule(r)) {
+    if (!inDateRange(r.startDate, r.endDate, now)) return false
+  } else {
+    let days: number[] = []
+    try { days = JSON.parse(r.daysOfWeek || '[]') } catch { /* ignore */ }
+    const day = now.getDay()
+    if (days.length > 0 && !days.includes(day)) return false
+  }
+  return true
+}
+
+/** Pure, no DB — best active happy-hour for an item right now from pre-loaded rules. */
+export function bestHappyHourForItem(
+  rules: HappyHourRule[],
   itemId: string,
   basePrice: number,
-  now = new Date()
-): Promise<HappyHourInfo | null> {
-  const rules = await db.happyHour.findMany({ where: { active: true } })
-  const day = now.getDay()
+  now: Date
+): HappyHourInfo | null {
   const mins = minutesOfDay(now)
-
   let best: HappyHourInfo | null = null
   for (const r of rules) {
-    // date-range mode takes priority; otherwise weekly-days mode
-    if (isDateRangeRule(r)) {
-      if (!inDateRange(r.startDate, r.endDate, now)) continue
-    } else {
-      let days: number[] = []
-      try { days = JSON.parse(r.daysOfWeek || '[]') } catch { /* ignore */ }
-      if (days.length > 0 && !days.includes(day)) continue
-    }
-
+    if (!ruleDayOk(r, now)) continue
     const start = parseHHMM(r.startTime)
     const end = parseHHMM(r.endTime)
     // supports overnight windows (e.g. 22:00 → 02:00)
     const inWindow = start <= end ? mins >= start && mins <= end : mins >= start || mins <= end
     if (!inWindow) continue
-
     let itemIds: string[] = []
     try { itemIds = JSON.parse(r.itemIds || '[]') } catch { /* ignore */ }
     if (itemIds.length > 0 && !itemIds.includes(itemId)) continue
-
     const finalPrice = Math.max(0, Math.round(basePrice * (1 - r.discountPercent / 100) * 100) / 100)
     if (!best || r.discountPercent > best.percent) {
       best = { id: r.id, name: r.name, percent: r.discountPercent, finalPrice }
@@ -81,21 +100,12 @@ export async function getActiveHappyHourForItem(
   return best
 }
 
-/** Banner text for the menu header when any happy hour is live — shows the BEST discount */
-export async function getLiveHappyHourBanner(now = new Date()): Promise<string | null> {
-  const rules = await db.happyHour.findMany({ where: { active: true } })
-  const day = now.getDay()
+/** Pure, no DB — banner text for the best live discount right now. */
+export function bestBannerText(rules: HappyHourRule[], now: Date): string | null {
   const mins = minutesOfDay(now)
-
   let best: { name: string; percent: number } | null = null
   for (const r of rules) {
-    if (isDateRangeRule(r)) {
-      if (!inDateRange(r.startDate, r.endDate, now)) continue
-    } else {
-      let days: number[] = []
-      try { days = JSON.parse(r.daysOfWeek || '[]') } catch { /* ignore */ }
-      if (days.length > 0 && !days.includes(day)) continue
-    }
+    if (!ruleDayOk(r, now)) continue
     const start = parseHHMM(r.startTime)
     const end = parseHHMM(r.endTime)
     const inWindow = start <= end ? mins >= start && mins <= end : mins >= start || mins <= end
@@ -105,6 +115,22 @@ export async function getLiveHappyHourBanner(now = new Date()): Promise<string |
     }
   }
   return best ? `🔥 Happy Hour: ${best.name} — ${best.percent}% OFF` : null
+}
+
+/** Returns the best active happy-hour for an item right now (null if none) */
+export async function getActiveHappyHourForItem(
+  itemId: string,
+  basePrice: number,
+  now = new Date()
+): Promise<HappyHourInfo | null> {
+  const rules = await loadActiveRules()
+  return bestHappyHourForItem(rules, itemId, basePrice, now)
+}
+
+/** Banner text for the menu header when any happy hour is live — shows the BEST discount */
+export async function getLiveHappyHourBanner(now = new Date()): Promise<string | null> {
+  const rules = await loadActiveRules()
+  return bestBannerText(rules, now)
 }
 
 /* ───────── shared API-side parsing/validation helpers ───────── */

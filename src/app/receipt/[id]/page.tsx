@@ -54,7 +54,7 @@ const money = (n: number) => `৳${n.toFixed(n % 1 === 0 ? 0 : 2)}`
 export default function ReceiptPrintPage() {
   const params = useParams<{ id: string }>()
   const [data, setData] = useState<ReceiptData | null>(null)
-  const [cfg, setCfg] = useState({ name: '', subtitle: '', thanks: '', footer: '', logo: '' })
+  const [cfg, setCfg] = useState({ name: '', subtitle: '', thanks: '', footer: '', logo: '', poweredBy: 'Powered by Smart QR' })
   const [developer, setDeveloper] = useState<{ enabled: boolean; text: string; link: string }>({
     enabled: false,
     text: '',
@@ -73,6 +73,7 @@ export default function ReceiptPrintPage() {
             logoUrl: string
             receiptSubtitle: string
             receiptThanks: string
+            poweredBy?: string
             developerNote?: { enabled: boolean; text: string; link: string }
           }>('/api/site-config'),
         ])
@@ -85,6 +86,7 @@ export default function ReceiptPrintPage() {
           thanks: c?.receiptThanks || 'ধন্যবাদ! আবার আসবেন 🙏',
           footer: '',
           logo: c?.logoUrl || '',
+          poweredBy: c?.poweredBy ?? 'Powered by Smart QR',
         })
         setDeveloper({
           enabled: c?.developerNote?.enabled ?? false,
@@ -212,7 +214,10 @@ export default function ReceiptPrintPage() {
         {/* footer */}
         <div className="mt-5 border-t-2 border-dashed border-stone-300 pt-3 text-center">
           <p className="text-sm font-semibold text-stone-800">{cfg.thanks}</p>
-          <p className="mt-1 text-[11px] text-stone-400">{cfg.name} • Powered by Smart QR</p>
+          <p className="mt-1 text-[11px] text-stone-400">
+            {cfg.name}
+            {cfg.poweredBy.trim() ? ` • ${cfg.poweredBy.trim()}` : ''}
+          </p>
           {developer.enabled && developer.text.trim() && (
             <p className="mt-1.5 text-[10px] text-stone-400 print:text-stone-500">
               <span aria-hidden>👨‍💻 </span>

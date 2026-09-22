@@ -3,8 +3,8 @@ import crypto from 'crypto'
 import { cookies } from 'next/headers'
 import { ADMIN_COOKIE } from '@/lib/constants'
 
-export function ok<T>(data: T, init?: number) {
-  return NextResponse.json({ ok: true, data }, { status: init || 200 })
+export function ok<T>(data: T, init?: number, headers?: Record<string, string>) {
+  return NextResponse.json({ ok: true, data }, { status: init || 200, headers })
 }
 
 export function fail(error: string, status = 400, code?: string) {

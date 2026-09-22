@@ -16,16 +16,20 @@ export async function GET() {
       getSettingFresh(SETTING_KEYS.DEVELOPER_NOTE_LINK),
       getSettingFresh(SETTING_KEYS.HOME_LINKS_ENABLED),
     ])
-    return ok({
-      name: name || SETTING_DEFAULTS[SETTING_KEYS.RESTAURANT_NAME] || 'Smart QR Restaurant',
-      logoUrl: logoUrl || '',
-      devNote: {
-        enabled: devEnabled !== 'false',
-        text: devText || '',
-        link: devLink || '',
+    return ok(
+      {
+        name: name || SETTING_DEFAULTS[SETTING_KEYS.RESTAURANT_NAME] || 'Smart QR Restaurant',
+        logoUrl: logoUrl || '',
+        devNote: {
+          enabled: devEnabled !== 'false',
+          text: devText || '',
+          link: devLink || '',
+        },
+        homeLinks: homeLinks !== 'false',
       },
-      homeLinks: homeLinks !== 'false',
-    })
+      200,
+      { 'Cache-Control': 'public, s-maxage=10, stale-while-revalidate=30' }
+    )
   } catch {
     return ok({
       name: SETTING_DEFAULTS[SETTING_KEYS.RESTAURANT_NAME] || 'Smart QR Restaurant',
