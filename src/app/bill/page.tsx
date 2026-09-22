@@ -1,0 +1,659 @@
+'use client'
+
+// Bill page — request staff + bill summary + Birthday/occasion CRM offer + receipt.
+import { useCallback, useEffect, useRef, useState } from 'react'
+import Link from 'next/link'
+import {
+  ArrowLeft,
+  BadgeCheck,
+  CalendarHeart,
+  Check,
+  Copy,
+  Loader2,
+  MessageCircle,
+  PartyPopper,
+  ReceiptText,
+  Send,
+  WifiOff,
+} from 'lucide-react'
+import { toast } from 'sonner'
+
+import { api, getDeviceId, getDeviceFp } from '@/lib/client'
+import { taka } from '@/lib/constants'
+import { cn } from '@/lib/utils'
+
+import { Badge } from '@/components/ui/badge'
+import { Button } from '@/components/ui/button'
+import { Card, CardContent } from '@/components/ui/card'
+import { Input } from '@/components/ui/input'
+import { Separator } from '@/components/ui/separator'
+import { SessionExpiredScreen } from '@/components/customer/session-expired'
+import { DeveloperCredit } from '@/components/customer/developer-credit'
+import { useSiteConfig } from '@/components/customer/site-config'
+
+/* ─────────────────────────── types ─────────────────────────── */
+
+interface BillItem {
+  itemName: string
+  quantity: number
+  unitPrice: number
+  spiceLevel: string | null
+  addons: { name: string; price: number }[]
+  specialNote: string | null
+  lineTotal: number
+}
+
+interface BillOrder {
+  id: string
+  orderNo: number
+  status: string
+  subtotal: number
+  voucherDiscount: number
+  happyHourDiscount: number
+  birthdayDiscount: number
+  total: number
+  placedAt: string
+  items: BillItem[]
+}
+
+interface BillData {
+  tableNumber: number
+  orders: BillOrder[]
+  summary: {
+    subtotal: number
+    happyHourDiscount: number
+    voucherDiscount: number
+    birthdayDiscount: number
+    payable: number
+  }
+  payment: {
+    billPaid: boolean
+    paymentMethod: string | null
+    paidAt: string | null
+    receiptId: string | null
+    receiptNo: number | null
+  }
+  birthdayOffer: {
+    enabled: boolean
+    eligible: boolean
+    amount: number
+    minBill: number
+    alreadyClaimed: boolean
+    deviceAlreadyClaimed: boolean
+  }
+  occasions: {
+    id: string
+    name: string
+    emoji: string
+    dateLabel: string
+    description: string
+    discount: number
+    minBill: number
+    eligible: boolean
+  }[]
+}
+
+interface ReferralResponse {
+  link: string
+  token: string
+}
+
+const STATUS_BADGES: Record<string, { label: string; cls: string }> = {
+  PLACED: { label: 'প্লেসড', cls: 'border-amber-200 bg-amber-50 text-amber-800' },
+  COOKING: { label: 'রান্নায়', cls: 'border-orange-200 bg-orange-50 text-orange-800' },
+  READY: { label: 'রেডি', cls: 'border-green-200 bg-green-50 text-green-800' },
+  SERVED: { label: 'সার্ভড', cls: 'border-stone-200 bg-stone-100 text-stone-700' },
+  COMPLETED: { label: 'সম্পন্ন', cls: 'border-stone-200 bg-stone-100 text-stone-700' },
+  CANCELLED: { label: 'বাতিল', cls: 'border-red-200 bg-red-50 text-red-700' },
+}
+
+type Phase = 'loading' | 'ok' | 'invalid' | 'error'
+
+/* ─────────────────────────── page ─────────────────────────── */
+
+export default function BillPage() {
+  const cfg = useSiteConfig()
+  const restaurantName = cfg?.restaurantName || 'Spice Garden'
+
+  const [phase, setPhase] = useState<Phase>('loading')
+  const [bill, setBill] = useState<BillData | null>(null)
+
+  // occasion offer selection (default: first eligible occasion)
+  const [selectedOccasionId, setSelectedOccasionId] = useState('')
+
+  // birthday form
+  const [name, setName] = useState('')
+  const [birthday, setBirthday] = useState('')
+  const [claiming, setClaiming] = useState(false)
+  const [referralLink, setReferralLink] = useState<string | null>(null)
+  const [copied, setCopied] = useState(false)
+
+  // staff call
+  const [staffBusy, setStaffBusy] = useState(false)
+
+  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null)
+
+  function stopPolling() {
+    if (pollRef.current) {
+      clearInterval(pollRef.current)
+      pollRef.current = null
+    }
+  }
+
+  useEffect(() => () => stopPolling(), [])
+
+  // keep bill + occasion selection coherent (defaults to first eligible)
+  function applyBill(data: BillData) {
+    setBill(data)
+    setSelectedOccasionId((prev) => {
+      const occ = data.occasions ?? []
+      if (prev && occ.some((o) => o.id === prev)) return prev
+      return occ.find((o) => o.eligible)?.id ?? occ[0]?.id ?? ''
+    })
+  }
+
+  // retry helper (event-handler only — never called synchronously in an effect)
+  const fetchBill = useCallback(async () => {
+    setPhase('loading')
+    const res = await api.get<BillData>('/api/bill')
+    if (res.ok && res.data) {
+      applyBill(res.data)
+      setPhase('ok')
+    } else if (res.code === 'SESSION_INVALID') {
+      setPhase('invalid')
+    } else {
+      setPhase('error')
+    }
+  }, [])
+
+  // initial load
+  useEffect(() => {
+    ;(async () => {
+      const res = await api.get<BillData>('/api/bill')
+      if (res.ok && res.data) {
+        applyBill(res.data)
+        setPhase('ok')
+      } else if (res.code === 'SESSION_INVALID') {
+        setPhase('invalid')
+      } else {
+        setPhase('error')
+      }
+    })()
+  }, [])
+
+  // live refresh (payment marked from admin panel / discount applied) every 6s
+  useEffect(() => {
+    if (phase !== 'ok') return
+    const t = setInterval(async () => {
+      const res = await api.get<BillData>('/api/bill')
+      if (res.ok && res.data) applyBill(res.data)
+    }, 6000)
+    return () => clearInterval(t)
+  }, [phase])
+
+  async function callStaff() {
+    setStaffBusy(true)
+    const res = await api.post('/api/waiter', { type: 'BILL' })
+    setStaffBusy(false)
+    if (res.ok) {
+      toast.success('স্টাফ আসছেন!')
+    } else if (res.code === 'SESSION_INVALID') {
+      setPhase('invalid')
+    } else {
+      toast.error(res.error || 'সিগন্যাল পাঠানো যায়নি')
+    }
+  }
+
+  async function claimOffer() {
+    if (!name.trim()) {
+      toast.error('আপনার নাম লিখুন')
+      return
+    }
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(birthday)) {
+      toast.error('জন্মদিন সিলেক্ট করুন')
+      return
+    }
+    if (!canClaim) {
+      toast.error('প্রযোজ্য অফার নেই — ন্যূনতম বিল পূরণ হলে আনলক হবে')
+      return
+    }
+
+    setClaiming(true)
+    const res = await api.post<ReferralResponse>('/api/birthday/referral', {
+      name: name.trim(),
+      birthday,
+      ...(selectedOccasionId ? { occasionId: selectedOccasionId } : {}),
+      deviceId: getDeviceId(),
+      deviceFp: getDeviceFp(),
+    })
+    setClaiming(false)
+
+    if (res.ok && res.data) {
+      setReferralLink(res.data.link)
+      window.open(res.data.link, '_blank')
+      toast.success('মেসেঞ্জার লিংক তৈরি হয়েছে!')
+
+      // poll the bill every 5s — once the webhook applies the discount we celebrate
+      stopPolling()
+      pollRef.current = setInterval(async () => {
+        const b = await api.get<BillData>('/api/bill')
+        if (b.ok && b.data && b.data.summary.birthdayDiscount > 0) {
+          stopPolling()
+          setBill(b.data)
+          toast.success('🎂 জন্মদিনের ছাড় প্রয়োগ হয়েছে!')
+        }
+      }, 5000)
+    } else if (res.code === 'SESSION_INVALID') {
+      setPhase('invalid')
+    } else {
+      toast.error(res.error || 'অফার দাবি করা যায়নি')
+    }
+  }
+
+  async function copyLink() {
+    if (!referralLink) return
+    try {
+      await navigator.clipboard.writeText(referralLink)
+      setCopied(true)
+      toast.success('লিংক কপি হয়েছে!')
+      setTimeout(() => setCopied(false), 2000)
+    } catch {
+      toast.error('কপি করা যায়নি — ম্যানুয়ালি কপি করুন')
+    }
+  }
+
+  /* ---- render gates ---- */
+
+  if (phase === 'loading') {
+    return (
+      <div className="flex min-h-screen items-center justify-center bg-stone-50">
+        <div className="flex flex-col items-center gap-3">
+          <Loader2 className="size-9 animate-spin text-amber-500" />
+          <p className="text-sm font-medium text-stone-500">বিল লোড হচ্ছে…</p>
+        </div>
+      </div>
+    )
+  }
+
+  if (phase === 'invalid') return <SessionExpiredScreen />
+
+  if (phase === 'error' || !bill) {
+    return (
+      <div className="flex min-h-screen items-center justify-center bg-stone-50 p-4">
+        <Card className="w-full max-w-sm border-amber-200 text-center shadow-lg">
+          <CardContent className="flex flex-col items-center gap-4 py-10">
+            <WifiOff className="size-10 text-amber-500" />
+            <p className="font-bold text-stone-800">বিল লোড করা যায়নি</p>
+            <p className="text-sm text-stone-500">ইন্টারনেট চেক করে আবার চেষ্টা করুন</p>
+            <Button
+              onClick={() => fetchBill()}
+              className="bg-amber-500 font-bold text-white hover:bg-amber-600"
+            >
+              আবার চেষ্টা করুন
+            </Button>
+          </CardContent>
+        </Card>
+      </div>
+    )
+  }
+
+  const s = bill.summary
+  const offer = bill.birthdayOffer
+  const paid = bill.payment.billPaid
+  const occasions = bill.occasions ?? []
+  const selectedOccasion = occasions.find((o) => o.id === selectedOccasionId) ?? null
+  const canClaim = selectedOccasion ? selectedOccasion.eligible : offer.eligible
+
+  /* ---- main render ---- */
+
+  return (
+    <div className="flex min-h-screen flex-col bg-stone-50">
+      {/* header */}
+      <header className="sticky top-0 z-30 border-b border-amber-100 bg-white/95 backdrop-blur">
+        <div className="mx-auto flex w-full max-w-2xl items-center gap-3 px-3 py-3 sm:px-4">
+          <Link
+            href="/menu"
+            aria-label="মেনুতে ফিরুন"
+            className="inline-flex size-9 shrink-0 items-center justify-center rounded-full border border-stone-200 text-stone-600 transition hover:border-amber-300 hover:bg-amber-50 hover:text-amber-700"
+          >
+            <ArrowLeft className="size-4" />
+          </Link>
+          <div className="min-w-0">
+            <h1 className="flex items-center gap-1.5 text-base font-bold text-stone-900">
+              <ReceiptText className="size-4 text-amber-600" />
+              বিল
+            </h1>
+            <p className="truncate text-xs text-stone-400">{restaurantName} • টেবিল {bill.tableNumber}</p>
+          </div>
+          <Badge className="ml-auto shrink-0 border border-amber-200 bg-amber-50 text-amber-800">
+            {bill.orders.length}টি অর্ডার
+          </Badge>
+        </div>
+      </header>
+
+      <main className="mx-auto w-full max-w-2xl flex-1 space-y-4 px-3 py-4 sm:px-4">
+        {/* ── payment confirmed banner ── */}
+        {paid && (
+          <div className="flex items-center gap-3 rounded-xl border border-green-300 bg-gradient-to-r from-green-50 to-emerald-50 p-4 shadow-sm">
+            <span className="flex size-10 shrink-0 items-center justify-center rounded-full bg-green-100">
+              <BadgeCheck className="size-5 text-green-600" />
+            </span>
+            <div className="min-w-0 flex-1">
+              <p className="text-sm font-extrabold text-green-800">✅ পেমেন্ট গৃহীত হয়েছে — ধন্যবাদ!</p>
+              <p className="text-xs text-green-700">
+                {bill.payment.paymentMethod ? `পেমেন্ট মাধ্যম: ${bill.payment.paymentMethod}` : 'স্টাফ আপনার বিল নিশ্চিত করেছেন'}
+                {bill.payment.paidAt && ` • ${new Date(bill.payment.paidAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`}
+                {bill.payment.receiptNo != null && ` • রসিদ নং #${bill.payment.receiptNo}`}
+              </p>
+            </div>
+          </div>
+        )}
+
+        {/* ── receipt — view / print after payment ── */}
+        {paid && bill.payment.receiptId && (
+          <Button
+            asChild
+            className="h-13 w-full rounded-xl bg-gradient-to-r from-stone-800 to-stone-900 py-3.5 text-base font-extrabold text-white shadow-lg shadow-stone-300 hover:from-stone-900 hover:to-black"
+          >
+            <a href={`/receipt/${bill.payment.receiptId}`} target="_blank" rel="noopener noreferrer">
+              <ReceiptText className="size-5" />
+              🧾 রসিদ দেখুন / প্রিন্ট করুন
+            </a>
+          </Button>
+        )}
+        {/* ── orders with items ── */}
+        {bill.orders.length === 0 ? (
+          <p className="rounded-xl border border-dashed border-stone-200 bg-white p-8 text-center text-sm text-stone-400">
+            এই সেশনে এখনো কোনো অর্ডার নেই
+          </p>
+        ) : (
+          bill.orders.map((o) => {
+            const badge = STATUS_BADGES[o.status] ?? STATUS_BADGES.PLACED
+            return (
+              <div key={o.id} className="space-y-3 rounded-xl border border-stone-200 bg-white p-4 shadow-sm">
+                <div className="flex items-center justify-between gap-2">
+                  <span className="text-sm font-bold text-stone-800">অর্ডার #{o.orderNo}</span>
+                  <div className="flex items-center gap-2">
+                    <span className="text-[11px] text-stone-400">
+                      {new Date(o.placedAt).toLocaleTimeString([], {
+                        hour: '2-digit',
+                        minute: '2-digit',
+                      })}
+                    </span>
+                    <Badge variant="outline" className={badge.cls}>
+                      {badge.label}
+                    </Badge>
+                  </div>
+                </div>
+
+                <Separator />
+
+                <div className="space-y-2">
+                  {o.items.map((it, idx) => (
+                    <div key={idx} className="flex items-start justify-between gap-3">
+                      <div className="min-w-0">
+                        <p className="text-sm text-stone-700">
+                          <span className="font-bold text-stone-900">{it.quantity}×</span>{' '}
+                          {it.itemName}
+                        </p>
+                        <p className="mt-0.5 flex flex-wrap gap-1.5 text-[10px] text-stone-400">
+                          {it.spiceLevel && <span>🌶️ {it.spiceLevel}</span>}
+                          {it.addons.map((a) => (
+                            <span key={a.name}>+ {a.name}</span>
+                          ))}
+                          {it.specialNote && <span>📝 {it.specialNote}</span>}
+                        </p>
+                      </div>
+                      <span className="shrink-0 text-sm font-semibold text-stone-700">
+                        {taka(it.lineTotal)}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+
+                <div className="flex items-center justify-between border-t border-dashed border-stone-200 pt-2">
+                  <span className="text-xs font-medium text-stone-500">অর্ডার মোট</span>
+                  <span className="text-sm font-extrabold text-amber-600">{taka(o.total)}</span>
+                </div>
+              </div>
+            )
+          })
+        )}
+
+        {/* ── summary ── */}
+        <Card className="border-amber-200 shadow-md shadow-amber-100/40">
+          <CardContent className="space-y-2 px-4 py-4">
+            <h2 className="pb-1 text-sm font-bold text-stone-700">বিল সারসংক্ষেপ</h2>
+            <div className="flex justify-between text-sm">
+              <span className="text-stone-500">সাবটোটাল</span>
+              <span className="font-semibold text-stone-800">{taka(s.subtotal)}</span>
+            </div>
+            {s.happyHourDiscount > 0 && (
+              <div className="flex justify-between text-sm">
+                <span className="text-stone-500">🔥 হ্যাপি আওয়ার সেভিংস</span>
+                <span className="font-semibold text-green-600">−{taka(s.happyHourDiscount)}</span>
+              </div>
+            )}
+            {s.voucherDiscount > 0 && (
+              <div className="flex justify-between text-sm">
+                <span className="text-stone-500">🎟️ কুপন ছাড়</span>
+                <span className="font-semibold text-green-600">−{taka(s.voucherDiscount)}</span>
+              </div>
+            )}
+            {s.birthdayDiscount > 0 && (
+              <div className="flex justify-between text-sm">
+                <span className="text-stone-500">🎂 জন্মদিনের ছাড়</span>
+                <span className="font-semibold text-green-600">−{taka(s.birthdayDiscount)}</span>
+              </div>
+            )}
+            <Separator className="my-2" />
+            <div className="flex items-baseline justify-between">
+              <span className="font-bold text-stone-800">মোট প্রদেয়</span>
+              <span className="text-2xl font-extrabold text-amber-600">{taka(s.payable)}</span>
+            </div>
+          </CardContent>
+        </Card>
+
+        {/* ── call staff (hidden once paid) ── */}
+        {!paid && (
+          <Button
+            onClick={callStaff}
+            disabled={staffBusy}
+            variant="outline"
+            className="h-12 w-full rounded-xl border-amber-300 bg-white text-base font-bold text-amber-700 hover:bg-amber-50"
+          >
+            {staffBusy && <Loader2 className="size-4 animate-spin" />}
+            👨‍💼 বিলের জন্য স্টাফ ডাকুন
+          </Button>
+        )}
+
+        {/* ── birthday / occasion CRM offer (messenger master switch → offer.enabled) ── */}
+        {offer.alreadyClaimed && (
+          <div className="flex items-center gap-2 rounded-xl border border-green-200 bg-green-50 p-3.5">
+            <BadgeCheck className="size-5 shrink-0 text-green-600" />
+            <p className="text-sm font-semibold text-green-800">
+              🎂 জন্মদিনের ছাড় এই বিলে প্রয়োগ করা হয়েছে
+            </p>
+          </div>
+        )}
+
+        {offer.enabled && !offer.alreadyClaimed && (offer.eligible || occasions.length > 0) && (
+          <div className="overflow-hidden rounded-2xl bg-gradient-to-br from-amber-500 to-orange-600 p-5 shadow-lg shadow-amber-200/60">
+            <div className="flex items-start gap-3">
+              <span className="flex size-11 shrink-0 items-center justify-center rounded-full bg-white/20 ring-1 ring-white/30">
+                <CalendarHeart className="size-6 text-white" />
+              </span>
+              <div className="min-w-0 flex-1">
+                <h2 className="text-lg font-extrabold text-white">🎂 জন্মদিনের বিশেষ অফার!</h2>
+                <p className="mt-1 text-sm leading-relaxed text-amber-50">
+                  আপনার বা পরিবারের জন্মদিন যোগ করলেই এই বিলে এখনই{' '}
+                  <span className="font-extrabold text-white">{taka(offer.amount)} ইনস্ট্যান্ট ছাড়!</span>
+                </p>
+                <p className="mt-0.5 text-xs font-medium text-amber-100">
+                  (ন্যূনতম বিল {taka(offer.minBill)})
+                </p>
+              </div>
+            </div>
+
+            {/* ── occasion picker — pick one offer reason (default: first eligible) ── */}
+            {occasions.length > 0 && !referralLink && (
+              <div className="mt-4 space-y-2">
+                <p className="flex items-center gap-1.5 text-sm font-extrabold text-white">
+                  <PartyPopper className="size-4" />
+                  অনুষ্ঠান বেছে নিন — একটি অফার কাজে আসবে
+                </p>
+                <div className="space-y-2">
+                  {occasions.map((o) => {
+                    const active = selectedOccasionId === o.id
+                    return (
+                      <button
+                        key={o.id}
+                        type="button"
+                        disabled={!o.eligible}
+                        onClick={() => setSelectedOccasionId(o.id)}
+                        aria-pressed={active}
+                        className={cn(
+                          'flex w-full items-center gap-3 rounded-xl border-2 p-3 text-left transition',
+                          !o.eligible && 'cursor-not-allowed opacity-60',
+                          active
+                            ? 'border-white bg-white/95 shadow-md'
+                            : o.eligible
+                              ? 'border-white/40 bg-white/10 hover:bg-white/20'
+                              : 'border-white/20 bg-white/5'
+                        )}
+                      >
+                        <span className="text-2xl" aria-hidden>
+                          {o.emoji || '🎉'}
+                        </span>
+                        <span className="min-w-0 flex-1">
+                          <span
+                            className={cn(
+                              'block text-sm font-extrabold',
+                              active ? 'text-stone-900' : 'text-white'
+                            )}
+                          >
+                            {o.name}
+                          </span>
+                          <span
+                            className={cn(
+                              'block truncate text-[11px] font-medium',
+                              active ? 'text-stone-500' : 'text-amber-100'
+                            )}
+                          >
+                            {o.dateLabel}
+                            {o.description ? ` • ${o.description}` : ''}
+                          </span>
+                        </span>
+                        <span className="shrink-0 text-right">
+                          <span
+                            className={cn(
+                              'block text-sm font-extrabold',
+                              active ? 'text-emerald-600' : 'text-white'
+                            )}
+                          >
+                            −{taka(o.discount)}
+                          </span>
+                          <span
+                            className={cn(
+                              'block whitespace-nowrap text-[10px] font-semibold',
+                              active ? 'text-stone-400' : 'text-amber-100'
+                            )}
+                          >
+                            {o.eligible ? 'প্রযোজ্য ✓' : `ন্যূনতম বিল ${taka(o.minBill)}`}
+                          </span>
+                        </span>
+                      </button>
+                    )
+                  })}
+                </div>
+                {selectedOccasion && !selectedOccasion.eligible && (
+                  <p className="rounded-lg bg-white/15 px-3 py-2 text-[11px] font-semibold text-amber-50">
+                    এই অফারের ন্যূনতম বিল {taka(selectedOccasion.minBill)} — বিল পূরণ হলেই আনলক হবে!
+                  </p>
+                )}
+              </div>
+            )}
+
+            {!referralLink ? (
+              <div className="mt-4 space-y-2.5 rounded-xl bg-white/95 p-3.5 shadow-inner">
+                <Input
+                  value={name}
+                  onChange={(e) => setName(e.target.value)}
+                  placeholder="আপনার নাম"
+                  maxLength={60}
+                  className="h-10 border-stone-200 focus-visible:ring-amber-200"
+                />
+                <input
+                  type="date"
+                  value={birthday}
+                  max={new Date().toISOString().slice(0, 10)}
+                  onChange={(e) => setBirthday(e.target.value)}
+                  className="flex h-10 w-full rounded-md border border-stone-200 bg-white px-3 py-2 text-sm text-stone-700 shadow-sm outline-none transition focus:border-amber-400 focus:ring-2 focus:ring-amber-200"
+                />
+                <Button
+                  onClick={claimOffer}
+                  disabled={claiming || !canClaim}
+                  className="h-11 w-full bg-amber-500 text-base font-bold text-white hover:bg-amber-600 disabled:cursor-not-allowed"
+                >
+                  {claiming && <Loader2 className="size-4 animate-spin" />}
+                  🎉 Claim on Messenger
+                </Button>
+                {!canClaim && occasions.length > 0 && (
+                  <p className="text-center text-[11px] font-medium text-stone-500">
+                    উপরে থেকে প্রযোজ্য অফার বেছে নিলে বাটন চালু হবে
+                  </p>
+                )}
+              </div>
+            ) : (
+              <div className="mt-4 space-y-2.5 rounded-xl bg-white/95 p-3.5 shadow-inner">
+                <div className="flex items-start gap-2.5">
+                  <MessageCircle className="mt-0.5 size-5 shrink-0 text-amber-600" />
+                  <p className="text-sm font-medium leading-relaxed text-stone-700">
+                    মেসেঞ্জার খুলে নম্বর শেয়ার করুন — ছাড় সাথে সাথে বিলে যোগ হবে!
+                  </p>
+                </div>
+                <div className="flex items-center gap-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2">
+                  <span className="min-w-0 flex-1 truncate font-mono text-xs text-stone-600">
+                    {referralLink}
+                  </span>
+                  <button
+                    onClick={copyLink}
+                    aria-label="লিংক কপি করুন"
+                    className="shrink-0 rounded-md bg-amber-500 p-1.5 text-white transition hover:bg-amber-600"
+                  >
+                    {copied ? <Check className="size-3.5" /> : <Copy className="size-3.5" />}
+                  </button>
+                </div>
+                <a
+                  href={referralLink}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="flex h-10 w-full items-center justify-center gap-2 rounded-lg border border-amber-300 text-sm font-bold text-amber-700 transition hover:bg-amber-50"
+                >
+                  <Send className="size-3.5" />
+                  আবার মেসেঞ্জার খুলুন
+                </a>
+                <p className="flex items-center justify-center gap-1.5 text-[11px] text-stone-400">
+                  <Loader2 className="size-3 animate-spin" />
+                  ছাড় প্রয়োগ হলে অটো-আপডেট হবে…
+                </p>
+              </div>
+            )}
+          </div>
+        )}
+      </main>
+
+      <footer
+        className={cn(
+          'mt-auto space-y-1 py-5',
+          referralLink && 'pb-24'
+        )}
+      >
+        <p className="text-center text-xs text-stone-400">
+          {restaurantName} • স্ক্যান করুন, অর্ডার করুন, উপভোগ করুন
+        </p>
+        <DeveloperCredit />
+      </footer>
+    </div>
+  )
+}

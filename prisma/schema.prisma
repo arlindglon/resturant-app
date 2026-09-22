@@ -1,0 +1,388 @@
+// ============================================================
+// Smart QR Restaurant Management, Sales Engine & CRM System
+// TiDB Cloud (MySQL compatible) + Prisma ORM
+// NOTE: No Prisma enums used (keeps schema portable between
+// MySQL/TiDB and SQLite). Status values are plain strings
+// defined in src/lib/constants.ts
+// ============================================================
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "mysql"
+  url      = env("DATABASE_URL")
+}
+
+// ---------------- Restaurant Tables ----------------
+model RestaurantTable {
+  id        String         @id @default(cuid())
+  number    Int            @unique
+  seats     Int            @default(4)
+  status    String         @default("FREE") // FREE | OCCUPIED
+  sessions  TableSession[]
+  orders    Order[]
+  waiterCalls WaiterCall[]
+  createdAt DateTime       @default(now())
+  updatedAt DateTime       @updatedAt
+
+  @@map("tables")
+}
+
+// ---------------- Secure QR Sessions (HMAC-SHA256) ----------------
+model TableSession {
+  id              String        @id @default(cuid())
+  tableId         String
+  table           RestaurantTable @relation(fields: [tableId], references: [id], onDelete: Cascade)
+  token           String        @unique
+  deviceId        String? // host device (first scanner)
+  active          Boolean       @default(true)
+  expiresAt       DateTime
+  clearedAt       DateTime?
+  scannedAt       DateTime      @default(now())
+  birthdayGranted Boolean       @default(false) // birthday discount already applied in this session
+  orders          Order[]
+  devices         SessionDevice[]
+
+  @@index([tableId])
+  @@map("table_sessions")
+}
+
+// Every device that joined a table session (1 table = 1 shared session,
+// 4 customers scanning the same QR all land in the SAME session & bill)
+model SessionDevice {
+  id        String      @id @default(cuid())
+  sessionId String
+  session   TableSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  deviceId  String
+  deviceFp  String? // sticky browser fingerprint component
+  firstSeen DateTime    @default(now())
+
+  @@unique([sessionId, deviceId])
+  @@index([deviceId])
+  @@map("session_devices")
+}
+
+// ============================================================
+// TAMPER-EVIDENT SECURITY LEDGER (blockchain-style hash chain)
+// hash = SHA256(prevHash | seq-less payload | ts | nonce)
+// Every security-relevant event lands here; chain verification
+// exposes ANY retroactive tampering.
+// ============================================================
+model LedgerEntry {
+  id          String   @id @default(cuid())
+  seq         Int      @unique @default(autoincrement())
+  type        String // SESSION_START | SESSION_REJOIN | SESSION_CLEARED | ORDER_PLACED | VOUCHER_APPLIED | VOUCHER_BLOCKED | BIRTHDAY_CLAIMED | BIRTHDAY_BLOCKED | REFERRAL_ISSUED | BILL_PAID
+  sessionId   String?
+  deviceId    String?
+  deviceFp    String?
+  tableNumber Int?
+  payload     String?  @db.Text // JSON detail
+  prevHash    String
+  hash        String   @unique
+  createdAt   DateTime @default(now())
+
+  @@index([type])
+  @@index([deviceId])
+  @@index([sessionId])
+  @@map("ledger_entries")
+}
+
+// ---------------- Menu ----------------
+model Category {
+  id        String     @id @default(cuid())
+  name      String
+  imageUrl  String?
+  sortOrder Int        @default(0)
+  active    Boolean    @default(true)
+  items     MenuItem[]
+
+  @@map("categories")
+}
+
+model MenuItem {
+  id          String      @id @default(cuid())
+  categoryId  String
+  category    Category    @relation(fields: [categoryId], references: [id], onDelete: Cascade)
+  name        String
+  description String?     @db.Text
+  price       Float
+  imageUrl    String?     @db.Text
+  isAvailable Boolean     @default(true)
+  isSetMenu   Boolean     @default(false)
+  // JSON strings: e.g. ["Mild","Medium","Hot"], [{"name":"Extra Cheese","price":50}]
+  spiceLevels String?
+  addons      String?     @db.Text
+  upsellIds   String?     @db.Text // JSON array of item ids to upsell with this item
+  sortOrder   Int         @default(0)
+  createdAt   DateTime    @default(now())
+  updatedAt   DateTime    @updatedAt
+  orderItems  OrderItem[]
+
+  @@index([categoryId])
+  @@map("menu_items")
+}
+
+// ---------------- Happy Hour Engine ----------------
+model HappyHour {
+  id              String    @id @default(cuid())
+  name            String
+  discountPercent Float
+  daysOfWeek      String    @default("[]") // JSON [0..6] (0=Sunday); [] = every day
+  startTime       String // "12:00"
+  endTime         String // "16:00"
+  // Custom date-to-date range (admin option). When both set, the rule
+  // applies on EVERY day between startDate..endDate (inclusive) — daysOfWeek ignored.
+  startDate       DateTime? // start day 00:00 local
+  endDate         DateTime? // end day 23:59:59.999 local (inclusive)
+  itemIds         String?   @db.Text // JSON array; empty/null = all items
+  active          Boolean   @default(true)
+  createdAt       DateTime  @default(now())
+
+  @@map("happy_hours")
+}
+
+// ---------------- Voucher / Coupon Engine ----------------
+model Voucher {
+  id             String       @id @default(cuid())
+  code           String       @unique
+  title          String
+  description    String?      @db.Text
+  discountType   String // PERCENT | FIXED
+  discountValue  Float
+  maxDiscount    Float? // cap for PERCENT type
+  minOrderAmount Float        @default(0)
+  // GENERAL | HOT_TIME | SPECIAL_DAY | SET_MENU_QTY
+  ruleType       String       @default("GENERAL")
+  startTime      String? // HH:mm for HOT_TIME
+  endTime        String?
+  daysOfWeek     String? // JSON [0..6]
+  specificDate   DateTime? // for SPECIAL_DAY
+  setMenuIds     String?      @db.Text // JSON array for SET_MENU_QTY
+  minQuantity    Int? // minimum set-menu quantity for SET_MENU_QTY
+  usageLimit     Int? // campaign limit (null = unlimited)
+  usedCount      Int          @default(0)
+  singleUse      Boolean      @default(false) // one-time per device/session
+  active         Boolean      @default(true)
+  createdAt      DateTime     @default(now())
+  uses           VoucherUse[]
+
+  @@map("vouchers")
+}
+
+model VoucherUse {
+  id        String   @id @default(cuid())
+  voucherId String
+  voucher   Voucher  @relation(fields: [voucherId], references: [id], onDelete: Cascade)
+  sessionId String?
+  deviceId  String?
+  deviceFp  String?
+  tableNumber Int?
+  orderId   String?
+  createdAt DateTime @default(now())
+
+  @@index([voucherId])
+  @@index([deviceId])
+  @@map("voucher_uses")
+}
+
+// ---------------- Orders ----------------
+model Order {
+  id                String      @id @default(cuid())
+  orderNo           Int         @unique @default(autoincrement())
+  tableId           String
+  table             RestaurantTable @relation(fields: [tableId], references: [id])
+  tableNumber       Int // snapshot for KDS speed
+  sessionId         String
+  session           TableSession @relation(fields: [sessionId], references: [id])
+  status            String      @default("PLACED") // PLACED | COOKING | READY | SERVED | COMPLETED | CANCELLED
+  subtotal          Float
+  happyHourDiscount Float       @default(0)
+  voucherDiscount   Float       @default(0)
+  birthdayDiscount  Float       @default(0)
+  total             Float
+  voucherCode       String?
+  billPaid          Boolean     @default(false)
+  paidAt            DateTime?
+  paymentMethod     String? // CASH | CARD | BKASH | NAGAD | ONLINE
+  placedAt          DateTime    @default(now())
+  cookingAt         DateTime?
+  readyAt           DateTime?
+  servedAt          DateTime?
+  completedAt       DateTime?
+  items             OrderItem[]
+
+  @@index([status])
+  @@index([tableId])
+  @@index([sessionId])
+  @@map("orders")
+}
+
+model OrderItem {
+  id          String    @id @default(cuid())
+  orderId     String
+  order       Order     @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  itemId      String?
+  menuItem    MenuItem? @relation(fields: [itemId], references: [id], onDelete: SetNull)
+  itemName    String
+  unitPrice   Float // price after happy hour (snapshot)
+  basePrice   Float // original price (snapshot)
+  quantity    Int
+  spiceLevel  String?
+  addons      String?   @db.Text // JSON [{name,price}]
+  specialNote String?
+  lineTotal   Float
+
+  @@index([orderId])
+  @@map("order_items")
+}
+
+// ---------------- Waiter Calls ----------------
+model WaiterCall {
+  id          String    @id @default(cuid())
+  tableId     String
+  table       RestaurantTable @relation(fields: [tableId], references: [id])
+  tableNumber Int
+  orderId     String?
+  type        String // WAITER | WATER | CLEAN | BILL
+  status      String    @default("PENDING") // PENDING | DONE
+  createdAt   DateTime  @default(now())
+  resolvedAt  DateTime?
+
+  @@index([status])
+  @@map("waiter_calls")
+}
+
+// ---------------- CRM: Customers (Messenger) ----------------
+model Customer {
+  id              String         @id @default(cuid())
+  psid            String         @unique // Facebook Page-Scoped ID
+  firstName       String
+  lastName        String?
+  phone           String         @unique
+  birthday        DateTime?
+  discountClaimed Boolean        @default(false) // lifetime lock after birthday discount
+  claimedAt       DateTime?
+  createdAt       DateTime       @default(now())
+  claims          BirthdayClaim[]
+
+  @@map("customers")
+}
+
+model BirthdayClaim {
+  id         String    @id @default(cuid())
+  customerId String?
+  customer   Customer? @relation(fields: [customerId], references: [id])
+  psid       String
+  phone      String
+  deviceId   String
+  deviceFp   String?
+  tableNumber Int
+  sessionId  String
+  amount     Float
+  createdAt  DateTime  @default(now())
+
+  @@index([psid])
+  @@index([phone])
+  @@index([deviceId])
+  @@map("birthday_claims")
+}
+
+model ReferralToken {
+  id         String    @id @default(cuid())
+  token      String    @unique
+  name       String
+  birthday   DateTime?
+  phone      String?
+  sessionId  String
+  tableNumber Int
+  deviceId   String
+  deviceFp   String?
+  status     String    @default("PENDING") // PENDING | CLAIMED | EXPIRED
+  createdAt  DateTime  @default(now())
+  // legacy occasion columns (kept to preserve existing data)
+  occasionId   String?
+  occasionName String?
+
+  @@map("referral_tokens")
+}
+
+// ---------------- ImgBB Multi-Key Management ----------------
+model ImgbbKey {
+  id         String    @id @default(cuid())
+  key        String    @unique
+  label      String?
+  active     Boolean   @default(true)
+  usageCount Int       @default(0)
+  failCount  Int       @default(0)
+  lastUsedAt DateTime?
+  lastError  String?   @db.Text
+  createdAt  DateTime  @default(now())
+
+  @@map("imgbb_keys")
+}
+
+// ---------------- Key-Value Settings (incl. session duration) ----------------
+model Setting {
+  id        String   @id @default(cuid())
+  key       String   @unique
+  value     String   @db.Text
+  updatedAt DateTime @updatedAt
+
+  @@map("settings")
+}
+
+// ---------------- Occasion Offers (birthday / anniversary style, preserved legacy table) ----------------
+model OccasionOffer {
+  id          String  @id @default(cuid())
+  name        String
+  emoji       String
+  dateLabel   String
+  description String?
+  discount    Float
+  minBill     Float
+  active      Boolean @default(true)
+  sortOrder   Int     @default(0)
+  createdAt   DateTime @default(now())
+
+  @@map("occasion_offers")
+}
+
+// ---------------- Receipts (paid transaction history, preserved legacy table) ----------------
+model Receipt {
+  id            String   @id @default(cuid())
+  receiptNo     Int      @unique @default(autoincrement())
+  sessionId     String
+  tableNumber   Int
+  ordersCount   Int
+  subtotal      Float
+  discountTotal Float
+  total         Float
+  paymentMethod String
+  itemsJson     String   @db.Text
+  paidAt        DateTime
+  createdAt     DateTime @default(now())
+
+  @@map("receipts")
+}
+
+// ---------------- Staff Access Keys (Kitchen display + Sub-admin) ----------------
+// role: KDS → unlocks /kds kitchen display
+// role: ADMIN_CONTROLLER → logs into admin panel with only marked permissions
+// lifetime=true → never expires; otherwise expiresAt is enforced.
+model AccessKey {
+  id          String    @id @default(cuid())
+  keyCode     String    @unique
+  name        String
+  role        String // KDS | ADMIN_CONTROLLER
+  permissions String    @db.Text // JSON string[] (ADMIN_CONTROLLER only)
+  lifetime    Boolean   @default(false)
+  expiresAt   DateTime?
+  active      Boolean   @default(true)
+  lastUsedAt  DateTime?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  @@map("access_keys")
+}

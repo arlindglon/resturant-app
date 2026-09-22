@@ -1,0 +1,33 @@
+// PATCH/DELETE /api/admin/imgbb-keys/[id] — activate/deactivate/remove
+import { NextRequest } from 'next/server'
+import { db } from '@/lib/db'
+import { ok, fail, isAdmin } from '@/lib/api'
+import { requirePerm } from '@/lib/staff-auth'
+
+export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
+  const denied = await requirePerm('imgbb')
+  if (denied) return denied
+  const { id } = await params
+  const body = await req.json().catch(() => ({}))
+
+  const data: Record<string, unknown> = {}
+  if (body.label !== undefined) data.label = body.label || null
+  if (body.active !== undefined) data.active = Boolean(body.active)
+
+  try {
+    await db.imgbbKey.update({ where: { id }, data })
+    return ok({ updated: true })
+  } catch {
+    return fail('আপডেট ব্যর্থ', 400)
+  }
+}
+
+export async function DELETE(_req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
+  const { id } = await params
+  try {
+    await db.imgbbKey.delete({ where: { id } })
+    return ok({ deleted: true })
+  } catch {
+    return fail('ডিলিট ব্যর্থ', 400)
+  }
+}
