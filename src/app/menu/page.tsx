@@ -646,7 +646,6 @@ export default function MenuPage() {
   // (header + "না, থাক" button stay fixed & always reachable)
   const upsellListRef = useRef<HTMLDivElement>(null)
   const [upsellScrollable, setUpsellScrollable] = useState(false)
-  const [upsellAtEnd, setUpsellAtEnd] = useState(false)
 
   // waiter
   const [waiterOpen, setWaiterOpen] = useState(false)
@@ -834,7 +833,6 @@ export default function MenuPage() {
       const el = upsellListRef.current
       if (!el) return
       setUpsellScrollable(el.scrollHeight > el.clientHeight + 4)
-      setUpsellAtEnd(false) // fresh list always starts at the top
     })
     return () => cancelAnimationFrame(raf)
   }, [upsellSource, upsellItems.length])
@@ -1273,73 +1271,66 @@ export default function MenuPage() {
                 ⇅ উপরে-নিচে স্ক্রল করে সব দেখুন
               </p>
             )}
-            {/* flex-auto (NOT flex-1): basis-0 collapses inside an auto-height
-                flex container; auto-basis hugs short content and shrinks
-                gracefully when the drawer hits its 75vh cap */}
-            <div className="relative min-h-0 flex-auto">
-              {/* absolute inset-0 (NOT h-full): % height doesn't resolve
-                  reliably against a flex-grown parent — absolute fill always
-                  tracks the wrapper's flexed height, so the list truly scrolls */}
-              <div
-                ref={upsellListRef}
-                onScroll={(e) => {
-                  const el = e.currentTarget
-                  setUpsellAtEnd(el.scrollTop + el.clientHeight >= el.scrollHeight - 8)
-                }}
-                className="nice-scrollbar absolute inset-0 space-y-2 overflow-y-auto overscroll-contain px-4 pb-3"
-              >
-                {upsellItems.length === 0 ? (
-                  <p className="py-4 text-center text-sm text-stone-400">
-                    কোনো আপসেল আইটেম পাওয়া যায়নি
-                  </p>
-                ) : (
-                  upsellItems.map((u) => {
-                    const added = addedUpsell[u.id] || 0
-                    return (
-                      <div
-                        key={u.id}
-                        className={`flex items-center gap-3 rounded-xl border p-2.5 transition-colors ${
-                          added > 0 ? 'border-emerald-300 bg-emerald-50' : 'border-amber-100 bg-amber-50/50'
+            {/* The scroll list IS the flex item (flex-auto): auto basis hugs
+                short content; when the drawer hits its 75vh cap the shrink
+                phase trims it (min-h-0) so the list scrolls while header +
+                footer stay fixed. NEVER nest it inside a wrapper with
+                h-full/absolute — both broke height resolution. */}
+            <div
+              ref={upsellListRef}
+              className="nice-scrollbar min-h-0 w-full flex-auto space-y-2 overflow-y-auto overscroll-contain px-4 pb-3"
+            >
+              {upsellItems.length === 0 ? (
+                <p className="py-4 text-center text-sm text-stone-400">
+                  কোনো আপসেল আইটেম পাওয়া যায়নি
+                </p>
+              ) : (
+                upsellItems.map((u) => {
+                  const added = addedUpsell[u.id] || 0
+                  return (
+                    <div
+                      key={u.id}
+                      className={`flex items-center gap-3 rounded-xl border p-2.5 transition-colors ${
+                        added > 0 ? 'border-emerald-300 bg-emerald-50' : 'border-amber-100 bg-amber-50/50'
+                      }`}
+                    >
+                      <ItemThumb
+                        src={u.imageUrl}
+                        alt={u.name}
+                        className="size-12 shrink-0 rounded-lg"
+                        iconClassName="size-5"
+                      />
+                      <div className="min-w-0 flex-1">
+                        <p className="truncate text-sm font-semibold text-stone-800">{u.name}</p>
+                        <p className={`text-sm font-bold ${added > 0 ? 'text-emerald-600' : 'text-amber-600'}`}>
+                          {taka(u.price)}
+                        </p>
+                      </div>
+                      <Button
+                        size="sm"
+                        onClick={() => quickAddUpsell(u)}
+                        className={`font-bold text-white ${
+                          added > 0 ? 'bg-emerald-500 hover:bg-emerald-600' : 'bg-amber-500 hover:bg-amber-600'
                         }`}
                       >
-                        <ItemThumb
-                          src={u.imageUrl}
-                          alt={u.name}
-                          className="size-12 shrink-0 rounded-lg"
-                          iconClassName="size-5"
-                        />
-                        <div className="min-w-0 flex-1">
-                          <p className="truncate text-sm font-semibold text-stone-800">{u.name}</p>
-                          <p className={`text-sm font-bold ${added > 0 ? 'text-emerald-600' : 'text-amber-600'}`}>
-                            {taka(u.price)}
-                          </p>
-                        </div>
-                        <Button
-                          size="sm"
-                          onClick={() => quickAddUpsell(u)}
-                          className={`font-bold text-white ${
-                            added > 0 ? 'bg-emerald-500 hover:bg-emerald-600' : 'bg-amber-500 hover:bg-amber-600'
-                          }`}
-                        >
-                          {added > 0 ? (
-                            <>
-                              <Check className="size-3.5" />
-                              {added > 1 ? `যোগ হয়েছে ×${toBn(added)}` : 'যোগ হয়েছে ✓'}
-                            </>
-                          ) : (
-                            <>
-                              <Plus className="size-3.5" />
-                              যোগ করুন
-                            </>
-                          )}
-                        </Button>
-                      </div>
-                    )
-                  })
-                )}
-              </div>
-              {upsellScrollable && !upsellAtEnd && (
-                <div className="pointer-events-none absolute inset-x-0 bottom-0 h-10 bg-gradient-to-t from-white to-transparent" />
+                        {added > 0 ? (
+                          <>
+                            <Check className="size-3.5" />
+                            {added > 1 ? `যোগ হয়েছে ×${toBn(added)}` : 'যোগ হয়েছে ✓'}
+                          </>
+                        ) : (
+                          <>
+                            <Plus className="size-3.5" />
+                            যোগ করুন
+                          </>
+                        )}
+                      </Button>
+                    </div>
+                  )
+                })
+              )}
+              {upsellScrollable && (
+                <div className="pointer-events-none sticky bottom-0 -mx-4 h-8 bg-gradient-to-t from-white" />
               )}
             </div>
             <div className="shrink-0 p-4 pt-2">
