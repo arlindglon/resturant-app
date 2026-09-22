@@ -1274,13 +1274,16 @@ export default function MenuPage() {
               </p>
             )}
             <div className="relative min-h-0 flex-1">
+              {/* absolute inset-0 (NOT h-full): % height doesn't resolve
+                  reliably against a flex-grown parent — absolute fill always
+                  tracks the wrapper's flexed height, so the list truly scrolls */}
               <div
                 ref={upsellListRef}
                 onScroll={(e) => {
                   const el = e.currentTarget
                   setUpsellAtEnd(el.scrollTop + el.clientHeight >= el.scrollHeight - 8)
                 }}
-                className="nice-scrollbar h-full space-y-2 overflow-y-auto overscroll-contain px-4 pb-3"
+                className="nice-scrollbar absolute inset-0 space-y-2 overflow-y-auto overscroll-contain px-4 pb-3"
               >
                 {upsellItems.length === 0 ? (
                   <p className="py-4 text-center text-sm text-stone-400">
