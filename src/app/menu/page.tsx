@@ -1273,7 +1273,10 @@ export default function MenuPage() {
                 ⇅ উপরে-নিচে স্ক্রল করে সব দেখুন
               </p>
             )}
-            <div className="relative min-h-0 flex-1">
+            {/* flex-auto (NOT flex-1): basis-0 collapses inside an auto-height
+                flex container; auto-basis hugs short content and shrinks
+                gracefully when the drawer hits its 75vh cap */}
+            <div className="relative min-h-0 flex-auto">
               {/* absolute inset-0 (NOT h-full): % height doesn't resolve
                   reliably against a flex-grown parent — absolute fill always
                   tracks the wrapper's flexed height, so the list truly scrolls */}
