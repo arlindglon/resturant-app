@@ -121,10 +121,12 @@ export async function validateVoucher(
         note: 'device tried to reuse a voucher (possibly from another table)',
       },
     })
+    // NOTE: never hint at the anti-fraud mechanics (device/table re-use) in
+    // customer-facing text — a scammer could learn to retry from another device.
     return {
       ok: false,
       discount: 0,
-      message: '🚫 এই কুপনটি আপনার ডিভাইস থেকে আগেই ব্যবহার হয়েছে (অন্য টেবিলেও পুনরায় ব্যবহার করা যাবে না)।',
+      message: '🚫 দুঃখিত! এই কুপনটি আপনি ইতিমধ্যেই ব্যবহার করে ফেলেছেন। প্রতিটি কুপন শুধু একবারই ব্যবহার করা যায়।',
     }
   }
 

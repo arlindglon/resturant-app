@@ -56,6 +56,7 @@ export async function GET(req: NextRequest) {
       orderNo: o.orderNo,
       status: o.status,
       subtotal: o.subtotal,
+      returnedAmount: o.returnedAmount,
       voucherDiscount: o.voucherDiscount,
       happyHourDiscount: o.happyHourDiscount,
       birthdayDiscount: o.birthdayDiscount,
@@ -67,6 +68,7 @@ export async function GET(req: NextRequest) {
       items: o.items.map((i) => ({
         itemName: i.itemName,
         quantity: i.quantity,
+        returnedQty: i.returnedQty,
         unitPrice: i.unitPrice,
         spiceLevel: i.spiceLevel,
         addons: parseJSON<{ name: string; price: number }[]>(i.addons, []),

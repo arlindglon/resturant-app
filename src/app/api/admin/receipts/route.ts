@@ -10,10 +10,12 @@ import { requirePerm } from '@/lib/staff-auth'
 
 export interface ReceiptOrder {
   orderNo: number
-  items: { name: string; qty: number; unitPrice: number; lineTotal: number; spiceLevel?: string | null; addons?: string; specialNote?: string | null }[]
+  items: { name: string; qty: number; returnedQty?: number; unitPrice: number; lineTotal: number; spiceLevel?: string | null; addons?: string; specialNote?: string | null }[]
   subtotal: number
+  returnedAmount?: number
   happyHourDiscount: number
   voucherDiscount: number
+  voucherVoided?: boolean
   birthdayDiscount: number
   voucherCode?: string | null
   total: number

@@ -19,10 +19,12 @@ interface ReceiptData {
   paidAt: string
   items: {
     orderNo: number
-    items: { name: string; qty: number; unitPrice: number; lineTotal: number; spiceLevel?: string | null; addons?: string | { name: string; price: number }[] | null; specialNote?: string | null }[]
+    items: { name: string; qty: number; returnedQty?: number; unitPrice: number; lineTotal: number; spiceLevel?: string | null; addons?: string | { name: string; price: number }[] | null; specialNote?: string | null }[]
     subtotal: number
+    returnedAmount?: number
     happyHourDiscount: number
     voucherDiscount: number
+    voucherVoided?: boolean
     birthdayDiscount: number
     voucherCode?: string | null
     total: number
@@ -171,6 +173,9 @@ export default function ReceiptPrintPage() {
                     <tr key={ix} className="align-top">
                       <td className="py-0.5 pr-2 text-stone-700">
                         {it.name} <span className="text-stone-500">×{it.qty}</span>
+                        {(it.returnedQty ?? 0) > 0 && (
+                          <span className="ml-1 text-[11px] font-bold text-red-600">↩ {it.returnedQty}টি রিটার্ন</span>
+                        )}
                         {it.spiceLevel ? <span className="ml-1 text-[11px] text-orange-600">[{it.spiceLevel}]</span> : null}
                         {(() => { const at = addonsText(it.addons); return at ? (
                           <span className="block text-[11px] text-stone-500">+ {at}</span>
@@ -188,6 +193,16 @@ export default function ReceiptPrintPage() {
                   {o.voucherDiscount > 0 && <p>কুপন {o.voucherCode ? `(${o.voucherCode})` : ''} ছাড়: −{money(o.voucherDiscount)}</p>}
                   {o.birthdayDiscount > 0 && <p>অকেশন ছাড়: −{money(o.birthdayDiscount)}</p>}
                 </div>
+              )}
+              {(o.voucherVoided ?? false) && (
+                <p className="mt-1 text-[12px] font-bold text-red-600">
+                  🎟️ কুপন {o.voucherCode ? `(${o.voucherCode}) ` : ''}ছাড় রিটার্নের কারণে বাতিল হয়েছে
+                </p>
+              )}
+              {(o.returnedAmount ?? 0) > 0 && (
+                <p className="mt-1 text-[12px] font-bold text-red-600">
+                  ↩ রিটার্ন মোট: −{money(o.returnedAmount ?? 0)}
+                </p>
               )}
             </div>
           ))}

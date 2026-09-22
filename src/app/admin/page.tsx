@@ -69,6 +69,7 @@ import {
   LightbulbOff,
   Loader2,
   LogOut,
+  Minus,
   Pencil,
   Plus,
   QrCode,
@@ -80,6 +81,7 @@ import {
   Ticket,
   Timer,
   Trash2,
+  Undo2,
   Users,
   UtensilsCrossed,
   Webhook,
@@ -529,13 +531,14 @@ interface LiveOrder {
   voucherDiscount: number
   happyHourDiscount: number
   birthdayDiscount: number
+  returnedAmount: number
   total: number
   billPaid: boolean
   paymentMethod: string | null
   voucherCode: string | null
   placedAt: string
   itemCount: number
-  items: { itemName: string; quantity: number; spiceLevel: string | null; addons: { name: string; price: number }[]; specialNote: string | null }[]
+  items: { id: string; itemName: string; quantity: number; returnedQty: number; unitPrice: number; lineTotal: number; spiceLevel: string | null; addons: { name: string; price: number }[]; specialNote: string | null }[]
 }
 
 interface LiveTable {
@@ -590,8 +593,10 @@ function TablesTab({ onAuthRequired }: TabProps) {
   const [payTarget, setPayTarget] = useState<LiveTable | null>(null)
   const [payMethod, setPayMethod] = useState('CASH')
   const [paying, setPaying] = useState(false)
+  // bill-time returns: orderItemId → how many pieces the customer returned
+  const [returns, setReturns] = useState<Record<string, number>>({})
   // payment success → show receipt no + print button inside the dialog
-  const [payResult, setPayResult] = useState<{ receiptId: string; receiptNo: number; payable: number } | null>(null)
+  const [payResult, setPayResult] = useState<{ receiptId: string; receiptNo: number; payable: number; returnTotal: number; voucherVoidedTotal: number } | null>(null)
 
   // sound tracking: new orders / new waiter calls → chime + toast
   const knownOrderIdsRef = useRef<Set<string>>(new Set())
@@ -715,23 +720,46 @@ function TablesTab({ onAuthRequired }: TabProps) {
   const payBill = async () => {
     if (!payTarget?.session) return
     setPaying(true)
-    const res = await api.post<{ sessionId: string; tableNumber: number; method: string; payable: number; receiptId: string; receiptNo: number; ordersPaid: number }>(
-      '/api/admin/bills/pay',
-      {
-        sessionId: payTarget.session.id,
-        method: payMethod,
-      }
-    )
+    // only items with an actual return are sent
+    const returnsPayload = (payTarget.session.orders ?? [])
+      .flatMap((o) =>
+        o.items
+          .filter((it) => (returns[it.id] ?? 0) > 0)
+          .map((it) => ({ orderId: o.id, itemId: it.id, returnedQty: returns[it.id] }))
+      )
+    const res = await api.post<{
+      sessionId: string
+      tableNumber: number
+      method: string
+      payable: number
+      returnTotal: number
+      voucherVoidedTotal: number
+      receiptId: string
+      receiptNo: number
+      ordersPaid: number
+    }>('/api/admin/bills/pay', {
+      sessionId: payTarget.session.id,
+      method: payMethod,
+      returns: returnsPayload,
+    })
     setPaying(false)
     if (!res.ok) return toast.error(res.error || 'পেমেন্ট নিশ্চিত ব্যর্থ')
     const receiptNo = res.data?.receiptNo ?? 0
     const receiptId = res.data?.receiptId ?? ''
-    toast.success(`বিল পরিশোধ হয়েছে (${payMethod}) — রসিদ #${toBn(String(receiptNo))}`, {
-      action: receiptId
-        ? { label: '🧾 রসিদ দেখুন', onClick: () => window.open(`/receipt/${receiptId}`, '_blank') }
-        : undefined,
-    })
-    setPayResult({ receiptId, receiptNo, payable: payTarget.session.bill.payable })
+    const returnTotal = res.data?.returnTotal ?? 0
+    const voucherVoidedTotal = res.data?.voucherVoidedTotal ?? 0
+    toast.success(
+      returnTotal > 0
+        ? `বিল পরিশোধ হয়েছে (${payMethod}) — রিটার্ন −৳${returnTotal}${voucherVoidedTotal > 0 ? ' + কুপন ছাড় বাতিল' : ''}, রসিদ #${toBn(String(receiptNo))}`
+        : `বিল পরিশোধ হয়েছে (${payMethod}) — রসিদ #${toBn(String(receiptNo))}`,
+      {
+        action: receiptId
+          ? { label: '🧾 রসিদ দেখুন', onClick: () => window.open(`/receipt/${receiptId}`, '_blank') }
+          : undefined,
+      }
+    )
+    setPayResult({ receiptId, receiptNo, payable: res.data?.payable ?? 0, returnTotal, voucherVoidedTotal })
+    setReturns({})
     load()
   }
 
@@ -914,6 +942,7 @@ function TablesTab({ onAuthRequired }: TabProps) {
                             setPayTarget(t)
                             setPayMethod('CASH')
                             setPayResult(null)
+                            setReturns({})
                           }}
                           className="h-8 bg-emerald-600 font-black text-white hover:bg-emerald-700"
                         >
@@ -968,17 +997,18 @@ function TablesTab({ onAuthRequired }: TabProps) {
         </div>
       )}
 
-      {/* payment dialog */}
+      {/* payment dialog — with bill-time item returns + anti-scam coupon void */}
       <Dialog
         open={Boolean(payTarget)}
         onOpenChange={(v) => {
           if (!v) {
             setPayTarget(null)
             setPayResult(null)
+            setReturns({})
           }
         }}
       >
-        <DialogContent className="sm:max-w-sm">
+        <DialogContent className="sm:max-w-md">
           {payResult ? (
             <>
               <DialogHeader>
@@ -986,6 +1016,12 @@ function TablesTab({ onAuthRequired }: TabProps) {
                 <DialogDescription>
                   মোট {bnTaka(payResult.payable)} পরিশোধ হয়েছে ({payMethod}) — রসিদ নম্বর{' '}
                   <span className="font-black text-stone-900">#{toBn(String(payResult.receiptNo))}</span>
+                  {payResult.returnTotal > 0 && (
+                    <span className="mt-2 block text-red-600">
+                      ↩ রিটার্ন: −৳{payResult.returnTotal}
+                      {payResult.voucherVoidedTotal > 0 && ' • কুপন ছাড় বাতিল হয়েছে (রিটার্ন নিয়ম)'}
+                    </span>
+                  )}
                 </DialogDescription>
               </DialogHeader>
               <DialogFooter className="gap-2 sm:gap-0">
@@ -994,6 +1030,7 @@ function TablesTab({ onAuthRequired }: TabProps) {
                   onClick={() => {
                     setPayTarget(null)
                     setPayResult(null)
+                    setReturns({})
                   }}
                 >
                   বন্ধ করুন
@@ -1007,44 +1044,166 @@ function TablesTab({ onAuthRequired }: TabProps) {
                 </Button>
               </DialogFooter>
             </>
-          ) : (
-            <>
-              <DialogHeader>
-                <DialogTitle>টেবিল {payTarget ? toBn(payTarget.number) : ''} — বিল পরিশোধ</DialogTitle>
-                <DialogDescription>
-                  মোট প্রদেয়: <span className="font-black text-stone-900">৳{payTarget?.session?.bill.payable ?? 0}</span>
-                  {' '}— পেমেন্ট মাধ্যম বেছে নিয়ে নিশ্চিত করুন।
-                </DialogDescription>
-              </DialogHeader>
-              <Select value={payMethod} onValueChange={setPayMethod}>
-                <SelectTrigger>
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="CASH">💵 ক্যাশ</SelectItem>
-                  <SelectItem value="CARD">💳 কার্ড</SelectItem>
-                  <SelectItem value="BKASH">📱 বিকাশ</SelectItem>
-                  <SelectItem value="NAGAD">📱 নগদ</SelectItem>
-                  <SelectItem value="ONLINE">🌐 অনলাইন</SelectItem>
-                </SelectContent>
-              </Select>
-              <DialogFooter>
-                <Button
-                  variant="outline"
-                  onClick={() => {
-                    setPayTarget(null)
-                    setPayResult(null)
-                  }}
-                >
-                  বাতিল
-                </Button>
-                <Button onClick={payBill} disabled={paying} className="bg-emerald-600 font-black text-white hover:bg-emerald-700">
-                  {paying ? <Loader2 className="h-4 w-4 animate-spin" /> : <Banknote className="h-4 w-4" />}
-                  পরিশোধ নিশ্চিত করুন
-                </Button>
-              </DialogFooter>
-            </>
-          )}
+          ) : (() => {
+            const billOrders = payTarget?.session?.orders ?? []
+            // live math — same rules the server enforces:
+            // any return → ALL coupon discounts of the session are voided
+            const hasReturn = Object.values(returns).some((n) => n > 0)
+            const returnTotal =
+              billOrders.reduce(
+                (s, o) => s + o.items.reduce((ss, it) => ss + (returns[it.id] ?? 0) * it.unitPrice, 0),
+                0
+              )
+            // voiding the coupon means its old discount is charged again (+)
+            const voucherVoid = hasReturn ? billOrders.reduce((s, o) => s + o.voucherDiscount, 0) : 0
+            const grossPayable = payTarget?.session?.bill.payable ?? 0
+            const finalPayable = Math.max(0, grossPayable - returnTotal + voucherVoid)
+            const hasVoucher = billOrders.some((o) => o.voucherDiscount > 0)
+            return (
+              <>
+                <DialogHeader>
+                  <DialogTitle>টেবিল {payTarget ? toBn(payTarget.number) : ''} — বিল পরিশোধ</DialogTitle>
+                  <DialogDescription>
+                    খাবারের হিসাব মিলিয়ে নিন। কিছু ফেরত (রিটার্ন) থাকলে <Undo2 className="inline h-3.5 w-3.5" /> বোতামে সেট করুন —
+                    রিটার্ন হলে কুপন ছাড় স্বয়ংক্রিয়ভাবে বাতিল হবে।
+                  </DialogDescription>
+                </DialogHeader>
+
+                {/* itemized list with return steppers */}
+                <div className="thin-scroll max-h-56 space-y-2 overflow-y-auto rounded-lg border border-stone-200 bg-stone-50 p-2">
+                  {billOrders.length === 0 && <p className="p-3 text-center text-xs text-stone-400">কোনো অর্ডার নেই</p>}
+                  {billOrders.map((o) => (
+                    <div key={o.id} className="rounded-md bg-white p-2">
+                      <p className="mb-1 text-[11px] font-black text-stone-500">
+                        অর্ডার #{toBn(String(o.orderNo))}
+                        {o.voucherCode && (
+                          <span className={cn('ml-2', hasReturn ? 'text-red-500 line-through' : 'text-emerald-600')}>🎟️ {o.voucherCode}</span>
+                        )}
+                      </p>
+                      <div className="space-y-1.5">
+                        {o.items.map((it) => {
+                          const rq = returns[it.id] ?? 0
+                          return (
+                            <div key={it.id} className="flex items-center justify-between gap-2">
+                              <div className="min-w-0">
+                                <p className="truncate text-xs font-bold text-stone-800">
+                                  {it.itemName} <span className="text-stone-500">×{toBn(String(it.quantity))}</span>
+                                  {it.addons.length > 0 && (
+                                    <span className="ml-1 text-[10px] font-normal text-stone-400">+ {it.addons.map((a) => a.name).join(', ')}</span>
+                                  )}
+                                </p>
+                                {rq > 0 ? (
+                                  <p className="text-[10px] font-bold text-red-600">
+                                    ↩ {toBn(String(rq))}টি রিটার্ন — ৳{(it.lineTotal - rq * it.unitPrice).toFixed(0)}
+                                  </p>
+                                ) : (
+                                  <p className="text-[10px] text-stone-400">৳{it.lineTotal}</p>
+                                )}
+                              </div>
+                              <div className="flex shrink-0 items-center gap-1">
+                                <Button
+                                  type="button"
+                                  variant="outline"
+                                  size="sm"
+                                  disabled={rq === 0}
+                                  aria-label={`${it.itemName} রিটার্ন কমান`}
+                                  onClick={() => setReturns((p) => ({ ...p, [it.id]: Math.max(0, (p[it.id] ?? 0) - 1) }))}
+                                  className="h-7 w-7 p-0"
+                                >
+                                  <Minus className="h-3 w-3" />
+                                </Button>
+                                <span
+                                  className={cn(
+                                    'w-6 text-center text-xs font-black',
+                                    rq > 0 ? 'text-red-600' : 'text-stone-300'
+                                  )}
+                                >
+                                  {toBn(String(rq))}
+                                </span>
+                                <Button
+                                  type="button"
+                                  variant="outline"
+                                  size="sm"
+                                  disabled={rq >= it.quantity}
+                                  aria-label={`${it.itemName} রিটার্ন যোগ করুন`}
+                                  onClick={() => setReturns((p) => ({ ...p, [it.id]: Math.min(it.quantity, (p[it.id] ?? 0) + 1) }))}
+                                  className="h-7 w-7 p-0 border-red-200 text-red-500 hover:bg-red-50 hover:text-red-600"
+                                >
+                                  <Undo2 className="h-3 w-3" />
+                                </Button>
+                              </div>
+                            </div>
+                          )
+                        })}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+
+                {/* live totals */}
+                <div className="space-y-1 rounded-lg bg-stone-50 p-3 text-sm">
+                  <div className="flex justify-between text-stone-500">
+                    <span>মোট বিল</span>
+                    <span>৳{grossPayable.toFixed(grossPayable % 1 === 0 ? 0 : 2)}</span>
+                  </div>
+                  {returnTotal > 0 && (
+                    <div className="flex justify-between font-bold text-red-600">
+                      <span>↩ রিটার্ন বাদ</span>
+                      <span>−৳{returnTotal.toFixed(returnTotal % 1 === 0 ? 0 : 2)}</span>
+                    </div>
+                  )}
+                  {voucherVoid > 0 && (
+                    <div className="flex justify-between font-bold text-red-600">
+                      <span>🎟️ কুপন ছাড় বাতিল (আগের ছাড় যোগ হবে)</span>
+                      <span>+৳{voucherVoid.toFixed(voucherVoid % 1 === 0 ? 0 : 2)}</span>
+                    </div>
+                  )}
+                  <div className="flex items-baseline justify-between border-t border-stone-200 pt-1.5">
+                    <span className="font-bold text-stone-800">মোট প্রদেয়</span>
+                    <span className="text-xl font-black text-amber-600">৳{finalPayable.toFixed(finalPayable % 1 === 0 ? 0 : 2)}</span>
+                  </div>
+                </div>
+
+                {hasReturn && hasVoucher && (
+                  <div className="flex items-start gap-2 rounded-lg border border-red-200 bg-red-50 p-2.5 text-xs font-bold text-red-700">
+                    <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
+                    <p>
+                      রিটার্ন থাকায় এই বিলের কুপন/প্রোমো ছাড় স্বয়ংক্রিয়ভাবে বাতিল হচ্ছে (স্ক্যাম-প্রতিরোধ নিয়ম) — কাস্টমার পুরো টাকা মোট থেকে পরিশোধ করবে।
+                    </p>
+                  </div>
+                )}
+
+                <Select value={payMethod} onValueChange={setPayMethod}>
+                  <SelectTrigger>
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="CASH">💵 ক্যাশ</SelectItem>
+                    <SelectItem value="CARD">💳 কার্ড</SelectItem>
+                    <SelectItem value="BKASH">📱 বিকাশ</SelectItem>
+                    <SelectItem value="NAGAD">📱 নগদ</SelectItem>
+                    <SelectItem value="ONLINE">🌐 অনলাইন</SelectItem>
+                  </SelectContent>
+                </Select>
+                <DialogFooter>
+                  <Button
+                    variant="outline"
+                    onClick={() => {
+                      setPayTarget(null)
+                      setPayResult(null)
+                      setReturns({})
+                    }}
+                  >
+                    বাতিল
+                  </Button>
+                  <Button onClick={payBill} disabled={paying} className="bg-emerald-600 font-black text-white hover:bg-emerald-700">
+                    {paying ? <Loader2 className="h-4 w-4 animate-spin" /> : <Banknote className="h-4 w-4" />}
+                    পরিশোধ নিশ্চিত করুন
+                  </Button>
+                </DialogFooter>
+              </>
+            )
+          })()}
         </DialogContent>
       </Dialog>
     </div>
@@ -2618,8 +2777,9 @@ function OccasionsTab({ onAuthRequired }: TabProps) {
 // ============================================================
 interface ReceiptLine {
   name: string
-  quantity?: number // legacy rows
+  quantity?: number // legacy rows (bills/pay)
   qty?: number // newer rows (bills/pay)
+  returnedQty?: number // bill-time return count
   unitPrice: number
   lineTotal: number
   spiceLevel: string | null
@@ -2640,6 +2800,8 @@ interface ReceiptOrder {
   placedAt?: string
   voucherCode: string | null
   voucherDiscount: number
+  voucherVoided?: boolean
+  returnedAmount?: number
   happyHourDiscount?: number
   birthdayDiscount: number
   items: ReceiptLine[]
@@ -2865,8 +3027,15 @@ function ReceiptsTab({ onAuthRequired }: TabProps) {
                         <p className="mb-2 text-xs font-black text-stone-700">
                           অর্ডার #{toBn(String(ord.orderNo))}
                           {ord.voucherCode && (
-                            <Badge className="ml-2 bg-amber-100 text-[10px] text-amber-800 hover:bg-amber-100">
-                              🎟️ {ord.voucherCode}
+                            <Badge
+                              className={cn(
+                                'ml-2 text-[10px] hover:bg-amber-100',
+                                (ord.voucherVoided ?? false) || ord.voucherDiscount === 0
+                                  ? 'bg-red-100 text-red-700 line-through hover:bg-red-100'
+                                  : 'bg-amber-100 text-amber-800'
+                              )}
+                            >
+                              🎟️ {ord.voucherCode}{(ord.voucherVoided ?? false) ? ' (বাতিল)' : ''}
                             </Badge>
                           )}
                         </p>
@@ -2876,6 +3045,11 @@ function ReceiptsTab({ onAuthRequired }: TabProps) {
                               <div className="flex items-center justify-between gap-2">
                                 <span className="font-bold text-stone-800">
                                   <span className="text-amber-600">{toBn(lineQty(it))}×</span> {it.name}
+                                  {(it.returnedQty ?? 0) > 0 && (
+                                    <span className="ml-1.5 rounded bg-red-50 px-1.5 py-0.5 text-[10px] font-black text-red-600">
+                                      ↩ {toBn(String(it.returnedQty))}টি রিটার্ন
+                                    </span>
+                                  )}
                                 </span>
                                 <span className="font-extrabold text-stone-700">{bnTaka(it.lineTotal)}</span>
                               </div>
@@ -2901,6 +3075,12 @@ function ReceiptsTab({ onAuthRequired }: TabProps) {
                             <span>🔥 হ্যাপি আওয়ার −{bnTaka(ord.happyHourDiscount)}</span>
                           )}
                           {ord.voucherDiscount > 0 && <span>🎟️ ভাউচার −{bnTaka(ord.voucherDiscount)}</span>}
+                          {(ord.voucherVoided ?? false) && (
+                            <span className="text-red-600">🎟️ কুপন ছাড় রিটার্নের কারণে বাতিল</span>
+                          )}
+                          {(ord.returnedAmount ?? 0) > 0 && (
+                            <span className="text-red-600">↩ রিটার্ন −{bnTaka(ord.returnedAmount ?? 0)}</span>
+                          )}
                           {ord.birthdayDiscount > 0 && <span>🎂 জন্মদিন −{bnTaka(ord.birthdayDiscount)}</span>}
                           {typeof ord.total === 'number' && (
                             <span className="text-sm font-black text-amber-700">অর্ডার মোট {bnTaka(ord.total)}</span>

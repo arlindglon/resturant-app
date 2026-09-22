@@ -201,6 +201,7 @@ model Order {
   happyHourDiscount Float       @default(0)
   voucherDiscount   Float       @default(0)
   birthdayDiscount  Float       @default(0)
+  returnedAmount    Float       @default(0) // value of returned items (bill-time returns)
   total             Float
   voucherCode       String?
   billPaid          Boolean     @default(false)
@@ -232,6 +233,7 @@ model OrderItem {
   spiceLevel  String?
   addons      String?   @db.Text // JSON [{name,price}]
   specialNote String?
+  returnedQty Int       @default(0) // bill-time return count (0 = nothing returned)
   lineTotal   Float
 
   @@index([orderId])

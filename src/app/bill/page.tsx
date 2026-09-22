@@ -36,6 +36,7 @@ import { useSiteConfig } from '@/components/customer/site-config'
 interface BillItem {
   itemName: string
   quantity: number
+  returnedQty?: number
   unitPrice: number
   spiceLevel: string | null
   addons: { name: string; price: number }[]
@@ -395,6 +396,11 @@ export default function BillPage() {
                         <p className="text-sm text-stone-700">
                           <span className="font-bold text-stone-900">{it.quantity}×</span>{' '}
                           {it.itemName}
+                          {(it.returnedQty ?? 0) > 0 && (
+                            <span className="ml-1.5 rounded bg-red-50 px-1.5 py-0.5 text-[10px] font-bold text-red-600">
+                              ↩ {it.returnedQty}টি রিটার্ন
+                            </span>
+                          )}
                         </p>
                         <p className="mt-0.5 flex flex-wrap gap-1.5 text-[10px] text-stone-400">
                           {it.spiceLevel && <span>🌶️ {it.spiceLevel}</span>}
