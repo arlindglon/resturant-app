@@ -38,6 +38,7 @@ export const SPICE_LEVELS = ['Mild', 'Medium', 'Hot'] as const
 export const SESSION_COOKIE = 'qr_session'
 export const ADMIN_COOKIE = 'admin_token'
 export const STAFF_COOKIE = 'staff_key'
+export const KDS_COOKIE = 'kds_token'
 
 // Access key roles
 export const ACCESS_KEY_ROLES = {
