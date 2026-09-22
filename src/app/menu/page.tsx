@@ -642,6 +642,11 @@ export default function MenuPage() {
   const [upsellSource, setUpsellSource] = useState<MenuItemData | null>(null)
   // per-item count of upsell adds in this drawer session — drives the "✓ যোগ হয়েছে" feedback
   const [addedUpsell, setAddedUpsell] = useState<Record<string, number>>({})
+  // scrollable-list tracking — with MANY upsell items the list scrolls up/down
+  // (header + "না, থাক" button stay fixed & always reachable)
+  const upsellListRef = useRef<HTMLDivElement>(null)
+  const [upsellScrollable, setUpsellScrollable] = useState(false)
+  const [upsellAtEnd, setUpsellAtEnd] = useState(false)
 
   // waiter
   const [waiterOpen, setWaiterOpen] = useState(false)
@@ -819,6 +824,20 @@ export default function MenuPage() {
       .map((id) => menuMap.get(id))
       .filter((i): i is MenuItemData => Boolean(i) && i!.isAvailable)
   }, [upsellSource, menuMap])
+
+  // measure the upsell list after the drawer mounts — if it overflows (many
+  // items) we show the Bengali scroll hint + bottom fade so customers SEE
+  // that the list scrolls up/down
+  useEffect(() => {
+    if (!upsellSource) return
+    const raf = requestAnimationFrame(() => {
+      const el = upsellListRef.current
+      if (!el) return
+      setUpsellScrollable(el.scrollHeight > el.clientHeight + 4)
+      setUpsellAtEnd(false) // fresh list always starts at the top
+    })
+    return () => cancelAnimationFrame(raf)
+  }, [upsellSource, upsellItems.length])
 
   const activeCount = useMemo(
     () =>
@@ -1236,11 +1255,12 @@ export default function MenuPage() {
         specialNoteEnabled={specialNoteEnabled}
       />
 
-      {/* ── upsell drawer ── */}
+      {/* ── upsell drawer ── many items? the list scrolls up/down while the
+          header + "না, থাক" button stay fixed — never clipped off-screen */}
       <Drawer open={!!upsellSource} onOpenChange={(o) => !o && setUpsellSource(null)}>
         <DrawerContent>
-          <div className="mx-auto w-full max-w-md pb-2">
-            <DrawerHeader className="pb-2">
+          <div className="mx-auto flex max-h-[75vh] w-full max-w-md flex-col overflow-hidden pb-2">
+            <DrawerHeader className="shrink-0 pb-2">
               <DrawerTitle className="text-lg font-bold text-stone-900">
                 🍔 সাথে কী নেবেন?
               </DrawerTitle>
@@ -1248,58 +1268,75 @@ export default function MenuPage() {
                 অনেকেই এই আইটেমের সাথে নিচের জিনিসগুলো নিয়ে থাকেন
               </DrawerDescription>
             </DrawerHeader>
-            <div className="space-y-2 px-4">
-              {upsellItems.length === 0 ? (
-                <p className="py-4 text-center text-sm text-stone-400">
-                  কোনো আপসেল আইটেম পাওয়া যায়নি
-                </p>
-              ) : (
-                upsellItems.map((u) => {
-                  const added = addedUpsell[u.id] || 0
-                  return (
-                    <div
-                      key={u.id}
-                      className={`flex items-center gap-3 rounded-xl border p-2.5 transition-colors ${
-                        added > 0 ? 'border-emerald-300 bg-emerald-50' : 'border-amber-100 bg-amber-50/50'
-                      }`}
-                    >
-                      <ItemThumb
-                        src={u.imageUrl}
-                        alt={u.name}
-                        className="size-12 shrink-0 rounded-lg"
-                        iconClassName="size-5"
-                      />
-                      <div className="min-w-0 flex-1">
-                        <p className="truncate text-sm font-semibold text-stone-800">{u.name}</p>
-                        <p className={`text-sm font-bold ${added > 0 ? 'text-emerald-600' : 'text-amber-600'}`}>
-                          {taka(u.price)}
-                        </p>
-                      </div>
-                      <Button
-                        size="sm"
-                        onClick={() => quickAddUpsell(u)}
-                        className={`font-bold text-white ${
-                          added > 0 ? 'bg-emerald-500 hover:bg-emerald-600' : 'bg-amber-500 hover:bg-amber-600'
+            {upsellScrollable && (
+              <p className="shrink-0 text-center text-[11px] font-semibold text-amber-500">
+                ⇅ উপরে-নিচে স্ক্রল করে সব দেখুন
+              </p>
+            )}
+            <div className="relative min-h-0 flex-1">
+              <div
+                ref={upsellListRef}
+                onScroll={(e) => {
+                  const el = e.currentTarget
+                  setUpsellAtEnd(el.scrollTop + el.clientHeight >= el.scrollHeight - 8)
+                }}
+                className="nice-scrollbar h-full space-y-2 overflow-y-auto overscroll-contain px-4 pb-3"
+              >
+                {upsellItems.length === 0 ? (
+                  <p className="py-4 text-center text-sm text-stone-400">
+                    কোনো আপসেল আইটেম পাওয়া যায়নি
+                  </p>
+                ) : (
+                  upsellItems.map((u) => {
+                    const added = addedUpsell[u.id] || 0
+                    return (
+                      <div
+                        key={u.id}
+                        className={`flex items-center gap-3 rounded-xl border p-2.5 transition-colors ${
+                          added > 0 ? 'border-emerald-300 bg-emerald-50' : 'border-amber-100 bg-amber-50/50'
                         }`}
                       >
-                        {added > 0 ? (
-                          <>
-                            <Check className="size-3.5" />
-                            {added > 1 ? `যোগ হয়েছে ×${toBn(added)}` : 'যোগ হয়েছে ✓'}
-                          </>
-                        ) : (
-                          <>
-                            <Plus className="size-3.5" />
-                            যোগ করুন
-                          </>
-                        )}
-                      </Button>
-                    </div>
-                  )
-                })
+                        <ItemThumb
+                          src={u.imageUrl}
+                          alt={u.name}
+                          className="size-12 shrink-0 rounded-lg"
+                          iconClassName="size-5"
+                        />
+                        <div className="min-w-0 flex-1">
+                          <p className="truncate text-sm font-semibold text-stone-800">{u.name}</p>
+                          <p className={`text-sm font-bold ${added > 0 ? 'text-emerald-600' : 'text-amber-600'}`}>
+                            {taka(u.price)}
+                          </p>
+                        </div>
+                        <Button
+                          size="sm"
+                          onClick={() => quickAddUpsell(u)}
+                          className={`font-bold text-white ${
+                            added > 0 ? 'bg-emerald-500 hover:bg-emerald-600' : 'bg-amber-500 hover:bg-amber-600'
+                          }`}
+                        >
+                          {added > 0 ? (
+                            <>
+                              <Check className="size-3.5" />
+                              {added > 1 ? `যোগ হয়েছে ×${toBn(added)}` : 'যোগ হয়েছে ✓'}
+                            </>
+                          ) : (
+                            <>
+                              <Plus className="size-3.5" />
+                              যোগ করুন
+                            </>
+                          )}
+                        </Button>
+                      </div>
+                    )
+                  })
+                )}
+              </div>
+              {upsellScrollable && !upsellAtEnd && (
+                <div className="pointer-events-none absolute inset-x-0 bottom-0 h-10 bg-gradient-to-t from-white to-transparent" />
               )}
             </div>
-            <div className="p-4 pt-2">
+            <div className="shrink-0 p-4 pt-2">
               {Object.values(addedUpsell).some((n) => n > 0) && (
                 <Link
                   href="/cart"

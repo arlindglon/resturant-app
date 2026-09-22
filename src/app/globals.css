@@ -120,3 +120,25 @@
     @apply bg-background text-foreground;
   }
 }
+
+/* Thin rounded scrollbar for scrollable drawers/sheets (upsell list etc.) */
+@layer utilities {
+  .nice-scrollbar {
+    scrollbar-width: thin;
+    scrollbar-color: #d6d3d1 transparent;
+  }
+  .nice-scrollbar::-webkit-scrollbar {
+    width: 5px;
+    height: 5px;
+  }
+  .nice-scrollbar::-webkit-scrollbar-track {
+    background: transparent;
+  }
+  .nice-scrollbar::-webkit-scrollbar-thumb {
+    border-radius: 9999px;
+    background: #d6d3d1;
+  }
+  .nice-scrollbar::-webkit-scrollbar-thumb:hover {
+    background: #a8a29e;
+  }
+}
