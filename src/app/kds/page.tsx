@@ -16,8 +16,10 @@ import {
   setStaffVolume,
   staffChime,
   staffConfirmBeep,
+  unlockStaffAudioFallback,
   type StaffVolume,
 } from '@/lib/staff-sound'
+import { requestWakeLock, releaseWakeLock } from '@/lib/wakelock'
 import { bnClock, bnElapsed, toBn } from '@/lib/bn'
 import { toast } from 'sonner'
 import { Badge } from '@/components/ui/badge'
@@ -182,16 +184,22 @@ export default function KdsPage() {
     return () => clearTimeout(t)
   }, [])
 
-  // ---- arm audio on FIRST user gesture anywhere (browser autoplay policy) ----
+  // ---- arm audio on EVERY user gesture (browser autoplay policy) —
+  // cheap + idempotent; also revives the context after interruptions and
+  // primes the <audio> WAV fallback for webviews that never unlock WebAudio
   useEffect(() => {
-    const onFirstPointer = () => {
-      if (armedOnceRef.current) return
-      armedOnceRef.current = true
+    const onPointer = () => {
       if (soundStateRef.current !== 'on') return
-      if (armStaffSound(volumeRef.current)) staffConfirmBeep()
+      if (armStaffSound(volumeRef.current)) {
+        unlockStaffAudioFallback()
+        if (!armedOnceRef.current) {
+          armedOnceRef.current = true
+          staffConfirmBeep()
+        }
+      }
     }
-    window.addEventListener('pointerdown', onFirstPointer)
-    return () => window.removeEventListener('pointerdown', onFirstPointer)
+    window.addEventListener('pointerdown', onPointer, { passive: true })
+    return () => window.removeEventListener('pointerdown', onPointer)
   }, [])
 
   const unlockKitchen = async () => {
@@ -258,6 +266,19 @@ export default function KdsPage() {
     return () => clearTimeout(t)
   }, [refetch, authState])
 
+  // screen back on → revive audio + wake lock + instant refetch so missed
+  // orders chime right away instead of waiting for the next poll tick
+  useEffect(() => {
+    const onVisible = () => {
+      if (document.visibilityState !== 'visible') return
+      if (soundStateRef.current === 'on') void armStaffSound(volumeRef.current)
+      void requestWakeLock()
+      refetch(true)
+    }
+    document.addEventListener('visibilitychange', onVisible)
+    return () => document.removeEventListener('visibilitychange', onVisible)
+  }, [refetch])
+
   // live clock (1s) + elapsed-timer refresh (10s)
   useEffect(() => {
     const t0 = setTimeout(() => setClock(new Date()), 0)
@@ -316,7 +337,12 @@ export default function KdsPage() {
       try {
         localStorage.setItem(LS_SOUND, 'on')
       } catch { /* ignore */ }
-      staffConfirmBeep() // confirmation beep the user can hear right away
+      unlockStaffAudioFallback()
+      void requestWakeLock() // kitchen tablet: keep the screen alive so chimes never stop
+      staffChime('order') // loud full test chime — instant proof the audio works
+      if (/Mobi|Android|iPhone|iPad|iPod/i.test(navigator.userAgent)) {
+        toast.info('টেস্ট সাউন্ড শুনতে পেলেন? না শুনলে মিডিয়া ভলিউম বাড়ান; iPhone হলে সাইলেন্ট সুইচ বন্ধ করুন')
+      }
     } else {
       toast.error('এই ব্রাউজারে অডিও চালু করা যাচ্ছে না')
       soundStateRef.current = 'off'
@@ -328,6 +354,7 @@ export default function KdsPage() {
     disarmStaffSound()
     soundStateRef.current = 'off'
     setSoundState('off')
+    void releaseWakeLock() // sound off → no need to keep the screen alive
     try {
       localStorage.setItem(LS_SOUND, 'off')
     } catch { /* ignore */ }
@@ -349,6 +376,7 @@ export default function KdsPage() {
         armedOnceRef.current = true
         soundStateRef.current = 'on'
         setSoundState('on')
+        unlockStaffAudioFallback()
         staffConfirmBeep()
       }
     }

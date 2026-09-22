@@ -17,8 +17,10 @@ import {
   setStaffVolume,
   staffChime,
   staffConfirmBeep,
+  unlockStaffAudioFallback,
   type StaffVolume,
 } from '@/lib/staff-sound'
+import { requestWakeLock, releaseWakeLock, wakeLockSupported } from '@/lib/wakelock'
 import { cn } from '@/lib/utils'
 import { toast } from 'sonner'
 import {
@@ -63,6 +65,8 @@ import {
   ImagePlus,
   Info,
   KeyRound,
+  Lightbulb,
+  LightbulbOff,
   Loader2,
   LogOut,
   Pencil,
@@ -666,6 +670,14 @@ function TablesTab({ onAuthRequired }: TabProps) {
       clearTimeout(t)
       clearInterval(iv)
     }
+  }, [load])
+
+  // parent shell requests an instant refresh (tab visible again after being
+  // backgrounded) so missed status changes chime immediately
+  useEffect(() => {
+    const h = () => void load()
+    window.addEventListener('admin:tables:refresh', h)
+    return () => window.removeEventListener('admin:tables:refresh', h)
   }, [load])
 
   const addTable = async () => {
@@ -4331,6 +4343,7 @@ function AccessKeysTab({ onAuthRequired }: TabProps) {
 // ============================================================
 const LS_ADMIN_SOUND = 'admin_sound'
 const LS_ADMIN_VOLUME = 'admin_volume'
+const LS_ADMIN_WAKE = 'admin_wakelock'
 
 export default function AdminPage() {
   const [auth, setAuth] = useState<'checking' | 'login' | 'ready'>('checking')
@@ -4346,9 +4359,14 @@ export default function AdminPage() {
   // ---- staff sound (chime on new orders / waiter calls in TablesTab) ----
   const [soundOn, setSoundOn] = useState(true)
   const [volume, setVolumeState] = useState<StaffVolume>('boost')
+  // drives the "tap to enable sound" banner — mobile browsers only allow
+  // audio after a real tap, and scroll-only usage never taps
+  const [audioArmed, setAudioArmed] = useState(false)
+  const [wakeOn, setWakeOn] = useState(false) // keep screen awake → polling + chimes keep working
   const soundOnRef = useRef(true)
   const volumeRef = useRef<StaffVolume>('boost')
   const armedOnceRef = useRef(false)
+  const wakeOnRef = useRef(false)
 
   useEffect(() => {
     // deferred so the hydration render stays deterministic (no setState-in-effect)
@@ -4360,6 +4378,10 @@ export default function AdminPage() {
         const on = localStorage.getItem(LS_ADMIN_SOUND) !== 'off'
         soundOnRef.current = on
         setSoundOn(on)
+        const wake = localStorage.getItem(LS_ADMIN_WAKE) === 'on'
+        wakeOnRef.current = wake
+        setWakeOn(wake)
+        if (wake) void requestWakeLock() // no gesture yet — may fail, retried later
       } catch {
         /* private mode — defaults are fine */
       }
@@ -4367,17 +4389,54 @@ export default function AdminPage() {
     return () => clearTimeout(t)
   }, [])
 
-  // arm the audio engine on FIRST user gesture anywhere in the panel
+  // arm the audio engine on EVERY user gesture — cheap + idempotent, and
+  // revives the context after mobile interruptions (call, app switch).
+  // Also primes the <audio> WAV fallback for webviews that never unlock WebAudio.
   useEffect(() => {
-    const onFirstPointer = () => {
-      if (armedOnceRef.current) return
-      armedOnceRef.current = true
+    const onPointer = () => {
+      if (wakeOnRef.current) void requestWakeLock()
       if (!soundOnRef.current) return
-      if (armStaffSound(volumeRef.current)) staffConfirmBeep()
+      if (armStaffSound(volumeRef.current)) {
+        unlockStaffAudioFallback()
+        if (!armedOnceRef.current) {
+          armedOnceRef.current = true
+          setAudioArmed(true)
+          staffConfirmBeep()
+        }
+      }
     }
-    window.addEventListener('pointerdown', onFirstPointer)
-    return () => window.removeEventListener('pointerdown', onFirstPointer)
+    window.addEventListener('pointerdown', onPointer, { passive: true })
+    return () => window.removeEventListener('pointerdown', onPointer)
   }, [])
+
+  // tab visible again → revive audio + wake lock + INSTANT catch-up poll
+  // (background tabs throttle timers; missed status changes should chime
+  // right away instead of waiting for the next 5s tick)
+  useEffect(() => {
+    const onVisible = () => {
+      if (document.visibilityState !== 'visible') return
+      if (soundOnRef.current) void armStaffSound(volumeRef.current)
+      if (wakeOnRef.current) void requestWakeLock()
+      window.dispatchEvent(new Event('admin:tables:refresh'))
+    }
+    document.addEventListener('visibilitychange', onVisible)
+    return () => document.removeEventListener('visibilitychange', onVisible)
+  }, [])
+
+  /** Full-volume test chime + fallback unlock (used by banner + toggle). */
+  const enableAudioNow = () => {
+    if (armStaffSound(volumeRef.current)) {
+      armedOnceRef.current = true
+      setAudioArmed(true)
+      unlockStaffAudioFallback()
+      staffChime('order') // loud ding-ding — instant proof that mobile audio works
+      if (/Mobi|Android|iPhone|iPad|iPod/i.test(navigator.userAgent)) {
+        toast.info('টেস্ট সাউন্ড শুনতে পেলেন? না শুনলে ফোনের মিডিয়া ভলিউম বাড়ান; iPhone হলে সাইলেন্ট সুইচ বন্ধ করুন')
+      }
+    } else {
+      toast.error('এই ব্রাউজারে অডিও চালু করা যাচ্ছে না — ভলিউম ও সাইলেন্ট মোড চেক করুন')
+    }
+  }
 
   const toggleSound = () => {
     const next = !soundOnRef.current
@@ -4389,9 +4448,12 @@ export default function AdminPage() {
       /* ignore */
     }
     if (next) {
+      // toggle IS a user gesture → arm + unlock + play the real test chime
       if (armStaffSound(volumeRef.current)) {
         armedOnceRef.current = true
-        staffConfirmBeep()
+        setAudioArmed(true)
+        unlockStaffAudioFallback()
+        staffChime('order')
       }
     } else {
       disarmStaffSound()
@@ -4410,7 +4472,30 @@ export default function AdminPage() {
     }
     if (soundOnRef.current && armStaffSound(next)) {
       armedOnceRef.current = true
+      setAudioArmed(true)
+      unlockStaffAudioFallback()
       staffConfirmBeep()
+    }
+  }
+
+  /** Keep the screen awake so background throttling never kills the chimes. */
+  const toggleWake = () => {
+    const next = !wakeOnRef.current
+    wakeOnRef.current = next
+    setWakeOn(next)
+    try {
+      localStorage.setItem(LS_ADMIN_WAKE, next ? 'on' : 'off')
+    } catch {
+      /* ignore */
+    }
+    if (next) {
+      void requestWakeLock().then((ok) => {
+        if (ok) toast.success('স্ক্রিন জাগিয়ে রাখা চালু — মোবাইলেও সাউন্ড নিশ্চিত (চার্জারে রাখুন)')
+        else toast.error('এই ব্রাউজারে স্ক্রিন লক সাপোর্ট নেই')
+      })
+    } else {
+      void releaseWakeLock()
+      toast.info('স্ক্রিন জাগিয়ে রাখা বন্ধ করা হলো')
     }
   }
 
@@ -4566,6 +4651,21 @@ export default function AdminPage() {
           >
             {soundOn ? <Bell className="h-4 w-4 text-amber-500" /> : <BellOff className="h-4 w-4 text-stone-400" />}
           </Button>
+          {wakeLockSupported() && (
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={toggleWake}
+              className="border-stone-300 font-bold"
+              title={
+                wakeOn
+                  ? 'স্ক্রিন জাগিয়ে রাখা চালু — বন্ধ করতে ট্যাপ করুন'
+                  : 'স্ক্রিন জাগিয়ে রাখুন — স্ক্রিন বন্ধ থাকলে মোবাইলে সাউন্ড/আপডেট আসে না'
+              }
+            >
+              {wakeOn ? <Lightbulb className="h-4 w-4 text-amber-500" /> : <LightbulbOff className="h-4 w-4 text-stone-400" />}
+            </Button>
+          )}
           <Button
             size="sm"
             variant="outline"
@@ -4576,6 +4676,18 @@ export default function AdminPage() {
           </Button>
         </div>
       </header>
+
+      {/* mobile audio needs ONE real tap to unlock — scroll-only usage never
+          taps, so this banner forces it; tap plays a loud test chime */}
+      {soundOn && !audioArmed && (
+        <button
+          onClick={enableAudioNow}
+          className="flex w-full items-center justify-center gap-2 border-b border-amber-200 bg-amber-50 px-4 py-2.5 text-sm font-bold text-amber-900 transition-colors hover:bg-amber-100"
+        >
+          <Bell className="h-4 w-4 shrink-0 text-amber-600" />
+          নতুন অর্ডার / স্ট্যাটাসের 🔊 সাউন্ড চালু করতে এখানে ট্যাপ করুন
+        </button>
+      )}
 
       <main className="mx-auto max-w-7xl px-4 pb-16 pt-4">
         {firstAllowed === 'none' ? (

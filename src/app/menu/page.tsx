@@ -1349,7 +1349,7 @@ export default function MenuPage() {
                 onClick={() => setUpsellSource(null)}
                 className="w-full border-stone-200 text-stone-500 hover:text-stone-700"
               >
-                না, থাক
+                {Object.values(addedUpsell).some((n) => n > 0) ? 'আর নয়' : 'না, থাক'}
               </Button>
             </div>
           </div>
