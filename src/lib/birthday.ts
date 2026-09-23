@@ -13,8 +13,9 @@ export interface AntiFraudResult {
 }
 
 /** 7-layer anti-fraud check (device + fingerprint + psid + phone + session + bill).
- *  Per-offer lock: when an occasionId is given, the lock applies to THAT offer
- *  only — different occasion offers stay claimable independently. */
+ *  ONE offer per bill: any occasion offer used in this session blocks the others.
+ *  Per-offer lifetime lock: the SAME offer can be claimed once per customer/device
+ *  — different offers stay claimable on later visits. */
 export async function antiFraudCheck(p: {
   psid: string
   phone: string
@@ -26,15 +27,26 @@ export async function antiFraudCheck(p: {
   const deviceOr = deviceMatch({ id: p.deviceId, fp: p.deviceFp || null })
 
   if (p.occasionId) {
-    // ── per-offer lock: THIS occasion offer already claimed by the same
-    //    customer / phone / session / device? (other offers stay claimable)
+    // ── 1. one offer per bill: this session already used ANY occasion offer? ──
+    const sessionOffer = await db.birthdayClaim.findFirst({
+      where: { sessionId: p.sessionId, occasionId: { not: null } },
+    })
+    if (sessionOffer) {
+      return { ok: false, reason: 'এই বিলে ইতোমধ্যে একটি অফার ব্যবহার করা হয়েছে — প্রতি বিলে একটি অফারই প্রযোজ্য।' }
+    }
+    const sessionRow = await db.tableSession.findUnique({ where: { id: p.sessionId } })
+    if (sessionRow?.birthdayGranted) {
+      return { ok: false, reason: 'এই বিলে ইতোমধ্যে একটি অফার ব্যবহার করা হয়েছে — প্রতি বিলে একটি অফারই প্রযোজ্য।' }
+    }
+
+    // ── 2. THIS offer already claimed earlier by the same customer / phone / device?
+    //    (other offers remain claimable on other bills)
     const prior = await db.birthdayClaim.findFirst({
       where: {
         occasionId: p.occasionId,
         OR: [
           { psid: p.psid },
-          { phone: p.phone },
-          { sessionId: p.sessionId },
+          ...(p.phone ? [{ phone: p.phone }] : []),
           ...(deviceOr.length > 0 ? [{ OR: deviceOr }] : []),
         ],
       },
@@ -90,6 +102,7 @@ export async function applyBirthdayDiscount(p: {
   tableNumber: number
   occasionId?: string | null
   occasionName?: string | null
+  dataText?: string | null // verification data the customer provided (messenger flow)
 }): Promise<{ ok: boolean; message: string }> {
   // occasion override (anniversary, wedding, custom occasion from admin panel)
   let amount = await getSettingNumber(SETTING_KEYS.BIRTHDAY_DISCOUNT_AMOUNT, 50)
@@ -137,8 +150,8 @@ export async function applyBirthdayDiscount(p: {
   await db.$transaction([
     db.order.update({
       where: { id: targetOrder.id },
-      // increment: several occasion offers may stack on the same bill
-      data: { birthdayDiscount: { increment: discount }, total: { decrement: discount } },
+      // one occasion offer per bill — discount replaces (never stacks)
+      data: { birthdayDiscount: discount, total: { decrement: discount - prevDiscount } },
     }),
     db.tableSession.update({
       where: { id: p.sessionId },
@@ -146,27 +159,29 @@ export async function applyBirthdayDiscount(p: {
     }),
     db.customer.upsert({
       where: { psid: p.psid },
-      update: { phone: p.phone, discountClaimed: true, claimedAt: new Date(), birthday: p.birthday || undefined },
+      update: { phone: p.phone || undefined, discountClaimed: true, claimedAt: new Date(), birthday: p.birthday || undefined, dataText: p.dataText || undefined },
       create: {
         psid: p.psid,
         firstName: p.firstName,
         lastName: p.lastName || '',
-        phone: p.phone,
+        phone: p.phone || null,
         birthday: p.birthday || null,
         discountClaimed: true,
         claimedAt: new Date(),
+        dataText: p.dataText || null,
       },
     }),
     db.birthdayClaim.create({
       data: {
         psid: p.psid,
-        phone: p.phone,
+        phone: p.phone || '',
         deviceId: p.deviceId,
         deviceFp: p.deviceFp || null,
         tableNumber: p.tableNumber,
         sessionId: p.sessionId,
         occasionId: p.occasionId || null,
         amount: discount,
+        dataText: p.dataText || null,
       },
     }),
   ])
@@ -188,7 +203,7 @@ export async function applyBirthdayDiscount(p: {
   emitEvent('order:status', {
     id: targetOrder.id,
     status: targetOrder.status,
-    birthdayDiscount: prevDiscount + discount,
+    birthdayDiscount: discount,
   })
   return { ok: true, message: `৳${discount} ছাড় প্রয়োগ হয়েছে!` }
 }

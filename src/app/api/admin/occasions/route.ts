@@ -25,13 +25,15 @@ export async function POST(req: NextRequest) {
   const minBill = parseFloat(body.minBill)
   const active = body.active !== false
   const sortOrder = parseInt(body.sortOrder, 10) || 0
+  const askText = (body.askText || '').toString().trim().slice(0, 500) || null
+  const fieldType = ['DATE', 'PHONE', 'TEXT'].includes(body.fieldType) ? body.fieldType : 'DATE'
 
   if (!name) return fail('অকেশনের নাম লিখুন', 400)
   if (isNaN(discount) || discount <= 0) return fail('ছাড়ের পরিমাণ (৳) দিন', 400)
   if (isNaN(minBill) || minBill < 0) return fail('ন্যূনতম বিল (৳) দিন', 400)
 
   const occasion = await db.occasionOffer.create({
-    data: { name, emoji, dateLabel, description, discount, minBill, active, sortOrder },
+    data: { name, emoji, dateLabel, description, discount, minBill, active, sortOrder, askText, fieldType },
   })
   return ok({ occasion })
 }

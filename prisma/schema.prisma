@@ -259,11 +259,14 @@ model WaiterCall {
 // ---------------- CRM: Customers (Messenger) ----------------
 model Customer {
   id              String         @id @default(cuid())
-  psid            String         @unique // Facebook Page-Scoped ID
+  psid            String         @unique // Facebook Page-Scoped ID ("direct:<deviceId>" for bill-page claims)
   firstName       String
   lastName        String?
-  phone           String         @unique
-  birthday        DateTime?
+  phone           String?        @unique // nullable — messenger customers may not share a phone
+  birthday        DateTime?      // event date (birthday / anniversary — labelled by eventLabel)
+  eventLabel      String?        // "জন্মদিন" | "বিয়ের বার্ষিকী" | custom — what birthday column means
+  dataText        String?        @db.Text // last verification data the customer sent in messenger
+  lastSeenAt      DateTime?
   discountClaimed Boolean        @default(false) // lifetime lock after birthday discount
   claimedAt       DateTime?
   createdAt       DateTime       @default(now())
@@ -284,6 +287,7 @@ model BirthdayClaim {
   sessionId  String
   occasionId String? // which occasion offer was claimed (null = legacy birthday discount)
   amount     Float
+  dataText   String?   @db.Text // verification data the customer provided (messenger flow)
   createdAt  DateTime  @default(now())
 
   @@index([psid])
@@ -305,6 +309,8 @@ model ReferralToken {
   deviceId   String
   deviceFp   String?
   status     String    @default("PENDING") // PENDING | CLAIMED | EXPIRED
+  dataText   String?   @db.Text // verification data collected in the messenger chat
+  askedText  String?   @db.Text // what the bot asked the customer to send
   createdAt  DateTime  @default(now())
   // legacy occasion columns (kept to preserve existing data)
   occasionId   String?
@@ -347,6 +353,11 @@ model OccasionOffer {
   description String?
   discount    Float
   minBill     Float
+  // Messenger verification: what data the bot asks for before auto-applying
+  // the offer. fieldType decides how the customer's reply is validated —
+  // DATE must parse as a date, PHONE as a phone number, TEXT is free form.
+  askText     String? @db.Text // e.g. "জন্মদিনের তারিখ লিখুন"
+  fieldType   String  @default("DATE") // DATE | PHONE | TEXT
   active      Boolean @default(true)
   sortOrder   Int     @default(0)
   createdAt   DateTime @default(now())

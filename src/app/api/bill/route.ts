@@ -32,8 +32,9 @@ export async function GET(req: NextRequest) {
   const sessionRow = await db.tableSession.findUnique({ where: { id: session.sessionId } })
   const alreadyClaimed = Boolean(sessionRow?.birthdayGranted)
 
-  // ── per-offer claim state: each occasion offer can be used once per session /
-  //    device (id or fingerprint) — but DIFFERENT offers stay claimable.
+  // ── claim state: ONE offer per bill — once ANY occasion offer is used in
+  //    this session the others close; the SAME offer stays locked per device
+  //    (id or fingerprint) even on later visits.
   const device = deviceIdentity(req)
   const dm = deviceMatch(device)
   const priorClaims = await db.birthdayClaim.findMany({
@@ -42,9 +43,15 @@ export async function GET(req: NextRequest) {
     },
     select: { occasionId: true },
   })
-  const claimedOcc = new Set(priorClaims.map((c) => c.occasionId))
+  // an offer was already used in THIS bill? (any occasion offer or legacy grant)
+  const sessionHasOffer = priorClaims.some((c) => c.occasionId !== null) || alreadyClaimed
+  // which offers THIS device consumed on earlier bills
+  const deviceClaimedOcc = new Set(
+    priorClaims.filter((c) => c.occasionId !== null).map((c) => c.occasionId as string)
+  )
   // legacy (no-occasion) birthday offer — already used by this device/session?
-  const deviceAlreadyClaimed = claimedOcc.has(null)
+  const deviceAlreadyClaimed =
+    sessionHasOffer || priorClaims.some((c) => c.occasionId === null)
 
   // ── payment state (admin marked the bill paid)
   const paidOrders = orders.filter((o) => o.billPaid)
@@ -116,8 +123,10 @@ export async function GET(req: NextRequest) {
       description: o.description,
       discount: o.discount,
       minBill: o.minBill,
-      eligible: subtotal >= o.minBill && !claimedOcc.has(o.id),
-      alreadyClaimed: claimedOcc.has(o.id),
+      // one offer per bill: closed once THIS bill used any offer, or the same
+      // offer was consumed by this device on an earlier bill
+      eligible: subtotal >= o.minBill && !sessionHasOffer && !deviceClaimedOcc.has(o.id),
+      alreadyClaimed: sessionHasOffer || deviceClaimedOcc.has(o.id),
     })),
   })
 }

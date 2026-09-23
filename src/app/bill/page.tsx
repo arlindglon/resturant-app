@@ -25,7 +25,6 @@ import { cn } from '@/lib/utils'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
-import { Input } from '@/components/ui/input'
 import { Separator } from '@/components/ui/separator'
 import { SessionExpiredScreen } from '@/components/customer/session-expired'
 import { LegalLinks } from '@/components/customer/legal-links'
@@ -124,9 +123,7 @@ export default function BillPage() {
   // occasion offer selection (default: first eligible occasion)
   const [selectedOccasionId, setSelectedOccasionId] = useState('')
 
-  // birthday form
-  const [name, setName] = useState('')
-  const [birthday, setBirthday] = useState('')
+  // claiming state (no name/date form — the bot collects verification data in Messenger)
   const [claiming, setClaiming] = useState(false)
   const [referralLink, setReferralLink] = useState<string | null>(null)
   const [referralOccasionId, setReferralOccasionId] = useState<string | null>(null)
@@ -227,22 +224,12 @@ export default function BillPage() {
   }
 
   async function claimOffer() {
-    if (!name.trim()) {
-      toast.error('আপনার নাম লিখুন')
-      return
-    }
-    if (!/^\d{4}-\d{2}-\d{2}$/.test(birthday)) {
-      toast.error('জন্মদিন সিলেক্ট করুন')
-      return
-    }
     if (!canClaim) {
       toast.error('প্রযোজ্য অফার নেই — ন্যূনতম বিল পূরণ হলে আনলক হবে')
       return
     }
 
     const payload = {
-      name: name.trim(),
-      birthday,
       ...(selectedOccasionId ? { occasionId: selectedOccasionId } : {}),
       deviceId: getDeviceId(),
       deviceFp: getDeviceFp(),
@@ -536,8 +523,8 @@ export default function BillPage() {
           </Button>
         )}
 
-        {/* ── occasion / birthday CRM offer — every offer can be used once,
-            using one does NOT block the others ── */}
+        {/* ── occasion / birthday CRM offer — ONE offer per bill; the same offer
+            stays locked per customer/device on later bills ── */}
         {offer.alreadyClaimed && (
           <div className="flex items-center gap-2 rounded-xl border border-green-200 bg-green-50 p-3.5">
             <BadgeCheck className="size-5 shrink-0 text-green-600" />
@@ -558,7 +545,7 @@ export default function BillPage() {
                   <>
                     <h2 className="text-lg font-extrabold text-white">🎉 আপনার জন্য বিশেষ অফার!</h2>
                     <p className="mt-1 text-sm leading-relaxed text-amber-50">
-                      নিচ থেকে অফার বেছে নিয়ে নাম ও তারিখ দিন —{' '}
+                      নিচ থেকে অফার বেছে নিন —{' '}
                       <span className="font-extrabold text-white">ছাড় এই বিলে যোগ হবে!</span>
                     </p>
                   </>
@@ -582,7 +569,7 @@ export default function BillPage() {
               <div className="mt-4 space-y-2">
                 <p className="flex items-center gap-1.5 text-sm font-extrabold text-white">
                   <PartyPopper className="size-4" />
-                  অনুষ্ঠান বেছে নিন — প্রতিটি অফার একবার করে নেওয়া যাবে
+                  অনুষ্ঠান বেছে নিন — এক বিলে একটি অফারই প্রযোজ্য
                 </p>
                 <div className="space-y-2">
                   {occasions.map((o) => {
@@ -662,20 +649,6 @@ export default function BillPage() {
 
             {!activeReferralLink ? (
               <div className="mt-4 space-y-2.5 rounded-xl bg-white/95 p-3.5 shadow-inner">
-                <Input
-                  value={name}
-                  onChange={(e) => setName(e.target.value)}
-                  placeholder="আপনার নাম"
-                  maxLength={60}
-                  className="h-10 border-stone-200 focus-visible:ring-amber-200"
-                />
-                <input
-                  type="date"
-                  value={birthday}
-                  max={new Date().toISOString().slice(0, 10)}
-                  onChange={(e) => setBirthday(e.target.value)}
-                  className="flex h-10 w-full rounded-md border border-stone-200 bg-white px-3 py-2 text-sm text-stone-700 shadow-sm outline-none transition focus:border-amber-400 focus:ring-2 focus:ring-amber-200"
-                />
                 <Button
                   onClick={claimOffer}
                   disabled={claiming || !canClaim}
@@ -693,7 +666,9 @@ export default function BillPage() {
                   occasions.length > 0 && (
                     <p className="text-center text-[11px] font-medium text-stone-500">
                       {selectedOccasion?.alreadyClaimed
-                        ? 'এই অফারটি আগেই নেওয়া হয়েছে — চাইলে অন্য অফার বেছে নিন।'
+                        ? (occasions.some((o) => !o.alreadyClaimed)
+                            ? 'এই অফারটি আর নেওয়া যাবে না — চাইলে অন্য অফার বেছে নিন।'
+                            : 'এই বিলে ইতোমধ্যে একটি অফার ব্যবহার করা হয়েছে — পরের ভিজিটে আবার অফার নিতে পারবেন।')
                         : 'উপরে থেকে প্রযোজ্য অফার বেছে নিলে বাটন চালু হবে'}
                     </p>
                   )
@@ -704,7 +679,7 @@ export default function BillPage() {
                 <div className="flex items-start gap-2.5">
                   <MessageCircle className="mt-0.5 size-5 shrink-0 text-amber-600" />
                   <p className="text-sm font-medium leading-relaxed text-stone-700">
-                    নিচের বাটনে চাপ দিয়ে মেসেঞ্জার খুলুন — চ্যাটে <span className="font-bold">ফোন নম্বর পাঠালেই</span> ছাড় সাথে সাথে বিলে যোগ হবে!
+                    মেসেঞ্জারে বট অফারের প্রয়োজনীয় তথ্য চাইবে — <span className="font-bold">সঠিক তথ্য পাঠালেই যাচাই হয়ে ছাড়</span> সাথে সাথে এই বিলে যোগ হবে!
                   </p>
                 </div>
                 <a

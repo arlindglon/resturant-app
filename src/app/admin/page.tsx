@@ -3,7 +3,7 @@
 // ============================================================
 // ADMIN PANEL — single page, tabs:
 // ওভারভিউ | টেবিল ও QR | রসিদ হিস্ট্রি | মেনু | হ্যাপি আওয়ার | ভাউচার |
-// অকেশন অফার | সিকিউরিটি লেজার | ImgBB কি | সেটিংস | অ্যাক্সেস কী
+// অকেশন অফার | কাস্টমার | সিকিউরিটি লেজার | ImgBB কি | সেটিংস | অ্যাক্সেস কী
 // Passcode auth via /api/admin/login (cookie admin_token).
 // ============================================================
 
@@ -76,6 +76,7 @@ import {
   QrCode,
   Receipt,
   RefreshCw,
+  Send,
   ShieldCheck,
   ShoppingBag,
   Sparkles,
@@ -2578,9 +2579,17 @@ interface OccasionRow {
   description: string | null
   discount: number
   minBill: number
+  askText: string | null
+  fieldType: string // DATE | PHONE | TEXT
   active: boolean
   sortOrder: number
   createdAt: string
+}
+
+const FIELD_TYPE_BN: Record<string, string> = {
+  DATE: 'তারিখ',
+  PHONE: 'ফোন নম্বর',
+  TEXT: 'সাধারণ তথ্য',
 }
 
 function OccasionDialog({
@@ -2602,6 +2611,8 @@ function OccasionDialog({
   const [description, setDescription] = useState(editing?.description ?? '')
   const [discount, setDiscount] = useState(editing ? String(editing.discount) : '')
   const [minBill, setMinBill] = useState(editing ? String(editing.minBill) : '')
+  const [askText, setAskText] = useState(editing?.askText ?? '')
+  const [fieldType, setFieldType] = useState(editing?.fieldType ?? 'DATE')
   const [active, setActive] = useState(editing?.active ?? true)
   const [saving, setSaving] = useState(false)
 
@@ -2620,6 +2631,8 @@ function OccasionDialog({
       description: description.trim() || null,
       discount: d,
       minBill: mb,
+      askText: askText.trim() || null,
+      fieldType,
       active,
       sortOrder: editing?.sortOrder ?? nextSort,
     }
@@ -2639,7 +2652,7 @@ function OccasionDialog({
         <DialogHeader>
           <DialogTitle>{editing ? 'অকেশন এডিট করুন' : 'নতুন অকেশন অফার'}</DialogTitle>
           <DialogDescription>
-            জন্মদিন, বিয়ের বার্ষিকী বা যেকোনো বিশেষ দিনের জন্য নির্দিষ্ট টাকার ছাড়।
+            যেকোনো বিষয়ের অফার বানান — জন্মদিন, বিয়ের বার্ষিকী বা যা খুশি। যত খুশি অফার যোগ/ডিলিট করতে পারবেন।
           </DialogDescription>
         </DialogHeader>
         <div className="space-y-4">
@@ -2669,6 +2682,42 @@ function OccasionDialog({
             <div className="space-y-1">
               <FieldLabel>ন্যূনতম বিল (৳) *</FieldLabel>
               <Input inputMode="decimal" value={minBill} onChange={(e) => setMinBill(e.target.value)} placeholder="500" />
+            </div>
+          </div>
+
+          {/* messenger verification */}
+          <div className="space-y-3 rounded-lg border border-amber-200 bg-amber-50/60 p-3">
+            <div>
+              <FieldLabel>মেসেঞ্জারে কী তথ্য চাইবেন?</FieldLabel>
+              <p className="mb-2 text-[11px] leading-snug text-stone-500">
+                কাস্টমার "Claim on Messenger" চাপলে বট এই তথ্যটি চাইবে — সঠিক তথ্য পাঠালেই ছাড় বিলে যোগ হবে (অটো-যাচাই)। ভুল/মিথ্যা তথ্য দিলে ছাড় পাবে না।
+              </p>
+              <Textarea
+                rows={2}
+                value={askText}
+                onChange={(e) => setAskText(e.target.value)}
+                placeholder={
+                  fieldType === 'DATE'
+                    ? 'যেমন: জন্মদিনের তারিখ লিখুন'
+                    : fieldType === 'PHONE'
+                      ? 'যেমন: আপনার ফোন নম্বর পাঠান'
+                      : 'যেমন: আপনার নাম ও ঠিকানা লিখুন'
+                }
+              />
+              <p className="mt-1 text-[10px] text-stone-400">ফাঁকা রাখলে টাইপ অনুযায়ী ডিফল্ট প্রশ্ন যাবে।</p>
+            </div>
+            <div className="space-y-1">
+              <FieldLabel>তথ্যের ধরন</FieldLabel>
+              <Select value={fieldType} onValueChange={setFieldType}>
+                <SelectTrigger className="bg-white">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="DATE">📅 তারিখ — সঠিক তারিখ না দিলে ছাড় হবে না</SelectItem>
+                  <SelectItem value="PHONE">📱 ফোন নম্বর — নম্বর না দিলে ছাড় হবে না</SelectItem>
+                  <SelectItem value="TEXT">📝 সাধারণ তথ্য — যেকোনো লেখা গ্রহণ করা হবে</SelectItem>
+                </SelectContent>
+              </Select>
             </div>
           </div>
           <div className="flex items-center justify-between rounded-lg border border-stone-200 p-3">
@@ -2739,7 +2788,7 @@ function OccasionsTab({ onAuthRequired }: TabProps) {
       <div className="flex items-start gap-2 rounded-xl border border-amber-300 bg-amber-50 p-3 text-sm text-amber-900">
         <Info className="mt-0.5 h-4 w-4 shrink-0 text-amber-600" />
         <p className="font-bold">
-          এই অকেশনগুলো সক্রিয় করলেই বিল পেজে কাস্টমার দেখতে পাবে। “মেসেঞ্জার অফার” চালু থাকলে কাস্টমার m.me চ্যাট করে ছাড় পাবে; বন্ধ থাকলে বিল পেজেই নাম-তারিখ দিয়ে সরাসরি ছাড় দাবি করতে পারবে।
+          যত খুশি অফার যোগ/ডিলিট করুন — যেকোনো বিষয়ের অফার দেওয়া যায়। সক্রিয় অফারগুলো বিল পেজে দেখা যাবে। “মেসেঞ্জার অফার” চালু থাকলে বট প্রতিটি অফারের নির্ধারিত তথ্য মেসেঞ্জারে চেয়ে যাচাই করবে; বন্ধ থাকলে বিল পেজেই সরাসরি ছাড় যোগ হবে। এক বিলে একটি অফারই ব্যবহার করা যায়।
         </p>
       </div>
 
@@ -2773,6 +2822,12 @@ function OccasionsTab({ onAuthRequired }: TabProps) {
                   </p>
                   {o.dateLabel && <p className="mt-0.5 text-xs font-bold text-stone-500">📅 {o.dateLabel}</p>}
                   {o.description && <p className="mt-1 line-clamp-2 text-xs text-stone-500">{o.description}</p>}
+                  <p className="mt-1.5 flex flex-wrap items-center gap-1.5 text-[10px] text-stone-500">
+                    <Badge variant="outline" className="border-amber-200 bg-amber-50 text-[10px] text-amber-700">
+                      🤖 যাচাই: {FIELD_TYPE_BN[o.fieldType] || o.fieldType}
+                    </Badge>
+                    {o.askText && <span className="line-clamp-1 max-w-[220px] text-stone-400">“{o.askText}”</span>}
+                  </p>
                 </div>
                 <div className="shrink-0 text-right">
                   <Badge className="bg-pink-600 hover:bg-pink-600">ছাড় {bnTaka(o.discount)}</Badge>
@@ -2823,6 +2878,319 @@ function OccasionsTab({ onAuthRequired }: TabProps) {
         onSaved={load}
       />
     </div>
+  )
+}
+
+// ============================================================
+// TAB: 👥 কাস্টমার (CRM — messenger customers, collected data,
+// upcoming events + send offers via Messenger)
+// perm: 'tables' (same as receipts)
+// ============================================================
+interface CustomerRow {
+  id: string
+  psid: string
+  messenger: boolean
+  firstName: string
+  lastName: string | null
+  phone: string | null
+  birthday: string | null
+  eventLabel: string | null
+  dataText: string | null
+  discountClaimed: boolean
+  claims: number
+  lastClaimAt: string | null
+  lastSeenAt: string | null
+  createdAt: string
+  daysUntilEvent: number | null
+}
+
+function CustomersTab({ onAuthRequired }: TabProps) {
+  const [data, setData] = useState<{ customers: CustomerRow[]; upcoming: CustomerRow[] } | null>(null)
+  const [err, setErr] = useState('')
+  const [editing, setEditing] = useState<CustomerRow | null>(null)
+  const [msgTarget, setMsgTarget] = useState<CustomerRow | null>(null)
+
+  const load = useCallback(async () => {
+    const res = await api.get<{ customers: CustomerRow[]; upcoming: CustomerRow[] }>('/api/admin/customers')
+    if (isAuthError(res)) return onAuthRequired()
+    if (!res.ok || !res.data) {
+      setErr(res.error || 'কাস্টমার আনা যায়নি')
+      return
+    }
+    setErr('')
+    setData(res.data)
+  }, [onAuthRequired])
+
+  useEffect(() => {
+    const t = setTimeout(load, 0)
+    return () => clearTimeout(t)
+  }, [load])
+
+  if (err) return <LoadError msg={err} onRetry={load} />
+  if (!data) return <Loading />
+
+  const customers = data.customers
+
+  return (
+    <div className="space-y-4">
+      {/* info banner */}
+      <div className="flex items-start gap-2 rounded-xl border border-amber-300 bg-amber-50 p-3 text-sm text-amber-900">
+        <Info className="mt-0.5 h-4 w-4 shrink-0 text-amber-600" />
+        <p className="font-bold">
+          মেসেঞ্জারে অফার দাবি করা প্রতিটি কাস্টমারের নাম (Facebook থেকে), ফোন, ইভেন্টের তারিখ ও যাচাইয়ের তথ্য এখানে জমা থাকে। আসন্ন ইভেন্ট থেকে সরাসরি মেসেঞ্জারে অফার পাঠাতে পারবেন।
+        </p>
+      </div>
+
+      {/* upcoming events */}
+      <Card className="border-pink-200">
+        <CardHeader className="pb-2">
+          <CardTitle className="flex items-center gap-2 text-base">
+            <Cake className="h-5 w-5 text-pink-600" /> আসন্ন ইভেন্ট (আগামী {toBn('30')} দিন)
+          </CardTitle>
+        </CardHeader>
+        <CardContent>
+          {data.upcoming.length === 0 ? (
+            <p className="py-4 text-center text-sm text-stone-400">
+              আসন্ন কোনো ইভেন্ট নেই — কাস্টমারের ইভেন্টের তারিখ দিলে এখানে দেখা যাবে
+            </p>
+          ) : (
+            <div className="thin-scroll max-h-72 space-y-2 overflow-y-auto pr-1">
+              {data.upcoming.map((c) => (
+                <div key={c.id} className="flex items-center gap-3 rounded-lg border border-stone-200 bg-white p-3">
+                  <span className="flex size-10 shrink-0 items-center justify-center rounded-full bg-pink-100 text-lg">
+                    {c.daysUntilEvent === 0 ? '🎂' : '🎉'}
+                  </span>
+                  <div className="min-w-0 flex-1">
+                    <p className="truncate text-sm font-black text-stone-900">
+                      {c.firstName} {c.lastName || ''}
+                    </p>
+                    <p className="truncate text-[11px] font-semibold text-stone-500">
+                      {c.eventLabel || 'জন্মদিন'} • {bnDateOnly(c.birthday)}
+                      {c.phone ? ` • 📱 ${c.phone}` : ''}
+                    </p>
+                  </div>
+                  <Badge
+                    className={
+                      c.daysUntilEvent === 0
+                        ? 'bg-pink-600 hover:bg-pink-600'
+                        : 'border-pink-200 bg-pink-50 text-pink-700 hover:bg-pink-50'
+                    }
+                  >
+                    {c.daysUntilEvent === 0 ? 'আজ!' : `${toBn(String(c.daysUntilEvent))} দিন বাকি`}
+                  </Badge>
+                  {c.messenger && (
+                    <Button
+                      size="sm"
+                      onClick={() => setMsgTarget(c)}
+                      className="bg-amber-500 font-black text-white hover:bg-amber-600"
+                    >
+                      📩 অফার পাঠান
+                    </Button>
+                  )}
+                </div>
+              ))}
+            </div>
+          )}
+        </CardContent>
+      </Card>
+
+      {/* all customers */}
+      <div className="flex items-center justify-between">
+        <h3 className="text-sm font-black uppercase tracking-wide text-stone-500">
+          সব কাস্টমার ({toBn(String(customers.length))})
+        </h3>
+        <Button size="sm" variant="outline" onClick={load} className="border-stone-300 font-bold">
+          <RefreshCw className="h-4 w-4" /> রিফ্রেশ
+        </Button>
+      </div>
+
+      {customers.length === 0 ? (
+        <p className="py-10 text-center text-sm text-stone-400">
+          এখনো কোনো কাস্টমার নেই — কেউ অফার দাবি করলে বা মেসেঞ্জারে চ্যাট করলে এখানে তালিকা ভরবে
+        </p>
+      ) : (
+        <div className="thin-scroll max-h-[60vh] space-y-2 overflow-y-auto rounded-xl border border-stone-200 bg-white p-3">
+          {customers.map((c) => (
+            <div key={c.id} className="rounded-lg border border-stone-100 bg-stone-50/60 p-3">
+              <div className="flex flex-wrap items-center gap-2">
+                <span className="flex size-9 shrink-0 items-center justify-center rounded-full bg-amber-100 font-black text-amber-700">
+                  {(c.firstName || '?').slice(0, 1).toUpperCase()}
+                </span>
+                <div className="min-w-0 flex-1">
+                  <p className="truncate text-sm font-black text-stone-900">
+                    {c.firstName} {c.lastName || ''}
+                  </p>
+                  <p className="truncate text-[11px] text-stone-500">
+                    {c.eventLabel ? `${c.eventLabel}: ${bnDateOnly(c.birthday)}` : bnDateOnly(c.birthday)}
+                    {c.phone ? ` • 📱 ${c.phone}` : ''}
+                    {` • 🎁 ${toBn(String(c.claims))}টি ছাড়`}
+                  </p>
+                </div>
+                <Badge
+                  variant="outline"
+                  className={
+                    c.messenger
+                      ? 'border-emerald-200 bg-emerald-50 text-[10px] text-emerald-700'
+                      : 'border-stone-200 bg-stone-100 text-[10px] text-stone-500'
+                  }
+                >
+                  {c.messenger ? '💬 মেসেঞ্জার' : 'বিল পেজ'}
+                </Badge>
+                {c.messenger && (
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    className="text-amber-600 hover:bg-amber-50"
+                    onClick={() => setMsgTarget(c)}
+                    title="মেসেজ পাঠান"
+                  >
+                    📩
+                  </Button>
+                )}
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  className="text-stone-500 hover:text-amber-600"
+                  onClick={() => setEditing(c)}
+                  title="তথ্য এডিট"
+                >
+                  <Pencil className="h-4 w-4" />
+                </Button>
+              </div>
+              {c.dataText && (
+                <p className="mt-2 truncate rounded bg-white px-2 py-1.5 text-[11px] text-stone-600">
+                  📝 যাচাইয়ের তথ্য: <span className="font-semibold">{c.dataText}</span>
+                </p>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* edit dialog — key remounts it so the fields fill from the edited row */}
+      <EditCustomerDialog key={editing?.id || 'none'} customer={editing} onOpenChange={() => setEditing(null)} onSaved={load} />
+
+      {/* send message dialog */}
+      <SendMessageDialog key={msgTarget?.id || 'none'} customer={msgTarget} onOpenChange={() => setMsgTarget(null)} />
+    </div>
+  )
+}
+
+/** edit event label / phone / event date of a CRM customer */
+function EditCustomerDialog({
+  customer,
+  onOpenChange,
+  onSaved,
+}: {
+  customer: CustomerRow | null
+  onOpenChange: () => void
+  onSaved: () => void
+}) {
+  const [eventLabel, setEventLabel] = useState(customer?.eventLabel ?? '')
+  const [phone, setPhone] = useState(customer?.phone ?? '')
+  const [birthday, setBirthday] = useState(customer?.birthday ? customer.birthday.slice(0, 10) : '')
+  const [saving, setSaving] = useState(false)
+
+  const save = async () => {
+    if (!customer) return
+    setSaving(true)
+    const res = await api.patch(`/api/admin/customers/${customer.id}`, {
+      eventLabel,
+      phone,
+      birthday: birthday || null,
+    })
+    setSaving(false)
+    if (isAuthError(res)) return onOpenChange()
+    if (!res.ok) return toast.error(res.error || 'সেভ ব্যর্থ')
+    toast.success('কাস্টমারের তথ্য আপডেট হয়েছে')
+    onOpenChange()
+    onSaved()
+  }
+
+  return (
+    <Dialog open={!!customer} onOpenChange={(v) => !v && onOpenChange()}>
+      <DialogContent className="sm:max-w-sm">
+        <DialogHeader>
+          <DialogTitle>কাস্টমারের তথ্য এডিট</DialogTitle>
+          <DialogDescription>
+            {customer ? `${customer.firstName} ${customer.lastName || ''}` : ''}
+          </DialogDescription>
+        </DialogHeader>
+        <div className="space-y-3">
+          <div className="space-y-1">
+            <FieldLabel>ইভেন্টের নাম</FieldLabel>
+            <Input value={eventLabel} onChange={(e) => setEventLabel(e.target.value)} placeholder="জন্মদিন / বিয়ের বার্ষিকী / অন্য কিছু" />
+          </div>
+          <div className="space-y-1">
+            <FieldLabel>ইভেন্টের তারিখ</FieldLabel>
+            <Input type="date" value={birthday} onChange={(e) => setBirthday(e.target.value)} />
+            <p className="text-[10px] text-stone-400">তারিখ দিলে কাস্টমারটি “আসন্ন ইভেন্ট” তালিকায় দেখা যাবে।</p>
+          </div>
+          <div className="space-y-1">
+            <FieldLabel>ফোন নম্বর</FieldLabel>
+            <Input value={phone} onChange={(e) => setPhone(e.target.value)} placeholder="017…" inputMode="tel" />
+          </div>
+        </div>
+        <DialogFooter>
+          <Button variant="outline" onClick={onOpenChange}>
+            বাতিল
+          </Button>
+          <Button onClick={save} disabled={saving} className="bg-amber-500 font-black text-white hover:bg-amber-600">
+            {saving && <Loader2 className="h-4 w-4 animate-spin" />} সেভ করুন
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  )
+}
+
+/** admin → customer Messenger send box */
+function SendMessageDialog({
+  customer,
+  onOpenChange,
+}: {
+  customer: CustomerRow | null
+  onOpenChange: () => void
+}) {
+  const [text, setText] = useState(
+    customer
+      ? `🎉 শুভেচ্ছা ${customer.firstName}!\n\nআপনার জন্য বিশেষ অফার — আগামী ভিজিটে বিলে বিশেষ ছাড়!\nরেস্তোরাঁয় আসার আগে এই মেসেজটি দেখান বা বিল পেজ থেকে অফারটি দাবি করুন। 🙏`
+      : ''
+  )
+  const [sending, setSending] = useState(false)
+
+  const send = async () => {
+    if (!customer) return
+    if (!text.trim()) return toast.error('মেসেজ লিখুন')
+    setSending(true)
+    const res = await api.post(`/api/admin/customers/${customer.id}/message`, { text })
+    setSending(false)
+    if (isAuthError(res)) return onOpenChange()
+    if (!res.ok) return toast.error(res.error || 'পাঠানো যায়নি')
+    toast.success('✅ মেসেঞ্জারে পাঠানো হয়েছে!')
+    onOpenChange()
+  }
+
+  return (
+    <Dialog open={!!customer} onOpenChange={(v) => !v && onOpenChange()}>
+      <DialogContent className="sm:max-w-md">
+        <DialogHeader>
+          <DialogTitle>📩 মেসেঞ্জারে পাঠান</DialogTitle>
+          <DialogDescription>
+            {customer ? `${customer.firstName} ${customer.lastName || ''} — কাস্টমার এই পেজের মেসেঞ্জারে চ্যাট করেছেন, তাই সরাসরি মেসেজ যাবে।` : ''}
+          </DialogDescription>
+        </DialogHeader>
+        <Textarea rows={6} value={text} onChange={(e) => setText(e.target.value)} placeholder="মেসেজ লিখুন…" />
+        <DialogFooter>
+          <Button variant="outline" onClick={onOpenChange}>
+            বাতিল
+          </Button>
+          <Button onClick={send} disabled={sending} className="bg-amber-500 font-black text-white hover:bg-amber-600">
+            {sending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />} পাঠান
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   )
 }
 
@@ -4003,7 +4371,7 @@ function SettingsTab({ onAuthRequired }: TabProps) {
             <div className="min-w-0 pr-3">
               <p className="text-sm font-black text-stone-800">💌 মেসেঞ্জার অফার</p>
               <p className="text-xs leading-snug text-stone-500">
-                চালু = বিল পেজে m.me চ্যাটে ছাড় দাবি; বন্ধ = বিল পেজেই সরাসরি দাবি (অকেশন অফার দুই অবস্থাতেই দেখাবে)
+                চালু = বট মেসেঞ্জারে অফারের তথ্য চেয়ে যাচাই করে ছাড় দেবে; বন্ধ = বিল পেজেই সরাসরি ছাড় (অকেশন অফার দুই অবস্থাতেই দেখাবে)
               </p>
             </div>
             <Switch
@@ -4277,7 +4645,7 @@ function SettingsTab({ onAuthRequired }: TabProps) {
                 <b>Redeploy:</b> Vercel → Deployments → সর্বশেষ ডিপ্লয়ের ⋯ মেনু → <b>Redeploy</b> (নতুন env ভেরিয়েবল কার্যকর হবে)।
               </li>
               <li>
-                <b>টেস্ট:</b> বিল পেজে গিয়ে “Claim on Messenger” → চ্যাট খুলে কিছু লিখুন/ফোন নম্বর শেয়ার করুন → ১ মিনিটের মধ্যে
+                <b>টেস্ট:</b> বিল পেজে গিয়ে “Claim on Messenger” → বট চ্যাটে অফারের তথ্য চাইবে → সঠিক তথ্য পাঠান → যাচাই হলেই ছাড় বিলে যোগ হবে। ১ মিনিটের মধ্যে
                 এই পেজে এসে “🔍 টোকেন ও সংযোগ টেস্ট করুন” চাপুন — ওয়েবহুক ইভেন্ট সবুজ হলে সব ঠিক!
               </li>
             </ol>
@@ -5097,7 +5465,7 @@ export default function AdminPage() {
   // receipts uses the 'tables' perm; occasions uses the 'settings' perm
   const tabAllowed = (id: string) => {
     if (id === 'keys') return isMain
-    if (id === 'receipts') return canSee('tables')
+    if (id === 'receipts' || id === 'customers') return canSee('tables')
     if (id === 'occasions') return canSee('settings')
     return canSee(id)
   }
@@ -5105,6 +5473,7 @@ export default function AdminPage() {
     ['overview', 'ওভারভিউ'],
     ['tables', 'টেবিল ও QR'],
     ['receipts', '🧾 রসিদ হিস্ট্রি'],
+    ['customers', '👥 কাস্টমার'],
     ['menu', 'মেনু'],
     ['happy', 'হ্যাপি আওয়ার'],
     ['vouchers', 'ভাউচার'],
@@ -5225,6 +5594,9 @@ export default function AdminPage() {
             </TabsContent>
             <TabsContent value="receipts" className="mt-4">
               <ReceiptsTab onAuthRequired={onAuthRequired} />
+            </TabsContent>
+            <TabsContent value="customers" className="mt-4">
+              <CustomersTab onAuthRequired={onAuthRequired} />
             </TabsContent>
             <TabsContent value="menu" className="mt-4">
               <MenuTab onAuthRequired={onAuthRequired} />

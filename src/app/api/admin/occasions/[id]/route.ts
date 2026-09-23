@@ -30,6 +30,10 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
   }
   if (typeof body.active === 'boolean') data.active = body.active
   if (body.sortOrder !== undefined) data.sortOrder = parseInt(body.sortOrder, 10) || 0
+  if (typeof body.askText === 'string') data.askText = body.askText.trim().slice(0, 500) || null
+  if (typeof body.fieldType === 'string' && ['DATE', 'PHONE', 'TEXT'].includes(body.fieldType)) {
+    data.fieldType = body.fieldType
+  }
 
   const occasion = await db.occasionOffer.update({ where: { id }, data })
   return ok({ occasion })
