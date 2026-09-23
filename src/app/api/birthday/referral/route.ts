@@ -118,6 +118,9 @@ export async function POST(req: NextRequest) {
     return fail('মেসেঞ্জার পেজ এখনো কনফিগার করা হয়নি — অনুগ্রহ করে রেস্তোরাঁ ম্যানেজারকে জানান।', 500, 'MESSENGER_NOT_CONFIGURED')
   }
   const link = `https://m.me/${pageUsername}?ref=${token.token}`
+  // desktop browsers: open the chat inside facebook.com (Messenger app not required).
+  // mobile: m.me deep-links straight into the Messenger app.
+  const linkDesktop = `https://www.facebook.com/messages/t/${pageUsername}?ref=${token.token}`
 
   await appendLedger({
     type: LEDGER_TYPES.REFERRAL_ISSUED,
@@ -128,5 +131,5 @@ export async function POST(req: NextRequest) {
     payload: { occasionId: occasion.id, referral: token.token.slice(0, 8) + '…' },
   })
 
-  return ok({ link, token: token.token })
+  return ok({ link, linkMobile: link, linkDesktop, token: token.token })
 }

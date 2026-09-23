@@ -105,7 +105,7 @@ export async function createSessionForTable(tableId: string, deviceId?: string, 
   const safeDuration = Math.max(1, Math.min(durationMinutes || 90, 24 * 60))
 
   // 1) reuse a live session on this table (shared session / shared bill)
-  const existing = await db.tableSession.findFirst({
+  let existing = await db.tableSession.findFirst({
     where: {
       tableId,
       active: true,
@@ -115,6 +115,31 @@ export async function createSessionForTable(tableId: string, deviceId?: string, 
     orderBy: { scannedAt: 'desc' },
     include: { table: { select: { number: true } } },
   })
+
+  // AUTO-ROTATE: when every order of the live session is already PAID the meal
+  // is over — re-scanning the QR starts a FRESH session (fresh bill, offers
+  // available again for a new round; per-offer locks still apply).
+  if (existing) {
+    const bills = await db.order.findMany({
+      where: { sessionId: existing.id },
+      select: { billPaid: true },
+    })
+    if (bills.length > 0 && bills.every((o) => o.billPaid)) {
+      await db.tableSession.update({
+        where: { id: existing.id },
+        data: { active: false, clearedAt: new Date() },
+      })
+      await appendLedger({
+        type: LEDGER_TYPES.SESSION_CLEARED,
+        sessionId: existing.id,
+        deviceId,
+        deviceFp,
+        tableNumber: existing.table.number,
+        payload: { tableNumber: existing.table.number, note: 'auto-rotate: bill fully paid → re-scan starts a fresh session' },
+      })
+      existing = null
+    }
+  }
 
   if (existing) {
     const remainingMs = existing.expiresAt.getTime() - Date.now()

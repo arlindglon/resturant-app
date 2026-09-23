@@ -225,9 +225,11 @@ export async function runBirthdayCron(): Promise<{ sent: number; skipped: boolea
     const bm = c.birthday.getMonth() + 1
     const bd = c.birthday.getDate()
     if (bm !== mm || bd !== dd) continue
+    // never greet with a placeholder word — real name only
+    const nm = c.firstName && !/^customer$/i.test(c.firstName) ? c.firstName : ''
     const ok = await sendText(
       c.psid,
-      `🎂 শুভ জন্মদিন ${c.firstName}!\n\nআপনার বিশেষ দিনে আমাদের পক্ষ থেকে ছোট্ট উপহার — কুপন "BDAY${mm}${dd}" ব্যবহার করে আজকের অর্ডারে ১৫% ছাড় নিন! 🎉\nআমরা অপেক্ষায় আছি।`
+      `🎂 শুভ জন্মদিন${nm ? ` ${nm}` : ''}!\n\nআপনার বিশেষ দিনে আমাদের পক্ষ থেকে ছোট্ট উপহার — কুপন "BDAY${mm}${dd}" ব্যবহার করে আজকের অর্ডারে ১৫% ছাড় নিন! 🎉\nআমরা অপেক্ষায় আছি।`
     )
     if (ok) sent++
   }

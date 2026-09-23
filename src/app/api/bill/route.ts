@@ -41,10 +41,13 @@ export async function GET(req: NextRequest) {
     where: {
       OR: [{ sessionId: session.sessionId }, ...(dm.length > 0 ? dm : [])],
     },
-    select: { occasionId: true },
+    select: { occasionId: true, sessionId: true },
   })
-  // an offer was already used in THIS bill? (any occasion offer or legacy grant)
-  const sessionHasOffer = priorClaims.some((c) => c.occasionId !== null) || alreadyClaimed
+  // an offer was already used in THIS bill? (any occasion claim inside THIS
+  // session, or the legacy grant) — device claims from OTHER bills must NOT
+  // close this bill, they only lock their own offer
+  const sessionHasOffer =
+    priorClaims.some((c) => c.sessionId === session.sessionId && c.occasionId !== null) || alreadyClaimed
   // which offers THIS device consumed on earlier bills
   const deviceClaimedOcc = new Set(
     priorClaims.filter((c) => c.occasionId !== null).map((c) => c.occasionId as string)
@@ -67,6 +70,7 @@ export async function GET(req: NextRequest) {
 
   return ok({
     tableNumber: session.tableNumber,
+    sessionHasOffer,
     orders: orders.map((o) => ({
       id: o.id,
       orderNo: o.orderNo,

@@ -1,7 +1,7 @@
 'use client'
 
 // Bill page — request staff + bill summary + Birthday/occasion CRM offer + receipt.
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react'
 import Link from 'next/link'
 import {
   ArrowLeft,
@@ -59,6 +59,7 @@ interface BillOrder {
 
 interface BillData {
   tableNumber: number
+  sessionHasOffer?: boolean
   orders: BillOrder[]
   summary: {
     subtotal: number
@@ -97,8 +98,17 @@ interface BillData {
 
 interface ReferralResponse {
   link: string
+  linkMobile?: string
+  linkDesktop?: string
   token: string
 }
+
+/** true on phones/tablets → m.me deep-link opens the Messenger app; desktop → facebook.com chat */
+function isMobileDevice(): boolean {
+  if (typeof navigator === 'undefined') return true
+  return /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini|Mobile/i.test(navigator.userAgent)
+}
+const subscribeNoop = () => () => {}
 
 const STATUS_BADGES: Record<string, { label: string; cls: string }> = {
   PLACED: { label: 'প্লেসড', cls: 'border-amber-200 bg-amber-50 text-amber-800' },
@@ -125,9 +135,13 @@ export default function BillPage() {
 
   // claiming state (no name/date form — the bot collects verification data in Messenger)
   const [claiming, setClaiming] = useState(false)
-  const [referralLink, setReferralLink] = useState<string | null>(null)
+  const [refLinks, setRefLinks] = useState<{ mobile: string; desktop: string } | null>(null)
   const [referralOccasionId, setReferralOccasionId] = useState<string | null>(null)
   const [copied, setCopied] = useState(false)
+
+  // mobile/desktop detection (m.me deep-link vs facebook.com chat):
+  // server snapshot = true (m.me safe default) → client refines after hydration
+  const isMobile = useSyncExternalStore(subscribeNoop, isMobileDevice, () => true)
 
   // staff call
   const [staffBusy, setStaffBusy] = useState(false)
@@ -255,7 +269,7 @@ export default function BillPage() {
       return
     }
 
-    // ── messenger ON → referral link flow (claim via m.me chat) ──
+    // ── messenger ON → referral link flow (claim via Messenger chat) ──
     // NOTE: open a blank tab SYNCHRONOUSLY while we still have the user gesture —
     // window.open() after the await gets blocked by mobile/desktop popup blockers.
     const pre = typeof window !== 'undefined' ? window.open('', '_blank') : null
@@ -264,10 +278,16 @@ export default function BillPage() {
     setClaiming(false)
 
     if (res.ok && res.data) {
-      setReferralLink(res.data.link)
+      const links = {
+        mobile: res.data.linkMobile || res.data.link,
+        desktop: res.data.linkDesktop || res.data.linkMobile || res.data.link,
+      }
+      setRefLinks(links)
       setReferralOccasionId(selectedOccasionId || null)
       if (pre) {
-        pre.location.href = res.data.link
+        // auto-detect: desktop customers get facebook.com/messages/t/<page>,
+        // mobile customers get m.me (opens the Messenger app directly)
+        pre.location.href = isMobile ? links.mobile : links.desktop
       } else {
         // popup was blocked — the big “Messenger খুলুন” button below is the fallback
         toast.info('নিচের "Messenger খুলুন" বাটনে চাপ দিন')
@@ -287,9 +307,9 @@ export default function BillPage() {
   }
 
   async function copyLink() {
-    if (!activeReferralLink) return
+    if (!activeMessengerLink) return
     try {
-      await navigator.clipboard.writeText(activeReferralLink)
+      await navigator.clipboard.writeText(activeMessengerLink)
       setCopied(true)
       toast.success('লিংক কপি হয়েছে!')
       setTimeout(() => setCopied(false), 2000)
@@ -341,11 +361,12 @@ export default function BillPage() {
   const canClaim = selectedOccasion
     ? selectedOccasion.eligible && !selectedOccasion.alreadyClaimed
     : offer.eligible && !offer.deviceAlreadyClaimed
-  // card visibility: any occasion offer still claimable → keep the card;
-  // legacy (no occasions) card follows the old global-claim rules
-  const hasClaimableOccasion = occasions.some((o) => !o.alreadyClaimed)
+  // card visibility: with occasion offers ALWAYS show the card (claimed ones
+  // render dimmed with "নেওয়া হয়েছে ✓" — the customer sees every offer and its
+  // status instead of a mysteriously empty page); legacy (no occasions) card
+  // follows the old global-claim rules
   const showOfferCard = occasions.length > 0
-    ? hasClaimableOccasion
+    ? true
     : !offer.alreadyClaimed && !offer.deviceAlreadyClaimed && offer.eligible
   // messenger link stays visible only while its offer is still unclaimed —
   // once the webhook applies it, the form returns for the next offer
@@ -353,7 +374,9 @@ export default function BillPage() {
   const referralValid = referralOccasionId
     ? Boolean(refOcc && !refOcc.alreadyClaimed)
     : !offer.alreadyClaimed
-  const activeReferralLink = referralLink && referralValid ? referralLink : null
+  // platform-aware link: mobile → m.me (Messenger app), desktop → facebook.com chat
+  const activeMessengerLink =
+    refLinks && referralValid ? (isMobile ? refLinks.mobile : refLinks.desktop) : null
 
   /* ---- main render ---- */
 
@@ -565,7 +588,7 @@ export default function BillPage() {
             </div>
 
             {/* ── occasion picker — pick one offer reason (default: first eligible) ── */}
-            {occasions.length > 0 && !activeReferralLink && (
+            {occasions.length > 0 && !activeMessengerLink && (
               <div className="mt-4 space-y-2">
                 <p className="flex items-center gap-1.5 text-sm font-extrabold text-white">
                   <PartyPopper className="size-4" />
@@ -647,7 +670,7 @@ export default function BillPage() {
               </div>
             )}
 
-            {!activeReferralLink ? (
+            {!activeMessengerLink ? (
               <div className="mt-4 space-y-2.5 rounded-xl bg-white/95 p-3.5 shadow-inner">
                 <Button
                   onClick={claimOffer}
@@ -666,9 +689,11 @@ export default function BillPage() {
                   occasions.length > 0 && (
                     <p className="text-center text-[11px] font-medium text-stone-500">
                       {selectedOccasion?.alreadyClaimed
-                        ? (occasions.some((o) => !o.alreadyClaimed)
-                            ? 'এই অফারটি আর নেওয়া যাবে না — চাইলে অন্য অফার বেছে নিন।'
-                            : 'এই বিলে ইতোমধ্যে একটি অফার ব্যবহার করা হয়েছে — পরের ভিজিটে আবার অফার নিতে পারবেন।')
+                        ? occasions.some((o) => !o.alreadyClaimed)
+                          ? 'এই অফারটি আর নেওয়া যাবে না — চাইলে অন্য অফার বেছে নিন।'
+                          : bill.sessionHasOffer
+                            ? 'এই বিলে ইতোমধ্যে একটি অফার ব্যবহার করা হয়েছে — বিল পরিশোধ করে আবার স্ক্যান করলে নতুন অফার নিতে পারবেন।'
+                            : 'এই অফারগুলো আপনি আগেই নিয়েছেন — প্রতিটি অফার একবারই প্রযোজ্য।'
                         : 'উপরে থেকে প্রযোজ্য অফার বেছে নিলে বাটন চালু হবে'}
                     </p>
                   )
@@ -683,7 +708,7 @@ export default function BillPage() {
                   </p>
                 </div>
                 <a
-                  href={activeReferralLink}
+                  href={activeMessengerLink}
                   target="_blank"
                   rel="noopener noreferrer"
                   className="flex h-12 w-full items-center justify-center gap-2 rounded-xl bg-amber-500 text-base font-extrabold text-white shadow-md transition hover:bg-amber-600"
@@ -693,7 +718,7 @@ export default function BillPage() {
                 </a>
                 <div className="flex items-center gap-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2">
                   <span className="min-w-0 flex-1 truncate font-mono text-xs text-stone-600">
-                    {activeReferralLink}
+                    {activeMessengerLink}
                   </span>
                   <button
                     onClick={copyLink}
@@ -716,7 +741,7 @@ export default function BillPage() {
       <footer
         className={cn(
           'mt-auto space-y-1 py-5',
-          activeReferralLink && 'pb-24'
+          activeMessengerLink && 'pb-24'
         )}
       >
         <p className="text-center text-xs text-stone-400">

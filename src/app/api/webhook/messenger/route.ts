@@ -19,9 +19,10 @@ import { NextRequest } from 'next/server'
 import crypto from 'crypto'
 import { db } from '@/lib/db'
 import { fail, ok } from '@/lib/api'
-import { fetchProfileName, askPhoneQuickReply, sendReceipt, sendText } from '@/lib/messenger'
+import { fetchMessengerProfile, askPhoneQuickReply, sendReceipt, sendText } from '@/lib/messenger'
 import { applyBirthdayDiscount } from '@/lib/birthday'
-import { setSettings } from '@/lib/settings'
+import { setSettings, getSetting } from '@/lib/settings'
+import { SETTING_KEYS } from '@/lib/constants'
 import { parseDateLoose, parsePhoneLoose } from '@/lib/verify'
 
 
@@ -136,6 +137,30 @@ export async function POST(req: NextRequest) {
 
 /* ───────────────────────── conversation helpers ───────────────────────── */
 
+/**
+ * Real customer name from the Facebook profile. Falls back to '' — we NEVER
+ * greet people with a placeholder word like "Customer".
+ */
+function politeName(p: { firstName?: string | null; lastName?: string | null }): string {
+  const f = (p.firstName || '').trim()
+  const l = (p.lastName || '').trim()
+  const full = `${f} ${l}`.trim()
+  if (!full || /^customer$/i.test(full)) return ''
+  return full
+}
+
+/** greeting head that never shows a placeholder name */
+function greet(name: string): string {
+  return name ? `স্বাগতম ${name}! 🎉` : 'স্বাগতম! 🎉'
+}
+
+/** friendly follow-the-page nudge (link shown when the page username is configured) */
+async function followNudge(): Promise<string> {
+  const username = ((await getSetting(SETTING_KEYS.MESSENGER_PAGE_USERNAME)) || '').trim()
+  if (!username) return ''
+  return `\n\n💙 আমাদের Facebook পেজ Follow করে রাখুন — নতুন অফার সবার আগে পাবেন!\n${'https://facebook.com/'}${username}`
+}
+
 /** default ask-text per field type (when the admin left askText empty) */
 function defaultAsk(fieldType: string): string {
   if (fieldType === 'PHONE') return 'যাচাইয়ের জন্য আপনার ফোন নম্বরটি পাঠান।'
@@ -157,15 +182,15 @@ function retryAsk(fieldType: string): string {
 /** build + send the "send me your verification data" message for an offer */
 async function askVerificationData(
   psid: string,
-  firstName: string,
+  name: string,
   offer: { name: string; emoji: string; discount: number; askText: string | null; fieldType: string } | null,
   tableNumber: number,
 ): Promise<void> {
   const fieldType = offer?.fieldType || 'DATE'
   const ask = offer?.askText?.trim() || defaultAsk(fieldType)
   const head = offer
-    ? `${offer.emoji || '🎁'} ${offer.name} — ৳${offer.discount} ছাড় অফার!\n\nস্বাগতম ${firstName}! 🎉\n\n${ask}`
-    : `স্বাগতম ${firstName}! 🎉\n\n${ask}`
+    ? `${offer.emoji || '🎁'} ${offer.name} — ৳${offer.discount} ছাড় অফার!\n\n${greet(name)}\n\n${ask}`
+    : `${greet(name)}\n\n${ask}`
   const tail = `\n\n✅ সঠিক তথ্য পাঠালেই ছাড়টি আপনার বিলে (টেবিল ${tableNumber}) যোগ হয়ে যাবে।`
   const text = head + tail
 
@@ -177,14 +202,16 @@ async function askVerificationData(
 }
 
 /** upsert the CRM customer from a Facebook profile */
-async function upsertCustomer(psid: string): Promise<{ firstName: string; lastName: string }> {
-  const { firstName, lastName } = await fetchProfileName(psid)
+async function upsertCustomer(psid: string): Promise<{ name: string; firstName: string; lastName: string }> {
+  const profile = await fetchMessengerProfile(psid)
+  const firstName = profile.firstName
+  const lastName = profile.lastName
   await db.customer.upsert({
     where: { psid },
-    update: { firstName, lastName: lastName || '', lastSeenAt: new Date() },
-    create: { psid, firstName, lastName: lastName || '', lastSeenAt: new Date() },
+    update: { firstName: firstName || 'নাম যাচাই বাকি', lastName: lastName || '', lastSeenAt: new Date() },
+    create: { psid, firstName: firstName || 'নাম যাচাই বাকি', lastName: lastName || '', lastSeenAt: new Date() },
   })
-  return { firstName, lastName }
+  return { name: politeName({ firstName, lastName }), firstName, lastName }
 }
 
 /** find the newest PENDING referral token opened from this conversation */
@@ -198,7 +225,7 @@ async function pendingToken(psid: string) {
 /** send the digital receipt after a successful claim */
 async function sendBillReceipt(
   psid: string,
-  firstName: string,
+  name: string,
   t: { tableNumber: number; sessionId: string },
 ): Promise<void> {
   const orders = await db.order.findMany({
@@ -219,7 +246,8 @@ async function sendBillReceipt(
     if (o.birthdayDiscount) lines.push(`  🎁 অফারের ছাড়: -৳${o.birthdayDiscount}`)
   }
   lines.push(`\nমোট প্রদেয়: ৳${Math.round(payable * 100) / 100}`)
-  lines.push(`\nধন্যবাদ ${firstName}! 🙏 আবার আসবেন — বিল আপডেট ও অফার পেতে এই চ্যাটটি রেখে দিন।`)
+  lines.push(`\nধন্যবাদ${name ? ` ${name}` : ''}! 🙏 আবার আসবেন — বিল আপডেট ও অফার পেতে এই চ্যাটটি রেখে দিন।`)
+  lines.push(await followNudge())
   await sendReceipt(psid, [{ text: lines.join('\n') }])
 }
 
@@ -233,14 +261,14 @@ async function handleEvent(event: MessagingEvent) {
   const ref = event.referral?.ref || event.postback?.referral?.ref
   if (ref) {
     const tokenRow = await db.referralToken.findUnique({ where: { token: ref } })
-    const { firstName, lastName } = await upsertCustomer(psid)
+    const { name } = await upsertCustomer(psid)
 
     if (!tokenRow || tokenRow.status !== 'PENDING') return
 
     // remember who this conversation belongs to
     await db.referralToken.update({
       where: { token: ref },
-      data: { name: `${firstName} ${lastName}`.trim() || 'Customer', psid },
+      data: { name: name || 'নাম যাচাই বাকি', psid },
     })
 
     // load the offer the customer picked on the bill page
@@ -255,7 +283,7 @@ async function handleEvent(event: MessagingEvent) {
 
     await askVerificationData(
       psid,
-      firstName,
+      name,
       offer
         ? {
             name: offer.name,
@@ -275,14 +303,14 @@ async function handleEvent(event: MessagingEvent) {
   const sharedPhone = extractPhone(event)
 
   if (event.message) {
-    const { firstName, lastName } = await upsertCustomer(psid)
+    const { name, lastName } = await upsertCustomer(psid)
     const tokenRow = await pendingToken(psid)
 
     // 2a. no pending claim → friendly info (customer data still saved for CRM)
     if (!tokenRow) {
       await sendText(
         psid,
-        `স্বাগতম ${firstName}! 🎉\n\nআমাদের বিশেষ অফার নিতে রেস্তোরাঁর বিল পেজ থেকে "🎉 Claim on Messenger" চাপুন — সেখান থেকে যাচাই করে ছাড় নিতে পারবেন।`
+        `${greet(name)}\n\nআমাদের বিশেষ অফার নিতে রেস্তোরাঁর বিল পেজ থেকে "🎉 Claim on Messenger" চাপুন — সেখান থেকে যাচাই করে ছাড় নিতে পারবেন।${await followNudge()}`
       )
       return
     }
@@ -327,7 +355,7 @@ async function handleEvent(event: MessagingEvent) {
     // 2d. correct data → AUTO-VERIFY: apply the offer to the bill right away
     const result = await applyBirthdayDiscount({
       psid,
-      firstName,
+      firstName: name || 'নাম যাচাই বাকি',
       lastName,
       phone: parsedPhone,
       birthday: parsedBirthday,
@@ -367,8 +395,11 @@ async function handleEvent(event: MessagingEvent) {
       data: { status: 'CLAIMED', phone: parsedPhone || null, birthday: parsedBirthday || undefined, dataText: validData },
     })
 
-    await sendText(psid, `✅ যাচাই সফল — ${firstName}, আপনার অফারটি বিলে যোগ হয়েছে! 🎉`)
-    await sendBillReceipt(psid, firstName, {
+    await sendText(
+      psid,
+      `✅ যাচাই সফল${name ? ` — ${name}` : ''}, আপনার অফারটি বিলে যোগ হয়েছে! 🎉`
+    )
+    await sendBillReceipt(psid, name, {
       tableNumber: tokenRow.tableNumber,
       sessionId: tokenRow.sessionId,
     })

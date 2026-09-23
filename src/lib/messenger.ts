@@ -50,19 +50,86 @@ export async function testPageToken(): Promise<PageTokenTest> {
   }
 }
 
-/** Fetch first/last name from PSID */
-export async function fetchProfileName(psid: string): Promise<{ firstName: string; lastName: string }> {
+/** throttled error log — never floods the logs when 40 customers fail at once */
+let lastProfileLogAt = 0
+let lastProfileLogMsg = ''
+function logProfileError(psid: string, msg: string) {
+  const now = Date.now()
+  if (msg === lastProfileLogMsg && now - lastProfileLogAt < 30_000) return
+  lastProfileLogAt = now
+  lastProfileLogMsg = msg
+  console.error('[messenger:profile]', psid, msg)
+}
+
+export interface MessengerProfile {
+  firstName: string
+  lastName: string
+  profilePic: string | null
+  ok: boolean
+  error: string | null
+}
+
+/**
+ * Fetch the customer's Facebook profile (first/last name + profile photo)
+ * via the Page token. On failure returns ok:false with the exact Graph error
+ * (also logged) — callers fall back gracefully (no fake "Customer" name).
+ */
+export async function fetchMessengerProfile(psid: string): Promise<MessengerProfile> {
   const token = pageToken()
-  if (!token) return { firstName: 'Customer', lastName: '' }
-  try {
-    const res = await fetch(`${GRAPH}/${psid}?fields=first_name,last_name&access_token=${token}`, {
-      signal: AbortSignal.timeout(10_000),
-    })
-    const j = await res.json()
-    return { firstName: j.first_name || 'Customer', lastName: j.last_name || '' }
-  } catch {
-    return { firstName: 'Customer', lastName: '' }
+  if (!token) {
+    return { firstName: '', lastName: '', profilePic: null, ok: false, error: 'META_PAGE_TOKEN সেট করা নেই' }
   }
+  try {
+    const res = await fetch(
+      `${GRAPH}/${psid}?fields=first_name,last_name,profile_pic&access_token=${encodeURIComponent(token)}`,
+      { signal: AbortSignal.timeout(10_000) }
+    )
+    const j = (await res.json()) as {
+      first_name?: string
+      last_name?: string
+      profile_pic?: string
+      error?: { message?: string }
+    }
+    if (!res.ok || j.error) {
+      const msg = j.error?.message || `Graph API HTTP ${res.status}`
+      logProfileError(psid, msg)
+      return { firstName: '', lastName: '', profilePic: null, ok: false, error: msg }
+    }
+    return {
+      firstName: j.first_name || '',
+      lastName: j.last_name || '',
+      profilePic: j.profile_pic || null,
+      ok: true,
+      error: null,
+    }
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : 'সংযোগ ব্যর্থ'
+    logProfileError(psid, msg)
+    return { firstName: '', lastName: '', profilePic: null, ok: false, error: msg }
+  }
+}
+
+/** Legacy helper — first/last name, empty strings when the profile is unavailable */
+export async function fetchProfileName(psid: string): Promise<{ firstName: string; lastName: string }> {
+  const p = await fetchMessengerProfile(psid)
+  return { firstName: p.firstName, lastName: p.lastName }
+}
+
+// profile-photo cache (admin CRM list — avoids a Graph call per row per load)
+const photoCache = new Map<string, { pic: string | null; at: number; ok: boolean }>()
+const PHOTO_TTL_OK = 10 * 60 * 1000
+const PHOTO_TTL_FAIL = 60 * 1000
+
+/** Profile photo URL for a PSID (10-min cache; null when unavailable) */
+export async function fetchProfilePhoto(psid: string): Promise<string | null> {
+  const hit = photoCache.get(psid)
+  if (hit) {
+    const ttl = hit.ok ? PHOTO_TTL_OK : PHOTO_TTL_FAIL
+    if (Date.now() - hit.at < ttl) return hit.pic
+  }
+  const p = await fetchMessengerProfile(psid)
+  photoCache.set(psid, { pic: p.profilePic, at: Date.now(), ok: p.ok })
+  return p.profilePic
 }
 
 /** Send a plain text message to a PSID */

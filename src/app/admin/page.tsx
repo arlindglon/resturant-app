@@ -237,6 +237,7 @@ interface MessengerTestResult {
     pageUsername: string | null
     error: string | null
   }
+  profileTest: { ok: boolean; name: string | null; error: string | null } | null
   env: { pageToken: boolean; pageId: boolean; verifyToken: boolean; appSecret: boolean }
   lastWebhookAt: string
   lastWebhookInfo: string
@@ -2890,6 +2891,7 @@ interface CustomerRow {
   id: string
   psid: string
   messenger: boolean
+  photo: string | null
   firstName: string
   lastName: string | null
   phone: string | null
@@ -2902,6 +2904,14 @@ interface CustomerRow {
   lastSeenAt: string | null
   createdAt: string
   daysUntilEvent: number | null
+}
+
+/** real first+last name, or a friendly placeholder — never the raw word "Customer" */
+function customerName(c: { firstName: string; lastName: string | null }): string {
+  const f = (c.firstName || '').trim()
+  const l = (c.lastName || '').trim()
+  const full = [f === 'Customer' ? '' : f, l === 'Customer' ? '' : l].filter(Boolean).join(' ')
+  return full || 'নাম যাচাই বাকি'
 }
 
 function CustomersTab({ onAuthRequired }: TabProps) {
@@ -2957,13 +2967,20 @@ function CustomersTab({ onAuthRequired }: TabProps) {
             <div className="thin-scroll max-h-72 space-y-2 overflow-y-auto pr-1">
               {data.upcoming.map((c) => (
                 <div key={c.id} className="flex items-center gap-3 rounded-lg border border-stone-200 bg-white p-3">
-                  <span className="flex size-10 shrink-0 items-center justify-center rounded-full bg-pink-100 text-lg">
-                    {c.daysUntilEvent === 0 ? '🎂' : '🎉'}
-                  </span>
+                  {c.photo ? (
+                    <img
+                      src={c.photo}
+                      alt={`${customerName(c)}-এর প্রোফাইল ছবি`}
+                      referrerPolicy="no-referrer"
+                      className="size-10 shrink-0 rounded-full border border-stone-200 object-cover"
+                    />
+                  ) : (
+                    <span className="flex size-10 shrink-0 items-center justify-center rounded-full bg-pink-100 text-lg">
+                      {c.daysUntilEvent === 0 ? '🎂' : '🎉'}
+                    </span>
+                  )}
                   <div className="min-w-0 flex-1">
-                    <p className="truncate text-sm font-black text-stone-900">
-                      {c.firstName} {c.lastName || ''}
-                    </p>
+                    <p className="truncate text-sm font-black text-stone-900">{customerName(c)}</p>
                     <p className="truncate text-[11px] font-semibold text-stone-500">
                       {c.eventLabel || 'জন্মদিন'} • {bnDateOnly(c.birthday)}
                       {c.phone ? ` • 📱 ${c.phone}` : ''}
@@ -3013,13 +3030,20 @@ function CustomersTab({ onAuthRequired }: TabProps) {
           {customers.map((c) => (
             <div key={c.id} className="rounded-lg border border-stone-100 bg-stone-50/60 p-3">
               <div className="flex flex-wrap items-center gap-2">
-                <span className="flex size-9 shrink-0 items-center justify-center rounded-full bg-amber-100 font-black text-amber-700">
-                  {(c.firstName || '?').slice(0, 1).toUpperCase()}
-                </span>
+                {c.photo ? (
+                  <img
+                    src={c.photo}
+                    alt={`${customerName(c)}-এর প্রোফাইল ছবি`}
+                    referrerPolicy="no-referrer"
+                    className="size-9 shrink-0 rounded-full border border-stone-200 object-cover"
+                  />
+                ) : (
+                  <span className="flex size-9 shrink-0 items-center justify-center rounded-full bg-amber-100 font-black text-amber-700">
+                    {(c.firstName || '?').slice(0, 1).toUpperCase()}
+                  </span>
+                )}
                 <div className="min-w-0 flex-1">
-                  <p className="truncate text-sm font-black text-stone-900">
-                    {c.firstName} {c.lastName || ''}
-                  </p>
+                  <p className="truncate text-sm font-black text-stone-900">{customerName(c)}</p>
                   <p className="truncate text-[11px] text-stone-500">
                     {c.eventLabel ? `${c.eventLabel}: ${bnDateOnly(c.birthday)}` : bnDateOnly(c.birthday)}
                     {c.phone ? ` • 📱 ${c.phone}` : ''}
@@ -3068,10 +3092,10 @@ function CustomersTab({ onAuthRequired }: TabProps) {
       )}
 
       {/* edit dialog — key remounts it so the fields fill from the edited row */}
-      <EditCustomerDialog key={editing?.id || 'none'} customer={editing} onOpenChange={() => setEditing(null)} onSaved={load} />
+      <EditCustomerDialog key={editing?.id || 'edit-none'} customer={editing} onOpenChange={() => setEditing(null)} onSaved={load} />
 
       {/* send message dialog */}
-      <SendMessageDialog key={msgTarget?.id || 'none'} customer={msgTarget} onOpenChange={() => setMsgTarget(null)} />
+      <SendMessageDialog key={msgTarget?.id || 'msg-none'} customer={msgTarget} onOpenChange={() => setMsgTarget(null)} />
     </div>
   )
 }
@@ -3113,7 +3137,7 @@ function EditCustomerDialog({
         <DialogHeader>
           <DialogTitle>কাস্টমারের তথ্য এডিট</DialogTitle>
           <DialogDescription>
-            {customer ? `${customer.firstName} ${customer.lastName || ''}` : ''}
+            {customer ? customerName(customer) : ''}
           </DialogDescription>
         </DialogHeader>
         <div className="space-y-3">
@@ -3154,7 +3178,7 @@ function SendMessageDialog({
 }) {
   const [text, setText] = useState(
     customer
-      ? `🎉 শুভেচ্ছা ${customer.firstName}!\n\nআপনার জন্য বিশেষ অফার — আগামী ভিজিটে বিলে বিশেষ ছাড়!\nরেস্তোরাঁয় আসার আগে এই মেসেজটি দেখান বা বিল পেজ থেকে অফারটি দাবি করুন। 🙏`
+      ? `🎉 শুভেচ্ছা${customerName(customer) !== 'নাম যাচাই বাকি' ? ` ${customerName(customer)}` : ''}!\n\nআপনার জন্য বিশেষ অফার — আগামী ভিজিটে বিলে বিশেষ ছাড়!\nরেস্তোরাঁয় আসার আগে এই মেসেজটি দেখান বা বিল পেজ থেকে অফারটি দাবি করুন। 🙏`
       : ''
   )
   const [sending, setSending] = useState(false)
@@ -3177,7 +3201,7 @@ function SendMessageDialog({
         <DialogHeader>
           <DialogTitle>📩 মেসেঞ্জারে পাঠান</DialogTitle>
           <DialogDescription>
-            {customer ? `${customer.firstName} ${customer.lastName || ''} — কাস্টমার এই পেজের মেসেঞ্জারে চ্যাট করেছেন, তাই সরাসরি মেসেজ যাবে।` : ''}
+            {customer ? `${customerName(customer)} — কাস্টমার এই পেজের মেসেঞ্জারে চ্যাট করেছেন, তাই সরাসরি মেসেজ যাবে।` : ''}
           </DialogDescription>
         </DialogHeader>
         <Textarea rows={6} value={text} onChange={(e) => setText(e.target.value)} placeholder="মেসেজ লিখুন…" />
@@ -4605,6 +4629,22 @@ function SettingsTab({ onAuthRequired }: TabProps) {
                     ? `${bnAgo(metaTest.lastWebhookAt)} (${metaTest.lastWebhookInfo})`
                     : 'এখনো কোনো ইভেন্ট আসেনি ❌'}
                 </p>
+                {metaTest.profileTest && (
+                  <p className="mt-1">
+                    কাস্টমারের নাম ও ছবি আনা:{' '}
+                    {metaTest.profileTest.ok ? (
+                      <>✅ যাচ্ছে{metaTest.profileTest.name ? ` (${metaTest.profileTest.name})` : ''}</>
+                    ) : (
+                      <>
+                        ❌ যাচ্ছে না — {metaTest.profileTest.error}
+                        <span className="mt-1 block font-semibold">
+                          এই কারণেই কাস্টমার তালিকায় আসল নাম/ছবি না এসে “নাম যাচাই বাকি” দেখাতে পারে। Page Access Token
+                          নতুন করে Generate করে Vercel-এ বসিয়ে Redeploy করলে সাধারণত ঠিক হয়ে যায়।
+                        </span>
+                      </>
+                    )}
+                  </p>
+                )}
                 {metaTest.lastVerifyAt && <p>Meta webhook ভেরিফিকেশন: {bnAgo(metaTest.lastVerifyAt)} সফল হয়েছিল ✅</p>}
               </div>
             )}

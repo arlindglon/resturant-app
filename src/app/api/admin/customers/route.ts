@@ -4,6 +4,7 @@
 import { db } from '@/lib/db'
 import { ok } from '@/lib/api'
 import { requirePerm } from '@/lib/staff-auth'
+import { fetchProfilePhoto } from '@/lib/messenger'
 
 /** days until the next occurrence of this month/day (0 = today) */
 function daysUntilNext(date: Date, today: Date): number {
@@ -41,12 +42,26 @@ export async function GET() {
   }
 
   const today = new Date()
+
+  // profile photos: fetched live from Facebook (10-min server cache, ≤40 rows,
+  // failures → null → UI falls back to the initial letter)
+  const messengerCustomers = customers
+    .filter((c) => !c.psid.startsWith('direct:'))
+    .slice(0, 40)
+  const pics = await Promise.all(
+    messengerCustomers.map((c) => fetchProfilePhoto(c.psid).catch(() => null))
+  )
+  const photoMap = new Map<string, string | null>(
+    messengerCustomers.map((c, i) => [c.psid, pics[i] || null])
+  )
+
   const rows = customers.map((c) => {
     const daysLeft = c.birthday ? daysUntilNext(c.birthday, today) : null
     return {
       id: c.id,
       psid: c.psid,
       messenger: !c.psid.startsWith('direct:'),
+      photo: photoMap.get(c.psid) || null,
       firstName: c.firstName,
       lastName: c.lastName,
       phone: c.phone,
