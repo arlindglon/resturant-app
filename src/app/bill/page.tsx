@@ -92,6 +92,7 @@ interface BillData {
     discount: number
     minBill: number
     eligible: boolean
+    alreadyClaimed: boolean
   }[]
 }
 
@@ -128,6 +129,7 @@ export default function BillPage() {
   const [birthday, setBirthday] = useState('')
   const [claiming, setClaiming] = useState(false)
   const [referralLink, setReferralLink] = useState<string | null>(null)
+  const [referralOccasionId, setReferralOccasionId] = useState<string | null>(null)
   const [copied, setCopied] = useState(false)
 
   // staff call
@@ -149,7 +151,7 @@ export default function BillPage() {
     setBill(data)
     setSelectedOccasionId((prev) => {
       const occ = data.occasions ?? []
-      if (prev && occ.some((o) => o.id === prev)) return prev
+      if (prev && occ.some((o) => o.id === prev && !o.alreadyClaimed)) return prev
       return occ.find((o) => o.eligible)?.id ?? occ[0]?.id ?? ''
     })
   }
@@ -193,12 +195,17 @@ export default function BillPage() {
     return () => clearInterval(t)
   }, [phase])
 
+  // the occasion a messenger link was created for got claimed → the link is
+  // treated as invalid (derived during render below) so the form comes back
+  // and the customer can claim another offer with a fresh link
+
   // poll until the discount shows up in the bill (applied via claim)
   function startAppliedPoll() {
     stopPolling()
+    const baseline = bill?.summary.birthdayDiscount ?? 0
     pollRef.current = setInterval(async () => {
       const b = await api.get<BillData>('/api/bill')
-      if (b.ok && b.data && b.data.summary.birthdayDiscount > 0) {
+      if (b.ok && b.data && b.data.summary.birthdayDiscount > baseline) {
         stopPolling()
         setBill(b.data)
         toast.success('🎉 ছাড় প্রয়োগ হয়েছে!')
@@ -271,6 +278,7 @@ export default function BillPage() {
 
     if (res.ok && res.data) {
       setReferralLink(res.data.link)
+      setReferralOccasionId(selectedOccasionId || null)
       if (pre) {
         pre.location.href = res.data.link
       } else {
@@ -292,9 +300,9 @@ export default function BillPage() {
   }
 
   async function copyLink() {
-    if (!referralLink) return
+    if (!activeReferralLink) return
     try {
-      await navigator.clipboard.writeText(referralLink)
+      await navigator.clipboard.writeText(activeReferralLink)
       setCopied(true)
       toast.success('লিংক কপি হয়েছে!')
       setTimeout(() => setCopied(false), 2000)
@@ -343,8 +351,22 @@ export default function BillPage() {
   const paid = bill.payment.billPaid
   const occasions = bill.occasions ?? []
   const selectedOccasion = occasions.find((o) => o.id === selectedOccasionId) ?? null
-  const canClaim =
-    !offer.deviceAlreadyClaimed && (selectedOccasion ? selectedOccasion.eligible : offer.eligible)
+  const canClaim = selectedOccasion
+    ? selectedOccasion.eligible && !selectedOccasion.alreadyClaimed
+    : offer.eligible && !offer.deviceAlreadyClaimed
+  // card visibility: any occasion offer still claimable → keep the card;
+  // legacy (no occasions) card follows the old global-claim rules
+  const hasClaimableOccasion = occasions.some((o) => !o.alreadyClaimed)
+  const showOfferCard = occasions.length > 0
+    ? hasClaimableOccasion
+    : !offer.alreadyClaimed && !offer.deviceAlreadyClaimed && offer.eligible
+  // messenger link stays visible only while its offer is still unclaimed —
+  // once the webhook applies it, the form returns for the next offer
+  const refOcc = referralOccasionId ? occasions.find((o) => o.id === referralOccasionId) : null
+  const referralValid = referralOccasionId
+    ? Boolean(refOcc && !refOcc.alreadyClaimed)
+    : !offer.alreadyClaimed
+  const activeReferralLink = referralLink && referralValid ? referralLink : null
 
   /* ---- main render ---- */
 
@@ -489,7 +511,7 @@ export default function BillPage() {
             )}
             {s.birthdayDiscount > 0 && (
               <div className="flex justify-between text-sm">
-                <span className="text-stone-500">🎂 জন্মদিনের ছাড়</span>
+                <span className="text-stone-500">🎁 অফারের ছাড়</span>
                 <span className="font-semibold text-green-600">−{taka(s.birthdayDiscount)}</span>
               </div>
             )}
@@ -514,18 +536,18 @@ export default function BillPage() {
           </Button>
         )}
 
-        {/* ── occasion / birthday CRM offer (shows whenever offers exist & not claimed —
-            messenger switch only decides HOW the claim happens: m.me chat vs direct) ── */}
+        {/* ── occasion / birthday CRM offer — every offer can be used once,
+            using one does NOT block the others ── */}
         {offer.alreadyClaimed && (
           <div className="flex items-center gap-2 rounded-xl border border-green-200 bg-green-50 p-3.5">
             <BadgeCheck className="size-5 shrink-0 text-green-600" />
             <p className="text-sm font-semibold text-green-800">
-              🎂 জন্মদিনের ছাড় এই বিলে প্রয়োগ করা হয়েছে
+              🎉 অফারের ছাড় এই বিলে প্রয়োগ করা হয়েছে
             </p>
           </div>
         )}
 
-        {!offer.alreadyClaimed && (offer.eligible || occasions.length > 0) && (
+        {showOfferCard && (
           <div className="overflow-hidden rounded-2xl bg-gradient-to-br from-amber-500 to-orange-600 p-5 shadow-lg shadow-amber-200/60">
             <div className="flex items-start gap-3">
               <span className="flex size-11 shrink-0 items-center justify-center rounded-full bg-white/20 ring-1 ring-white/30">
@@ -556,11 +578,11 @@ export default function BillPage() {
             </div>
 
             {/* ── occasion picker — pick one offer reason (default: first eligible) ── */}
-            {occasions.length > 0 && !referralLink && (
+            {occasions.length > 0 && !activeReferralLink && (
               <div className="mt-4 space-y-2">
                 <p className="flex items-center gap-1.5 text-sm font-extrabold text-white">
                   <PartyPopper className="size-4" />
-                  অনুষ্ঠান বেছে নিন — একটি অফার কাজে আসবে
+                  অনুষ্ঠান বেছে নিন — প্রতিটি অফার একবার করে নেওয়া যাবে
                 </p>
                 <div className="space-y-2">
                   {occasions.map((o) => {
@@ -619,7 +641,11 @@ export default function BillPage() {
                               active ? 'text-stone-400' : 'text-amber-100'
                             )}
                           >
-                            {o.eligible ? 'প্রযোজ্য ✓' : `ন্যূনতম বিল ${taka(o.minBill)}`}
+                            {o.alreadyClaimed
+                              ? 'নেওয়া হয়েছে ✓'
+                              : o.eligible
+                                ? 'প্রযোজ্য ✓'
+                                : `ন্যূনতম বিল ${taka(o.minBill)}`}
                           </span>
                         </span>
                       </button>
@@ -634,7 +660,7 @@ export default function BillPage() {
               </div>
             )}
 
-            {!referralLink ? (
+            {!activeReferralLink ? (
               <div className="mt-4 space-y-2.5 rounded-xl bg-white/95 p-3.5 shadow-inner">
                 <Input
                   value={name}
@@ -658,15 +684,17 @@ export default function BillPage() {
                   {claiming && <Loader2 className="size-4 animate-spin" />}
                   {offer.enabled ? '🎉 Claim on Messenger' : '🎉 এখনই ছাড় নিন'}
                 </Button>
-                {offer.deviceAlreadyClaimed ? (
+                {offer.deviceAlreadyClaimed && occasions.length === 0 ? (
                   <p className="text-center text-[11px] font-semibold text-stone-500">
-                    এই ডিভাইস থেকে অফারটি আগেই নেওয়া হয়েছে — একবারই প্রযোজ্য।
+                    এই অফারটি আগেই নেওয়া হয়েছে — একবারই প্রযোজ্য।
                   </p>
                 ) : (
                   !canClaim &&
                   occasions.length > 0 && (
                     <p className="text-center text-[11px] font-medium text-stone-500">
-                      উপরে থেকে প্রযোজ্য অফার বেছে নিলে বাটন চালু হবে
+                      {selectedOccasion?.alreadyClaimed
+                        ? 'এই অফারটি আগেই নেওয়া হয়েছে — চাইলে অন্য অফার বেছে নিন।'
+                        : 'উপরে থেকে প্রযোজ্য অফার বেছে নিলে বাটন চালু হবে'}
                     </p>
                   )
                 )}
@@ -680,7 +708,7 @@ export default function BillPage() {
                   </p>
                 </div>
                 <a
-                  href={referralLink}
+                  href={activeReferralLink}
                   target="_blank"
                   rel="noopener noreferrer"
                   className="flex h-12 w-full items-center justify-center gap-2 rounded-xl bg-amber-500 text-base font-extrabold text-white shadow-md transition hover:bg-amber-600"
@@ -690,7 +718,7 @@ export default function BillPage() {
                 </a>
                 <div className="flex items-center gap-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2">
                   <span className="min-w-0 flex-1 truncate font-mono text-xs text-stone-600">
-                    {referralLink}
+                    {activeReferralLink}
                   </span>
                   <button
                     onClick={copyLink}
@@ -713,7 +741,7 @@ export default function BillPage() {
       <footer
         className={cn(
           'mt-auto space-y-1 py-5',
-          referralLink && 'pb-24'
+          activeReferralLink && 'pb-24'
         )}
       >
         <p className="text-center text-xs text-stone-400">

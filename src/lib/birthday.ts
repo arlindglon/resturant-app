@@ -12,7 +12,9 @@ export interface AntiFraudResult {
   reason?: string
 }
 
-/** 7-layer anti-fraud check (device + fingerprint + psid + phone + session + bill) */
+/** 7-layer anti-fraud check (device + fingerprint + psid + phone + session + bill).
+ *  Per-offer lock: when an occasionId is given, the lock applies to THAT offer
+ *  only — different occasion offers stay claimable independently. */
 export async function antiFraudCheck(p: {
   psid: string
   phone: string
@@ -21,24 +23,43 @@ export async function antiFraudCheck(p: {
   sessionId: string
   occasionId?: string | null
 }): Promise<AntiFraudResult> {
-  // 1. Facebook ID already claimed lifetime discount?
-  const byPsid = await db.customer.findUnique({ where: { psid: p.psid } })
-  if (byPsid?.discountClaimed) return { ok: false, reason: 'এই Facebook অ্যাকাউন্ট ইতোমধ্যে জন্মদিনের ছাড় নিয়েছে।' }
-
-  // 2. Phone already claimed?
-  const byPhone = await db.customer.findUnique({ where: { phone: p.phone } })
-  if (byPhone?.discountClaimed) return { ok: false, reason: 'এই ফোন নম্বর ইতোমধ্যে ছাড় নিয়েছে।' }
-
-  // 3. Device (id OR fingerprint) already claimed — lifetime, cross-table safe?
   const deviceOr = deviceMatch({ id: p.deviceId, fp: p.deviceFp || null })
-  if (deviceOr.length > 0) {
-    const byDevice = await db.birthdayClaim.findFirst({ where: { OR: deviceOr } })
-    if (byDevice) return { ok: false, reason: 'এই ডিভাইস থেকে ইতোমধ্যে ছাড় দাবি করা হয়েছে।' }
-  }
 
-  // 4. This table session already got the discount?
-  const session = await db.tableSession.findUnique({ where: { id: p.sessionId } })
-  if (session?.birthdayGranted) return { ok: false, reason: 'এই সেশনে ইতোমধ্যে ছাড় প্রয়োগ করা হয়েছে।' }
+  if (p.occasionId) {
+    // ── per-offer lock: THIS occasion offer already claimed by the same
+    //    customer / phone / session / device? (other offers stay claimable)
+    const prior = await db.birthdayClaim.findFirst({
+      where: {
+        occasionId: p.occasionId,
+        OR: [
+          { psid: p.psid },
+          { phone: p.phone },
+          { sessionId: p.sessionId },
+          ...(deviceOr.length > 0 ? [{ OR: deviceOr }] : []),
+        ],
+      },
+    })
+    if (prior) return { ok: false, reason: 'এই অফারটি আগেই দাবি করা হয়েছে — একবারই প্রযোজ্য।' }
+  } else {
+    // ── legacy birthday (no occasion selected): lifetime locks ──
+    // 1. Facebook ID already claimed lifetime discount?
+    const byPsid = await db.customer.findUnique({ where: { psid: p.psid } })
+    if (byPsid?.discountClaimed) return { ok: false, reason: 'জন্মদিনের ছাড়টি ইতোমধ্যে দাবি করা হয়েছে।' }
+
+    // 2. Phone already claimed?
+    const byPhone = await db.customer.findUnique({ where: { phone: p.phone } })
+    if (byPhone?.discountClaimed) return { ok: false, reason: 'এই ফোন নম্বর ইতোমধ্যে ছাড় নিয়েছে।' }
+
+    // 3. Device (id OR fingerprint) already claimed the legacy birthday — lifetime?
+    if (deviceOr.length > 0) {
+      const byDevice = await db.birthdayClaim.findFirst({ where: { OR: deviceOr, occasionId: null } })
+      if (byDevice) return { ok: false, reason: 'জন্মদিনের ছাড়টি আগেই দাবি করা হয়েছে — একবারই প্রযোজ্য।' }
+    }
+
+    // 4. This bill already got the discount?
+    const session = await db.tableSession.findUnique({ where: { id: p.sessionId } })
+    if (session?.birthdayGranted) return { ok: false, reason: 'এই বিলে ইতোমধ্যে ছাড় প্রয়োগ করা হয়েছে।' }
+  }
 
   // 5. Minimum bill? (occasion-specific min overrides the global birthday min)
   let minBill = await getSettingNumber(SETTING_KEYS.BIRTHDAY_MIN_BILL, 500)
@@ -111,12 +132,13 @@ export async function applyBirthdayDiscount(p: {
   if (!targetOrder) return { ok: false, message: 'কোনো অর্ডার পাওয়া যায়নি' }
 
   const discount = Math.min(amount, targetOrder.total)
-  const newTotal = Math.max(0, targetOrder.total - discount)
+  const prevDiscount = targetOrder.birthdayDiscount || 0
 
   await db.$transaction([
     db.order.update({
       where: { id: targetOrder.id },
-      data: { birthdayDiscount: discount, total: newTotal },
+      // increment: several occasion offers may stack on the same bill
+      data: { birthdayDiscount: { increment: discount }, total: { decrement: discount } },
     }),
     db.tableSession.update({
       where: { id: p.sessionId },
@@ -143,6 +165,7 @@ export async function applyBirthdayDiscount(p: {
         deviceFp: p.deviceFp || null,
         tableNumber: p.tableNumber,
         sessionId: p.sessionId,
+        occasionId: p.occasionId || null,
         amount: discount,
       },
     }),
@@ -153,10 +176,20 @@ export async function applyBirthdayDiscount(p: {
     deviceId: p.deviceId,
     deviceFp: p.deviceFp || null,
     tableNumber: p.tableNumber,
-    payload: { psid: p.psid, phone: p.phone, amount: discount, lifetimeLock: true },
+    payload: {
+      psid: p.psid,
+      phone: p.phone,
+      amount: discount,
+      occasionId: p.occasionId || null,
+      lifetimeLock: !p.occasionId,
+    },
   })
 
-  emitEvent('order:status', { id: targetOrder.id, status: targetOrder.status, birthdayDiscount: discount })
+  emitEvent('order:status', {
+    id: targetOrder.id,
+    status: targetOrder.status,
+    birthdayDiscount: prevDiscount + discount,
+  })
   return { ok: true, message: `৳${discount} ছাড় প্রয়োগ হয়েছে!` }
 }
 

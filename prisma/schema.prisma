@@ -282,12 +282,14 @@ model BirthdayClaim {
   deviceFp   String?
   tableNumber Int
   sessionId  String
+  occasionId String? // which occasion offer was claimed (null = legacy birthday discount)
   amount     Float
   createdAt  DateTime  @default(now())
 
   @@index([psid])
   @@index([phone])
   @@index([deviceId])
+  @@index([occasionId])
   @@map("birthday_claims")
 }
 

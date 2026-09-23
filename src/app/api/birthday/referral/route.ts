@@ -1,7 +1,7 @@
 // POST /api/birthday/referral — customer submits name+birthday on bill page,
 // gets an m.me deep link with unique ref token.
-// ANTI-REPEAT: a device (id or fingerprint) can issue a referral link only
-// once ever — coming back at another table / new session shows no new offer.
+// ANTI-REPEAT (per offer): each occasion offer can be claimed once per device
+// (id or fingerprint) / session — but DIFFERENT offers stay claimable.
 import { NextRequest } from 'next/server'
 import crypto from 'crypto'
 import { db } from '@/lib/db'
@@ -54,14 +54,16 @@ export async function POST(req: NextRequest) {
     occasion = { id: occ.id, name: occ.name, minBill: occ.minBill }
   }
 
-  // ── ANTI-REPEAT 1: this session already claimed?
-  const s = await db.tableSession.findUnique({ where: { id: session.sessionId } })
-  if (s?.birthdayGranted) return fail('এই সেশনে ইতোমধ্যে জন্মদিনের ছাড় দাবি করা হয়েছে', 400)
-
-  // ── ANTI-REPEAT 2: this device (id OR fingerprint) claimed at ANY table ever?
+  // ── ANTI-REPEAT (per offer): this session/device already claimed THIS offer?
+  //    Different occasion offers stay claimable independently.
   const dm = deviceMatch(device)
-  if (dm.length > 0) {
-    const priorClaim = await db.birthdayClaim.findFirst({ where: { OR: dm } })
+  if (occasionId) {
+    const priorClaim = await db.birthdayClaim.findFirst({
+      where: {
+        occasionId,
+        OR: [{ sessionId: session.sessionId }, ...(dm.length > 0 ? [{ OR: dm }] : [])],
+      },
+    })
     if (priorClaim) {
       await appendLedger({
         type: LEDGER_TYPES.BIRTHDAY_BLOCKED,
@@ -69,9 +71,31 @@ export async function POST(req: NextRequest) {
         deviceId: device.id,
         deviceFp: device.fp,
         tableNumber: session.tableNumber,
-        payload: { reason: 'device_repeat_referral', priorClaimTable: priorClaim.tableNumber },
+        payload: {
+          reason: 'offer_repeat_referral',
+          occasionId,
+          priorClaimTable: priorClaim.tableNumber,
+        },
       })
-      return fail('এই ডিভাইস থেকে অফারটি আগেই দাবি করা হয়েছে — একবারই প্রযোজ্য।', 403, 'ALREADY_CLAIMED')
+      return fail('এই অফারটি আগেই দাবি করা হয়েছে — একবারই প্রযোজ্য।', 403, 'ALREADY_CLAIMED')
+    }
+  } else {
+    // legacy birthday (no occasion): lifetime locks
+    const s = await db.tableSession.findUnique({ where: { id: session.sessionId } })
+    if (s?.birthdayGranted) return fail('এই বিলে ইতোমধ্যে জন্মদিনের ছাড় দাবি করা হয়েছে।', 400)
+    if (dm.length > 0) {
+      const priorClaim = await db.birthdayClaim.findFirst({ where: { OR: dm, occasionId: null } })
+      if (priorClaim) {
+        await appendLedger({
+          type: LEDGER_TYPES.BIRTHDAY_BLOCKED,
+          sessionId: session.sessionId,
+          deviceId: device.id,
+          deviceFp: device.fp,
+          tableNumber: session.tableNumber,
+          payload: { reason: 'device_repeat_referral', priorClaimTable: priorClaim.tableNumber },
+        })
+        return fail('জন্মদিনের ছাড়টি আগেই দাবি করা হয়েছে — একবারই প্রযোজ্য।', 403, 'ALREADY_CLAIMED')
+      }
     }
   }
 
@@ -85,9 +109,9 @@ export async function POST(req: NextRequest) {
     return fail(`এই অফারের জন্য ন্যূনতম বিল ৳${minBill} প্রয়োজন`, 400)
   }
 
-  // reuse pending token for this session if exists
+  // reuse this session's pending token for THE SAME offer (different offers get their own token)
   const existing = await db.referralToken.findFirst({
-    where: { sessionId: session.sessionId, status: 'PENDING' },
+    where: { sessionId: session.sessionId, status: 'PENDING', occasionId: occasion?.id || null },
   })
 
   const token =

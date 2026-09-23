@@ -211,7 +211,7 @@ async function handleEvent(event: MessagingEvent) {
       }
       if (o.voucherDiscount) lines.push(`  কুপন ছাড়: -৳${o.voucherDiscount}`)
       if (o.happyHourDiscount) lines.push(`  হ্যাপি আওয়ার ছাড়: -৳${o.happyHourDiscount}`)
-      if (o.birthdayDiscount) lines.push(`  🎂 জন্মদিনের ছাড়: -৳${o.birthdayDiscount}`)
+      if (o.birthdayDiscount) lines.push(`  🎁 অফারের ছাড়: -৳${o.birthdayDiscount}`)
     }
     lines.push(`\nমোট প্রদেয়: ৳${Math.round(payable * 100) / 100}`)
     lines.push(`\nধন্যবাদ ${firstName}! 🙏 আবার আসবেন — বিল আপডেট ও অফার পেতে এই চ্যাটটি রেখে দিন।`)

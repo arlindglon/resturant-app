@@ -56,7 +56,7 @@ function mapCameraError(err: unknown): string {
   if (name === 'NotAllowedError' || /permission|denied/i.test(msg))
     return 'ক্যামেরার অনুমতি দেওয়া হয়নি। ব্রাউজার সেটিংস থেকে ক্যামেরা পারমিশন চালু করে আবার চেষ্টা করুন।'
   if (name === 'NotFoundError' || name === 'OverconstrainedError' || /no camera|not found/i.test(msg))
-    return 'এই ডিভাইসে কোনো ক্যামেরা পাওয়া যায়নি। টেবিলের QR কোডটি ফোনের ক্যামেরা দিয়ে স্ক্যান করুন।'
+    return 'ফোনে কোনো ক্যামেরা পাওয়া যায়নি। টেবিলের QR কোডটি অন্য ফোনের ক্যামেরা দিয়ে স্ক্যান করুন।'
   if (name === 'NotReadableError' || /in use|not readable/i.test(msg))
     return 'ক্যামেরাটি অন্য অ্যাপ ব্যবহার করছে। বন্ধ করে আবার চেষ্টা করুন।'
   return 'ক্যামেরা চালু করা যায়নি — আবার চেষ্টা করুন।'

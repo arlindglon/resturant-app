@@ -32,10 +32,19 @@ export async function GET(req: NextRequest) {
   const sessionRow = await db.tableSession.findUnique({ where: { id: session.sessionId } })
   const alreadyClaimed = Boolean(sessionRow?.birthdayGranted)
 
-  // ── anti-repeat: has THIS device (id or fingerprint) claimed at any table ever?
+  // ── per-offer claim state: each occasion offer can be used once per session /
+  //    device (id or fingerprint) — but DIFFERENT offers stay claimable.
   const device = deviceIdentity(req)
   const dm = deviceMatch(device)
-  const deviceAlreadyClaimed = dm.length > 0 ? Boolean(await db.birthdayClaim.findFirst({ where: { OR: dm } })) : false
+  const priorClaims = await db.birthdayClaim.findMany({
+    where: {
+      OR: [{ sessionId: session.sessionId }, ...(dm.length > 0 ? dm : [])],
+    },
+    select: { occasionId: true },
+  })
+  const claimedOcc = new Set(priorClaims.map((c) => c.occasionId))
+  // legacy (no-occasion) birthday offer — already used by this device/session?
+  const deviceAlreadyClaimed = claimedOcc.has(null)
 
   // ── payment state (admin marked the bill paid)
   const paidOrders = orders.filter((o) => o.billPaid)
@@ -107,7 +116,8 @@ export async function GET(req: NextRequest) {
       description: o.description,
       discount: o.discount,
       minBill: o.minBill,
-      eligible: subtotal >= o.minBill,
+      eligible: subtotal >= o.minBill && !claimedOcc.has(o.id),
+      alreadyClaimed: claimedOcc.has(o.id),
     })),
   })
 }
