@@ -2,8 +2,11 @@
 // GET  — verification handshake
 // POST — message/referral/postback receiver:
 //   referral (ref=token) → greet + Graph API name + 1-tap phone quick reply
-//   quick_reply SHARE_PHONE → anti-fraud (5 checks) → apply ৳ discount → digital receipt
+//   quick_reply SHARE_PHONE → anti-fraud (7 checks) → apply ৳ discount → digital receipt
+// Security: when META_APP_SECRET is configured, every POST must carry a valid
+// X-Hub-Signature-256 HMAC — forged/fake webhook events can never apply discounts.
 import { NextRequest } from 'next/server'
+import crypto from 'crypto'
 import { db } from '@/lib/db'
 import { fail, ok } from '@/lib/api'
 import { fetchProfileName, askPhoneQuickReply, sendReceipt } from '@/lib/messenger'
@@ -18,6 +21,17 @@ export async function GET(req: NextRequest) {
     return new Response(challenge, { status: 200 })
   }
   return fail('Verification failed', 403)
+}
+
+/** X-Hub-Signature-256 check (only enforced when META_APP_SECRET is set) */
+function validSignature(rawBody: string, header: string | null): boolean {
+  const secret = process.env.META_APP_SECRET
+  if (!secret) return true // not configured → skip (local/test mode)
+  if (!header?.startsWith('sha256=')) return false
+  const expected = 'sha256=' + crypto.createHmac('sha256', secret).update(rawBody, 'utf8').digest('hex')
+  const a = Buffer.from(header)
+  const b = Buffer.from(expected)
+  return a.length === b.length && crypto.timingSafeEqual(a, b)
 }
 
 interface WebhookEntry {
@@ -39,7 +53,12 @@ interface MessagingEvent {
 
 export async function POST(req: NextRequest) {
   try {
-    const body = await req.json()
+    const raw = await req.text()
+    if (!validSignature(raw, req.headers.get('x-hub-signature-256'))) {
+      console.warn('[webhook:POST] invalid X-Hub-Signature-256 — rejected')
+      return fail('Invalid signature', 401)
+    }
+    const body = JSON.parse(raw)
     if (body.object !== 'page') return ok({ received: true })
 
     for (const entry of body.entry as WebhookEntry[]) {
@@ -67,10 +86,10 @@ async function handleEvent(event: MessagingEvent) {
       return
     }
     const { firstName, lastName } = await fetchProfileName(psid)
-    // store psid on token row (reuse name fields via a lightweight update through customerId path)
+    // store psid on the token so the phone-share step matches THIS conversation
     await db.referralToken.update({
       where: { token: ref },
-      data: { name: `${firstName} ${lastName}`.trim() },
+      data: { name: `${firstName} ${lastName}`.trim(), psid },
     })
     await askPhoneQuickReply(
       psid,
@@ -84,12 +103,21 @@ async function handleEvent(event: MessagingEvent) {
   const phoneFromAttachment = extractPhone(event)
   if ((qrPayload === 'SHARE_PHONE' || phoneFromAttachment) && phoneFromAttachment) {
     const phone = phoneFromAttachment
-    // find the latest pending referral token to locate session
-    const tokenRow = await db.referralToken.findFirst({
-      where: { status: 'PENDING' },
-      orderBy: { createdAt: 'desc' },
-    })
-    // better: find tokens whose name we updated via this psid? We didn't store psid. Fallback: newest pending.
+    // find the pending referral token: prefer the one opened from THIS psid's
+    // ref chat; legacy rows (no psid) fall back to the newest pending token
+    const tokenRow =
+      (await db.referralToken.findFirst({
+        where: { status: 'PENDING', psid },
+        orderBy: { createdAt: 'desc' },
+      })) ||
+      (await db.referralToken.findFirst({
+        where: { status: 'PENDING', psid: null },
+        orderBy: { createdAt: 'desc' },
+      })) ||
+      (await db.referralToken.findFirst({
+        where: { status: 'PENDING' },
+        orderBy: { createdAt: 'desc' },
+      }))
     if (!tokenRow) {
       await sendReceipt(psid, [{ text: 'দুঃখিত, অফারটি খুঁজে পাওয়া যায়নি। রেস্তোরাঁয় স্টাফদের জানান।' }])
       return

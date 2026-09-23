@@ -3824,8 +3824,14 @@ function SettingsTab({ onAuthRequired }: TabProps) {
               value={form[SETTING_KEYS.MESSENGER_PAGE_USERNAME] ?? ''}
               onChange={(e) => set(SETTING_KEYS.MESSENGER_PAGE_USERNAME, e.target.value)}
               className="max-w-md"
-              placeholder="SpiceGardenBD"
+              placeholder="যেমন: MyTeaPage"
             />
+            <p className="max-w-md text-xs leading-snug text-stone-500">
+              আপনার ফেসবুক <span className="font-bold">পেজের ইউজারনেম</span> (m.me/ এর পরের অংশ) অথবা{' '}
+              <span className="font-bold">পেজ ID</span> দিন — ব্যক্তিগত প্রোফাইলের নাম নয়। যেমন: পেজের লিংক
+              facebook.com/<span className="font-bold">MyTeaPage</span> হলে শুধু <span className="font-bold">MyTeaPage</span> লিখুন।
+              পেজ সেটিংস → Page Setup/Page Info → Username এ পাবেন। ভুল হলে কাস্টমারের মেসেঞ্জার লিংক কাজ করবে না।
+            </p>
           </div>
         </CardContent>
       </Card>

@@ -12,6 +12,21 @@ import { SETTING_KEYS } from '@/lib/constants'
 import { deviceIdentity, deviceMatch } from '@/lib/device'
 import { appendLedger, LEDGER_TYPES } from '@/lib/ledger'
 
+/**
+ * Accepts any reasonable form of the page identity and returns the bare
+ * m.me username/page-id: strips https://, m.me/, facebook.com/, @, spaces,
+ * trailing slashes & query. Returns '' when nothing usable remains.
+ */
+function sanitizePageUsername(raw: string): string {
+  return raw
+    .trim()
+    .replace(/^https?:\/\//i, '')
+    .replace(/^(www\.)?(m\.me|facebook\.com|fb\.com|fb\.me)\//i, '')
+    .replace(/^@/, '')
+    .replace(/[/?#].*$/, '')
+    .trim()
+}
+
 export async function POST(req: NextRequest) {
   const session = await getValidSession()
   if (!session) return fail('অবৈধ সেশন', 403, 'SESSION_INVALID')
@@ -91,7 +106,12 @@ export async function POST(req: NextRequest) {
       },
     }))
 
-  const pageUsername = await getSetting(SETTING_KEYS.MESSENGER_PAGE_USERNAME)
+  const pageUsername = sanitizePageUsername(
+    (await getSetting(SETTING_KEYS.MESSENGER_PAGE_USERNAME)) || ''
+  )
+  if (!pageUsername) {
+    return fail('মেসেঞ্জার পেজ এখনো কনফিগার করা হয়নি — অনুগ্রহ করে রেস্তোরাঁ ম্যানেজারকে জানান।', 500, 'MESSENGER_NOT_CONFIGURED')
+  }
   const link = `https://m.me/${pageUsername}?ref=${token.token}`
 
   await appendLedger({

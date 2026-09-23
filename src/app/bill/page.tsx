@@ -262,21 +262,32 @@ export default function BillPage() {
     }
 
     // ── messenger ON → referral link flow (claim via m.me chat) ──
+    // NOTE: open a blank tab SYNCHRONOUSLY while we still have the user gesture —
+    // window.open() after the await gets blocked by mobile/desktop popup blockers.
+    const pre = typeof window !== 'undefined' ? window.open('', '_blank') : null
     setClaiming(true)
     const res = await api.post<ReferralResponse>('/api/birthday/referral', payload)
     setClaiming(false)
 
     if (res.ok && res.data) {
       setReferralLink(res.data.link)
-      window.open(res.data.link, '_blank')
+      if (pre) {
+        pre.location.href = res.data.link
+      } else {
+        // popup was blocked — the big “Messenger খুলুন” button below is the fallback
+        toast.info('নিচের "Messenger খুলুন" বাটনে চাপ দিন')
+      }
       toast.success('মেসেঞ্জার লিংক তৈরি হয়েছে!')
 
       // poll the bill every 5s — once the webhook applies the discount we celebrate
       startAppliedPoll()
-    } else if (res.code === 'SESSION_INVALID') {
-      setPhase('invalid')
     } else {
-      toast.error(res.error || 'অফার দাবি করা যায়নি')
+      pre?.close()
+      if (res.code === 'SESSION_INVALID') {
+        setPhase('invalid')
+      } else {
+        toast.error(res.error || 'অফার দাবি করা যায়নি')
+      }
     }
   }
 
@@ -665,9 +676,18 @@ export default function BillPage() {
                 <div className="flex items-start gap-2.5">
                   <MessageCircle className="mt-0.5 size-5 shrink-0 text-amber-600" />
                   <p className="text-sm font-medium leading-relaxed text-stone-700">
-                    মেসেঞ্জার খুলে নম্বর শেয়ার করুন — ছাড় সাথে সাথে বিলে যোগ হবে!
+                    নিচের বাটনে চাপ দিয়ে মেসেঞ্জার খুলুন — চ্যাটে <span className="font-bold">ফোন নম্বর পাঠালেই</span> ছাড় সাথে সাথে বিলে যোগ হবে!
                   </p>
                 </div>
+                <a
+                  href={referralLink}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="flex h-12 w-full items-center justify-center gap-2 rounded-xl bg-amber-500 text-base font-extrabold text-white shadow-md transition hover:bg-amber-600"
+                >
+                  <Send className="size-5" />
+                  📲 Messenger খুলুন
+                </a>
                 <div className="flex items-center gap-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2">
                   <span className="min-w-0 flex-1 truncate font-mono text-xs text-stone-600">
                     {referralLink}
@@ -680,15 +700,6 @@ export default function BillPage() {
                     {copied ? <Check className="size-3.5" /> : <Copy className="size-3.5" />}
                   </button>
                 </div>
-                <a
-                  href={referralLink}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="flex h-10 w-full items-center justify-center gap-2 rounded-lg border border-amber-300 text-sm font-bold text-amber-700 transition hover:bg-amber-50"
-                >
-                  <Send className="size-3.5" />
-                  আবার মেসেঞ্জার খুলুন
-                </a>
                 <p className="flex items-center justify-center gap-1.5 text-[11px] text-stone-400">
                   <Loader2 className="size-3 animate-spin" />
                   ছাড় প্রয়োগ হলে অটো-আপডেট হবে…

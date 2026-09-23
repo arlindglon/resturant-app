@@ -295,6 +295,7 @@ model ReferralToken {
   id         String    @id @default(cuid())
   token      String    @unique
   name       String
+  psid       String? // Messenger PSID captured when the ref link chat starts
   birthday   DateTime?
   phone      String?
   sessionId  String
