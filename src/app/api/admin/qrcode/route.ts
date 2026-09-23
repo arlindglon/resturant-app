@@ -60,7 +60,6 @@ export async function GET(req: NextRequest) {
   <circle cx="${W / 2}" cy="${logoImg ? 310 : 210}" r="0"/>
   <text x="${W / 2}" y="${(logoImg ? 310 : 210) + qrSize + 70}" text-anchor="middle" font-family="Arial" font-size="52" font-weight="bold" fill="#c2410c">টেবিল ${tableNumber}</text>
   <text x="${W / 2}" y="${(logoImg ? 310 : 210) + qrSize + 120}" text-anchor="middle" font-family="Arial" font-size="26" fill="#57534e">মেনু দেখতে ও অর্ডার দিতে ক্যামেরা দিয়ে স্ক্যান করুন</text>
-  <text x="${W / 2}" y="${H - 60}" text-anchor="middle" font-family="monospace" font-size="18" fill="#a8a29e">${esc(scanUrl)}</text>
 </svg>`
 
   // rasterize svg → png via qrcode's svg? We built custom svg; convert with sharp
