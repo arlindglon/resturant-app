@@ -28,6 +28,7 @@ import { Card, CardContent } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
 import { Separator } from '@/components/ui/separator'
 import { SessionExpiredScreen } from '@/components/customer/session-expired'
+import { LegalLinks } from '@/components/customer/legal-links'
 import { DeveloperCredit } from '@/components/customer/developer-credit'
 import { useSiteConfig } from '@/components/customer/site-config'
 
@@ -658,6 +659,7 @@ export default function BillPage() {
         <p className="text-center text-xs text-stone-400">
           {restaurantName} • স্ক্যান করুন, অর্ডার করুন, উপভোগ করুন
         </p>
+        <LegalLinks />
         <DeveloperCredit />
       </footer>
     </div>

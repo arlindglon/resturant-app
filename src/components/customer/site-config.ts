@@ -16,6 +16,7 @@ export interface SiteConfig {
   receiptThanks: string
   developerNote: { enabled: boolean; text: string; link: string }
   specialNoteEnabled: boolean
+  legalLinks: { terms: boolean; privacy: boolean; dataDel: boolean }
   geoFence: { enabled: boolean; lat: number; lng: number; radiusMeters: number }
 }
 

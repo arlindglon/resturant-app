@@ -3749,6 +3749,50 @@ function SettingsTab({ onAuthRequired }: TabProps) {
         </CardContent>
       </Card>
 
+      {/* ---- legal page links (terms / privacy / data-deletion) ---- */}
+      <Card className="border-stone-200">
+        <CardHeader className="pb-2">
+          <CardTitle className="text-base">📄 লিগ্যাল পেজ লিংক</CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-3">
+          <p className="rounded-lg bg-stone-100 px-3 py-2 text-xs leading-snug text-stone-600">
+            পেজগুলো সবসময় পাবলিকলি খোলা থাকে। টগল অফ করলে শুধু কাস্টমার পেজের ফুটার থেকে লিঙ্কটি
+            লুকানো যাবে — সরাসরি ঠিকানা লিখে সবসময়ই খোলা যাবে।
+          </p>
+          {[
+            {
+              key: SETTING_KEYS.TERMS_LINK_ENABLED,
+              title: '📜 শর্তাবলী (Terms & Condition)',
+              path: '/terms-and-condition',
+            },
+            {
+              key: SETTING_KEYS.PRIVACY_LINK_ENABLED,
+              title: '🔒 গোপনীয়তা নীতি (Privacy Policy)',
+              path: '/privacy-policy',
+            },
+            {
+              key: SETTING_KEYS.DATADEL_LINK_ENABLED,
+              title: '🗑️ ডেটা ডিলিট পেজ',
+              path: '/datadel-page',
+            },
+          ].map((it) => (
+            <div
+              key={it.key}
+              className="flex items-center justify-between rounded-lg border border-stone-200 bg-stone-50 p-3"
+            >
+              <div className="min-w-0 pr-3">
+                <p className="text-sm font-black text-stone-800">{it.title}</p>
+                <p className="mt-0.5 truncate font-mono text-[11px] text-amber-700">{it.path}</p>
+              </div>
+              <Switch
+                checked={form[it.key] !== 'false'}
+                onCheckedChange={(v) => set(it.key, v ? 'true' : 'false')}
+              />
+            </div>
+          ))}
+        </CardContent>
+      </Card>
+
       {/* ---- birthday ---- */}
       <Card className="border-stone-200">
         <CardHeader className="pb-2">

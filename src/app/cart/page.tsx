@@ -36,6 +36,7 @@ import { Separator } from '@/components/ui/separator'
 import { Skeleton } from '@/components/ui/skeleton'
 import { SessionExpiredScreen } from '@/components/customer/session-expired'
 import { ItemThumb } from '@/components/customer/item-thumb'
+import { LegalLinks } from '@/components/customer/legal-links'
 import { DeveloperCredit } from '@/components/customer/developer-credit'
 import { getScanGeo, useSiteConfig } from '@/components/customer/site-config'
 
@@ -315,6 +316,7 @@ export default function CartPage() {
           <p className="text-center text-xs text-stone-400">
             {restaurantName} • স্ক্যান করুন, অর্ডার করুন, উপভোগ করুন
           </p>
+          <LegalLinks />
           <DeveloperCredit />
         </footer>
       </div>
@@ -655,6 +657,7 @@ export default function CartPage() {
         <p className="text-center text-xs text-stone-400">
           {restaurantName} • স্ক্যান করুন, অর্ডার করুন, উপভোগ করুন
         </p>
+        <LegalLinks />
         <DeveloperCredit />
       </footer>
     </div>

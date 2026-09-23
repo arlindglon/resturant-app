@@ -68,6 +68,7 @@ import { Textarea } from '@/components/ui/textarea'
 import { SessionExpiredScreen } from '@/components/customer/session-expired'
 import { ItemThumb } from '@/components/customer/item-thumb'
 import { descriptionPreview, ItemDescription } from '@/components/customer/item-description'
+import { LegalLinks } from '@/components/customer/legal-links'
 import { DeveloperCredit } from '@/components/customer/developer-credit'
 import { useSiteConfig } from '@/components/customer/site-config'
 
@@ -1459,6 +1460,9 @@ export default function MenuPage() {
         <p className="text-center text-[11px] text-stone-400">
           {restaurantName} • স্ক্যান করুন, অর্ডার করুন, উপভোগ করুন
         </p>
+        <div className="mt-1">
+          <LegalLinks />
+        </div>
         <div className="mt-1">
           <DeveloperCredit />
         </div>

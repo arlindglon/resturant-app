@@ -26,6 +26,7 @@ import { toast } from 'sonner'
 import { Html5Qrcode } from 'html5-qrcode'
 
 import { api, getDeviceId, getDeviceFp } from '@/lib/client'
+import { LegalLinks } from '@/components/customer/legal-links'
 import { DeveloperCredit } from '@/components/customer/developer-credit'
 import { useSiteConfig } from '@/components/customer/site-config'
 
@@ -315,6 +316,7 @@ export default function LandingPage() {
         <p className="mx-auto max-w-3xl text-center text-[11px] text-stone-400">
           © {new Date().getFullYear()} {restaurantName} — স্বাগতম!
         </p>
+        <LegalLinks />
         <DeveloperCredit />
       </footer>
 
