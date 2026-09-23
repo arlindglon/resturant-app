@@ -15,25 +15,38 @@ export interface PageTokenTest {
   ok: boolean
   pageName: string | null
   pageId: string | null
+  pageUsername: string | null
   error: string | null
 }
 
 /** Live-check the configured META_PAGE_TOKEN against Graph /me — tells WHICH page it belongs to */
 export async function testPageToken(): Promise<PageTokenTest> {
   const token = pageToken()
-  if (!token) return { ok: false, pageName: null, pageId: null, error: 'META_PAGE_TOKEN সেট করা নেই (Vercel env)' }
+  if (!token)
+    return { ok: false, pageName: null, pageId: null, pageUsername: null, error: 'META_PAGE_TOKEN সেট করা নেই (Vercel env)' }
   try {
-    const res = await fetch(`${GRAPH}/me?fields=name,id&access_token=${encodeURIComponent(token)}`, {
+    const res = await fetch(`${GRAPH}/me?fields=name,id,username&access_token=${encodeURIComponent(token)}`, {
       signal: AbortSignal.timeout(10_000),
     })
-    const j = (await res.json()) as { name?: string; id?: string; error?: { message?: string; type?: string } }
+    const j = (await res.json()) as {
+      name?: string
+      id?: string
+      username?: string
+      error?: { message?: string; type?: string }
+    }
     if (!res.ok || j.error) {
       const msg = j.error?.message || `Graph API HTTP ${res.status}`
-      return { ok: false, pageName: null, pageId: null, error: msg }
+      return { ok: false, pageName: null, pageId: null, pageUsername: null, error: msg }
     }
-    return { ok: true, pageName: j.name || null, pageId: j.id || null, error: null }
+    return { ok: true, pageName: j.name || null, pageId: j.id || null, pageUsername: j.username || null, error: null }
   } catch (e) {
-    return { ok: false, pageName: null, pageId: null, error: e instanceof Error ? e.message : 'সংযোগ ব্যর্থ' }
+    return {
+      ok: false,
+      pageName: null,
+      pageId: null,
+      pageUsername: null,
+      error: e instanceof Error ? e.message : 'সংযোগ ব্যর্থ',
+    }
   }
 }
 

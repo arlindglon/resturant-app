@@ -229,7 +229,13 @@ interface SettingsMeta {
 }
 
 interface MessengerTestResult {
-  tokenTest: { ok: boolean; pageName: string | null; pageId: string | null; error: string | null }
+  tokenTest: {
+    ok: boolean
+    pageName: string | null
+    pageId: string | null
+    pageUsername: string | null
+    error: string | null
+  }
   env: { pageToken: boolean; pageId: boolean; verifyToken: boolean; appSecret: boolean }
   lastWebhookAt: string
   lastWebhookInfo: string
@@ -4198,10 +4204,30 @@ function SettingsTab({ onAuthRequired }: TabProps) {
                 }`}
               >
                 {metaTest.tokenTest.ok ? (
+                  <>
                   <p className="font-bold">
                     ✅ টোকেন সঠিক — এটি এই পেজের: <span className="underline">{metaTest.tokenTest.pageName}</span>
                     {metaTest.tokenTest.pageId ? ` (Page ID: ${metaTest.tokenTest.pageId})` : ''}
                   </p>
+                  {metaTest.tokenTest.pageUsername ? (
+                    pageUserClean.toLowerCase() === metaTest.tokenTest.pageUsername.toLowerCase() ? (
+                      <p className="mt-1">পেজ username মিলে গেছে ✅ (m.me/{metaTest.tokenTest.pageUsername})</p>
+                    ) : (
+                      <p className="mt-1 font-bold">
+                        ⚠️ কিন্তু টোকেন যে পেজের, তার username:{' '}
+                        <span className="underline">m.me/{metaTest.tokenTest.pageUsername}</span> — সেটিংসে লেখা আছে “
+                        {pageUserClean || 'ফাঁকা'}”। মিলছে না! উপরের ইউজারনেম ফিল্ডে{' '}
+                        <span className="font-mono">{metaTest.tokenTest.pageUsername}</span> লিখুন, নাহলে কাস্টমারের
+                        Messenger-এ পেজটি পাবে না।
+                      </p>
+                    )
+                  ) : (
+                    <p className="mt-1">
+                      টোকেনের পেজে কোনো username সেট নেই — m.me/username লিঙ্ক কাজ করবে না। পেজ সেটিংসে username বানান,
+                      অথবা ইউজারনেম ফিল্ডে পেজ ID ({metaTest.tokenTest.pageId}) লিখুন।
+                    </p>
+                  )}
+                  </>
                 ) : (
                   <p className="font-bold">❌ টোকেন কাজ করছে না: {metaTest.tokenTest.error}</p>
                 )}
