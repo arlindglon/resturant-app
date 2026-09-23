@@ -1,11 +1,21 @@
 // GET/PUT /api/admin/settings — full settings incl. session_duration_minutes
 import { NextRequest } from 'next/server'
 import { ok, fail } from '@/lib/api'
-import { getAllSettings, setSettings } from '@/lib/settings'
+import { getAllSettings, getSetting, setSettings } from '@/lib/settings'
 import { SETTING_KEYS } from '@/lib/constants'
 import { requirePerm } from '@/lib/staff-auth'
+import { messengerConfigured } from '@/lib/messenger'
 
-export async function GET() {
+/** Public origin of this deployment (Vercel or local) — for webhook URL display */
+function baseUrl(req: NextRequest): string {
+  const custom = process.env.PUBLIC_BASE_URL
+  if (custom) return custom.replace(/\/+$/, '')
+  const host = req.headers.get('x-forwarded-host') || req.headers.get('host') || 'localhost:3000'
+  const proto = req.headers.get('x-forwarded-proto') || (host.startsWith('localhost') ? 'http' : 'https')
+  return `${proto}://${host}`
+}
+
+export async function GET(req: NextRequest) {
   const denied = await requirePerm('settings')
   if (denied) return denied
   const settings = await getAllSettings()
@@ -13,7 +23,17 @@ export async function GET() {
     settings,
     meta: {
       sessionDurationHint: 'QR স্ক্যানে তৈরি HMAC সেশন কুকির মেয়াদ (মিনিট)। নতুন স্ক্যান থেকে কার্যকর হবে।',
-      messengerConfigured: Boolean(process.env.META_PAGE_TOKEN && process.env.META_PAGE_ID),
+      messengerConfigured: messengerConfigured(),
+      metaEnv: {
+        pageToken: Boolean(process.env.META_PAGE_TOKEN),
+        pageId: Boolean(process.env.META_PAGE_ID),
+        verifyToken: Boolean(process.env.META_VERIFY_TOKEN),
+        appSecret: Boolean(process.env.META_APP_SECRET),
+      },
+      webhookUrl: `${baseUrl(req)}/api/webhook/messenger`,
+      lastWebhookAt: await getSetting('messenger_last_event_at'),
+      lastWebhookInfo: await getSetting('messenger_last_event_info'),
+      lastVerifyAt: await getSetting('messenger_last_verify_at'),
     },
   })
 }

@@ -6,7 +6,35 @@ function pageToken(): string {
 }
 
 export function messengerConfigured(): boolean {
-  return Boolean(process.env.META_PAGE_ID && process.env.META_PAGE_TOKEN)
+  // Only the Page Token is functionally required: Graph /me/messages resolves
+  // the page from the token itself. META_PAGE_ID is optional (informational).
+  return Boolean(process.env.META_PAGE_TOKEN)
+}
+
+export interface PageTokenTest {
+  ok: boolean
+  pageName: string | null
+  pageId: string | null
+  error: string | null
+}
+
+/** Live-check the configured META_PAGE_TOKEN against Graph /me — tells WHICH page it belongs to */
+export async function testPageToken(): Promise<PageTokenTest> {
+  const token = pageToken()
+  if (!token) return { ok: false, pageName: null, pageId: null, error: 'META_PAGE_TOKEN সেট করা নেই (Vercel env)' }
+  try {
+    const res = await fetch(`${GRAPH}/me?fields=name,id&access_token=${encodeURIComponent(token)}`, {
+      signal: AbortSignal.timeout(10_000),
+    })
+    const j = (await res.json()) as { name?: string; id?: string; error?: { message?: string; type?: string } }
+    if (!res.ok || j.error) {
+      const msg = j.error?.message || `Graph API HTTP ${res.status}`
+      return { ok: false, pageName: null, pageId: null, error: msg }
+    }
+    return { ok: true, pageName: j.name || null, pageId: j.id || null, error: null }
+  } catch (e) {
+    return { ok: false, pageName: null, pageId: null, error: e instanceof Error ? e.message : 'সংযোগ ব্যর্থ' }
+  }
 }
 
 /** Fetch first/last name from PSID */

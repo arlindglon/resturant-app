@@ -11,6 +11,51 @@ import { db } from '@/lib/db'
 import { fail, ok } from '@/lib/api'
 import { fetchProfileName, askPhoneQuickReply, sendReceipt } from '@/lib/messenger'
 import { applyBirthdayDiscount } from '@/lib/birthday'
+import { setSettings } from '@/lib/settings'
+
+
+// ── diagnostics: record when Meta last called us (admin panel shows this) ──
+const KEY_LAST_EVENT = 'messenger_last_event_at'
+const KEY_LAST_INFO = 'messenger_last_event_info'
+const KEY_LAST_VERIFY = 'messenger_last_verify_at'
+
+async function recordVerify() {
+  try {
+    await setSettings({ [KEY_LAST_VERIFY]: new Date().toISOString() })
+  } catch (e) {
+    console.error('[webhook:diag]', e)
+  }
+}
+
+/** throttle: skip DB write when an event for the same info was recorded <15s ago */
+let lastDiagWrite = 0
+let lastDiagInfo = ''
+async function recordEvent(info: string) {
+  const now = Date.now()
+  if (info === lastDiagInfo && now - lastDiagWrite < 15_000) return
+  lastDiagWrite = now
+  lastDiagInfo = info
+  try {
+    await setSettings({ [KEY_LAST_EVENT]: new Date().toISOString(), [KEY_LAST_INFO]: info })
+  } catch (e) {
+    console.error('[webhook:diag]', e)
+  }
+}
+
+function summarizeEvents(body: {
+  entry?: { messaging?: { referral?: unknown; postback?: unknown; message?: { quick_reply?: unknown; text?: string; attachments?: unknown[] } }[] }[]
+}): string {
+  const kinds = new Set<string>()
+  for (const entry of body.entry || []) {
+    for (const ev of entry.messaging || []) {
+      if (ev.referral) kinds.add('referral(m.me লিঙ্ক)')
+      else if (ev.postback) kinds.add('postback')
+      else if (ev.message?.quick_reply) kinds.add('quick_reply(ফোন শেয়ার)')
+      else if (ev.message) kinds.add('message(সাধারণ টেক্সট)')
+    }
+  }
+  return kinds.size ? [...kinds].join(', ') : 'unknown'
+}
 
 export async function GET(req: NextRequest) {
   const params = req.nextUrl.searchParams
@@ -18,6 +63,8 @@ export async function GET(req: NextRequest) {
   const token = params.get('hub.verify_token')
   const challenge = params.get('hub.challenge')
   if (mode === 'subscribe' && token === process.env.META_VERIFY_TOKEN) {
+    // successful handshake = the webhook was just saved in the Meta App dashboard
+    await recordVerify()
     return new Response(challenge, { status: 200 })
   }
   return fail('Verification failed', 403)
@@ -60,6 +107,9 @@ export async function POST(req: NextRequest) {
     }
     const body = JSON.parse(raw)
     if (body.object !== 'page') return ok({ received: true })
+
+    // diagnostics: any accepted POST proves Meta → our webhook connection works
+    recordEvent(summarizeEvents(body)).catch(() => {})
 
     for (const entry of body.entry as WebhookEntry[]) {
       for (const event of entry.messaging || []) {

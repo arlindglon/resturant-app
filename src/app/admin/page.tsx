@@ -60,6 +60,7 @@ import {
   Bell,
   BellOff,
   Cake,
+  CheckCircle2,
   Clock,
   Flame,
   ImagePlus,
@@ -86,6 +87,7 @@ import {
   UtensilsCrossed,
   Webhook,
   X,
+  XCircle,
 } from 'lucide-react'
 
 const SCROLL_CSS =
@@ -219,6 +221,53 @@ interface ImgbbKeyRow {
 interface SettingsMeta {
   sessionDurationHint: string
   messengerConfigured: boolean
+  metaEnv: { pageToken: boolean; pageId: boolean; verifyToken: boolean; appSecret: boolean }
+  webhookUrl: string
+  lastWebhookAt: string
+  lastWebhookInfo: string
+  lastVerifyAt: string
+}
+
+interface MessengerTestResult {
+  tokenTest: { ok: boolean; pageName: string | null; pageId: string | null; error: string | null }
+  env: { pageToken: boolean; pageId: boolean; verifyToken: boolean; appSecret: boolean }
+  lastWebhookAt: string
+  lastWebhookInfo: string
+  lastVerifyAt: string
+}
+
+/** Bengali relative time for webhook diagnostics */
+function bnAgo(iso: string | null | undefined): string {
+  if (!iso) return ''
+  const ms = Date.now() - new Date(iso).getTime()
+  if (isNaN(ms) || ms < 0) return ''
+  const min = Math.floor(ms / 60_000)
+  if (min < 1) return 'এইমাত্র'
+  if (min < 60) return `${toBn(String(min))} মিনিট আগে`
+  const hr = Math.floor(min / 60)
+  if (hr < 24) return `${toBn(String(hr))} ঘণ্টা আগে`
+  return `${toBn(String(Math.floor(hr / 24)))} দিন আগে`
+}
+
+/** One checklist row of the Messenger diagnostics card */
+function MetaCheckRow({ label, code, ok: okFlag, note }: { label: string; code: string; ok: boolean; note?: string }) {
+  return (
+    <div className="flex items-start gap-2.5">
+      <span
+        className={`mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-full ${
+          okFlag ? 'bg-emerald-100 text-emerald-600' : 'bg-red-100 text-red-500'
+        }`}
+      >
+        {okFlag ? <CheckCircle2 className="h-3.5 w-3.5" /> : <XCircle className="h-3.5 w-3.5" />}
+      </span>
+      <div className="min-w-0 flex-1">
+        <p className="text-sm font-bold leading-snug text-stone-800">
+          {label} <span className="font-mono text-[11px] font-normal text-stone-400">{code}</span>
+        </p>
+        {note && <p className="text-xs leading-snug text-stone-500">{note}</p>}
+      </div>
+    </div>
+  )
 }
 
 interface TabProps {
@@ -3513,6 +3562,8 @@ function SettingsTab({ onAuthRequired }: TabProps) {
   const [saving, setSaving] = useState(false)
   const [uploadingLogo, setUploadingLogo] = useState(false)
   const [runningCron, setRunningCron] = useState(false)
+  const [testingMeta, setTestingMeta] = useState(false)
+  const [metaTest, setMetaTest] = useState<MessengerTestResult | null>(null)
   const logoFileRef = useRef<HTMLInputElement>(null)
 
   const load = useCallback(async () => {
@@ -3541,6 +3592,15 @@ function SettingsTab({ onAuthRequired }: TabProps) {
   // log-ish slider mapping 20→5000 m
   const radiusToSlider = (r: number) => Math.round((Math.log(r / 20) / Math.log(5000 / 20)) * 100)
   const sliderToRadius = (t: number) => Math.round(20 * Math.pow(5000 / 20, t / 100))
+
+  // m.me link preview (client-side sanitize mirrors the referral API)
+  const pageUserClean = (form?.[SETTING_KEYS.MESSENGER_PAGE_USERNAME] ?? '')
+    .trim()
+    .replace(/^https?:\/\//i, '')
+    .replace(/^(www\.)?(m\.me|facebook\.com|fb\.com|fb\.me)\//i, '')
+    .replace(/^@/, '')
+    .replace(/[/?#].*$/, '')
+    .trim()
 
   const pinGeo = (lat: number, lng: number) => {
     set(SETTING_KEYS.GEO_LAT, lat.toFixed(6))
@@ -3620,6 +3680,27 @@ function SettingsTab({ onAuthRequired }: TabProps) {
     if (!res.ok) return toast.error(res.error || 'জব চালানো যায়নি')
     if (res.data?.skipped) toast.warning(res.data.message)
     else toast.success(res.data?.message || 'জব সম্পন্ন')
+  }
+
+  const runMessengerTest = async () => {
+    setTestingMeta(true)
+    const res = await api.post<MessengerTestResult>('/api/admin/messenger-test')
+    setTestingMeta(false)
+    if (!res.ok || !res.data) return toast.error(res.error || 'টেস্ট চালানো যায়নি')
+    setMetaTest(res.data)
+    setMeta((prev) =>
+      prev
+        ? {
+            ...prev,
+            metaEnv: res.data!.env,
+            lastWebhookAt: res.data!.lastWebhookAt,
+            lastWebhookInfo: res.data!.lastWebhookInfo,
+            lastVerifyAt: res.data!.lastVerifyAt,
+          }
+        : prev
+    )
+    if (res.data.tokenTest.ok) toast.success(`টোকেন ঠিক আছে — পেজ: ${res.data.tokenTest.pageName}`)
+    else toast.error('টোকেন কাজ করছে না — নিচে বিস্তারিত দেখুন')
   }
 
   if (err) return <LoadError msg={err} onRetry={load} />
@@ -3832,6 +3913,20 @@ function SettingsTab({ onAuthRequired }: TabProps) {
               facebook.com/<span className="font-bold">MyTeaPage</span> হলে শুধু <span className="font-bold">MyTeaPage</span> লিখুন।
               পেজ সেটিংস → Page Setup/Page Info → Username এ পাবেন। ভুল হলে কাস্টমারের মেসেঞ্জার লিংক কাজ করবে না।
             </p>
+            {pageUserClean && (
+              <p className="max-w-md text-xs leading-snug text-stone-500">
+                কাস্টমারের খোলা লিঙ্ক হবে:{' '}
+                <a
+                  className="font-bold text-amber-700 underline"
+                  href={`https://m.me/${pageUserClean}`}
+                  target="_blank"
+                  rel="noreferrer"
+                >
+                  https://m.me/{pageUserClean}
+                </a>{' '}
+                — লিঙ্কটি নিজে খুলে যাচাই করুন, পেজটি ঠিকঠাক আসে কিনা।
+              </p>
+            )}
           </div>
         </CardContent>
       </Card>
@@ -3910,6 +4005,22 @@ function SettingsTab({ onAuthRequired }: TabProps) {
               onCheckedChange={(v) => set(SETTING_KEYS.MESSENGER_AUTO_REPLY_ENABLED, v ? 'true' : 'false')}
             />
           </div>
+          {form[SETTING_KEYS.MESSENGER_AUTO_REPLY_ENABLED] !== 'false' &&
+            (!meta.metaEnv?.pageToken || !meta.lastWebhookAt) && (
+              <div className="rounded-lg border border-red-200 bg-red-50 p-3">
+                <p className="text-xs font-black leading-snug text-red-700">
+                  ⚠️ মেসেঞ্জার অফার চালু আছে, কিন্তু Meta সংযোগ এখনো সম্পূর্ণ হয়নি
+                </p>
+                <p className="mt-1 text-xs leading-snug text-red-600">
+                  {!meta.metaEnv?.pageToken
+                    ? 'Vercel env-এ META_PAGE_TOKEN নেই — কাস্টমার চ্যাট করলেও কোনো উত্তর বা ছাড় পাবে না।'
+                    : 'Facebook থেকে এখনো কোনো ওয়েবহুক ইভেন্ট আসেনি — Meta অ্যাপে webhook + টোকেন সেটআপ বাকি। সেটআপ শেষ না হওয়া পর্যন্ত কাস্টমার চ্যাট করলেও ছাড় বসবে না। নিচের “মেসেঞ্জার ইন্টিগ্রেশন” কার্ডে ধাপে ধাপে গাইড আছে।'}
+                </p>
+                <p className="mt-1 text-xs leading-snug text-red-600">
+                  💡 সহজ সমাধান: সুইচটি বন্ধ করে দিন — তাহলে কাস্টমার মেসেঞ্জার ছাড়াই বিল পেজে সরাসরি ছাড় দাবি করতে পারবে (সাথে সাথেই কাজ করে)।
+                </p>
+              </div>
+            )}
           <div className="rounded-lg border border-stone-200 bg-stone-50 p-3">
             <div className="flex items-center justify-between">
               <div className="min-w-0 pr-3">
@@ -4018,12 +4129,140 @@ function SettingsTab({ onAuthRequired }: TabProps) {
         <CardContent className="space-y-4">
           <div
             className={`flex items-center gap-2 rounded-lg px-3 py-2.5 text-sm font-bold ${
-              meta.messengerConfigured ? 'bg-emerald-50 text-emerald-700' : 'bg-amber-50 text-amber-800'
+              meta.messengerConfigured && meta.lastWebhookAt
+                ? 'bg-emerald-50 text-emerald-700'
+                : 'bg-amber-50 text-amber-800'
             }`}
           >
-            <span className={`h-2.5 w-2.5 rounded-full ${meta.messengerConfigured ? 'bg-emerald-500' : 'animate-pulse bg-amber-500'}`} />
-            {meta.messengerConfigured ? 'ওয়েবহুক কনফিগারড' : 'META_PAGE_TOKEN সেট করা হয়নি (Vercel env)'}
+            <span
+              className={`h-2.5 w-2.5 rounded-full ${
+                meta.messengerConfigured && meta.lastWebhookAt ? 'bg-emerald-500' : 'animate-pulse bg-amber-500'
+              }`}
+            />
+            {meta.messengerConfigured && meta.lastWebhookAt
+              ? 'Meta সংযোগ সম্পূর্ণ — চ্যাটে ছাড় কাজ করছে ✅'
+              : meta.messengerConfigured
+                ? 'টোকেন আছে, কিন্তু Facebook অ্যাপে webhook সেটআপ বাকি'
+                : 'META_PAGE_TOKEN সেট করা হয়নি (Vercel env)'}
           </div>
+
+          {/* checklist: what is configured vs missing */}
+          <div className="space-y-3 rounded-lg border border-stone-200 p-3">
+            <p className="text-[11px] font-black uppercase tracking-wide text-stone-400">কনফিগারেশন চেকলিস্ট</p>
+            <MetaCheckRow
+              label="পেজ টোকেন"
+              code="META_PAGE_TOKEN (Vercel env)"
+              ok={!!meta.metaEnv?.pageToken}
+              note="চ্যাটে রিপ্লাই, ফোন-শেয়ার ও ডিজিটাল রসিদ পাঠাতে এটি আবশ্যক।"
+            />
+            <MetaCheckRow
+              label="ভেরিফাই টোকেন"
+              code="META_VERIFY_TOKEN (Vercel env)"
+              ok={!!meta.metaEnv?.verifyToken}
+              note="এটি ছাড়া Meta অ্যাপ ড্যাশবোর্ডে webhook সেভ/ভেরিফাই করা যাবে না।"
+            />
+            <MetaCheckRow
+              label="অ্যাপ সিক্রেট (ঐচ্ছিক)"
+              code="META_APP_SECRET (Vercel env)"
+              ok={!!meta.metaEnv?.appSecret}
+              note="নিরাপত্তার জন্য — থাকলে ভুয়া/জাল ওয়েবহুক ইভেন্টে ছাড় দেওয়া অসম্ভব হয়।"
+            />
+            <MetaCheckRow
+              label="ওয়েবহুক ইভেন্ট"
+              code="Meta → আমাদের সার্ভার"
+              ok={!!meta.lastWebhookAt}
+              note={
+                meta.lastWebhookAt
+                  ? `শেষ ইভেন্ট: ${bnAgo(meta.lastWebhookAt)} (${meta.lastWebhookInfo || 'unknown'})`
+                  : 'Facebook থেকে এখনো একটি ইভেন্টও আসেনি — অর্থাৎ Meta অ্যাপে webhook কনফিগার হয়নি বা সাবস্ক্রিপশন নেই।'
+              }
+            />
+          </div>
+
+          {/* live test */}
+          <div className="space-y-2">
+            <Button
+              onClick={runMessengerTest}
+              disabled={testingMeta}
+              variant="outline"
+              className="border-amber-300 font-black text-amber-700 hover:bg-amber-50"
+            >
+              {testingMeta ? <Loader2 className="h-4 w-4 animate-spin" /> : '🔍'} টোকেন ও সংযোগ টেস্ট করুন
+            </Button>
+            {metaTest && (
+              <div
+                className={`rounded-lg border p-3 text-xs leading-snug ${
+                  metaTest.tokenTest.ok
+                    ? 'border-emerald-200 bg-emerald-50 text-emerald-800'
+                    : 'border-red-200 bg-red-50 text-red-700'
+                }`}
+              >
+                {metaTest.tokenTest.ok ? (
+                  <p className="font-bold">
+                    ✅ টোকেন সঠিক — এটি এই পেজের: <span className="underline">{metaTest.tokenTest.pageName}</span>
+                    {metaTest.tokenTest.pageId ? ` (Page ID: ${metaTest.tokenTest.pageId})` : ''}
+                  </p>
+                ) : (
+                  <p className="font-bold">❌ টোকেন কাজ করছে না: {metaTest.tokenTest.error}</p>
+                )}
+                <p className="mt-1">
+                  ওয়েবহুক ইভেন্ট:{' '}
+                  {metaTest.lastWebhookAt
+                    ? `${bnAgo(metaTest.lastWebhookAt)} (${metaTest.lastWebhookInfo})`
+                    : 'এখনো কোনো ইভেন্ট আসেনি ❌'}
+                </p>
+                {metaTest.lastVerifyAt && <p>Meta webhook ভেরিফিকেশন: {bnAgo(metaTest.lastVerifyAt)} সফল হয়েছিল ✅</p>}
+              </div>
+            )}
+          </div>
+
+          {/* step-by-step setup guide */}
+          <details className="rounded-lg border border-stone-200 bg-stone-50 p-3">
+            <summary className="cursor-pointer text-sm font-black text-stone-800">
+              📖 মেসেঞ্জার চালু করতে ধাপে ধাপে সেটআপ গাইড (Meta + Vercel)
+            </summary>
+            <ol className="mt-3 list-decimal space-y-2.5 pl-4 text-xs leading-relaxed text-stone-700">
+              <li>
+                <b>Facebook অ্যাপ তৈরি:</b> developers.facebook.com → My Apps → Create App → টাইপ <b>Business</b> → Create।
+              </li>
+              <li>
+                <b>Messenger যোগ:</b> অ্যাপ ড্যাশবোর্ডে Add Product → <b>Messenger</b> → Set up।
+              </li>
+              <li>
+                <b>পেজ টোকেন:</b> Messenger Settings → Access Tokens → আপনার পেজ সিলেক্ট → Generate Token → টোকেন কপি করে
+                Vercel → Settings → Environment Variables-এ <b>META_PAGE_TOKEN</b> নামে যোগ করুন (Production + Preview দুটোতেই)।
+              </li>
+              <li>
+                <b>ভেরিফাই টোকেন:</b> নিজের পছন্দের একটি গোপন শব্দ বানান (যেমন: <span className="font-mono">teaTreatVerify2026</span>) →
+                Vercel-এ <b>META_VERIFY_TOKEN</b> নামে যোগ করুন। (ঐচ্ছিক) App Settings → Basic → App Secret কপি করে{' '}
+                <b>META_APP_SECRET</b> নামে যোগ করুন।
+              </li>
+              <li>
+                <b>Webhook সংযোগ:</b> Messenger Settings → Webhooks → Configure Webhooks — Callback URL:{' '}
+                <span className="font-mono font-bold">{meta.webhookUrl}</span>, Verify Token: ধাপ ৪-এর একই শব্দ →{' '}
+                <b>Verify and Save</b>। সফল হলে উপরের চেকলিস্ট আপডেট হবে।
+              </li>
+              <li>
+                <b>ফিল্ড সাবস্ক্রাইব:</b> একই Webhooks পেজে আপনার <b>পেজ</b> সিলেক্ট করে Subscribe করুন:{' '}
+                <span className="font-mono">messages</span>, <span className="font-mono">messaging_postbacks</span>,{' '}
+                <span className="font-mono">referral</span> — এগুলো ছাড়া চ্যাটের ইভেন্ট আসবেই না।
+              </li>
+              <li>
+                <b>Redeploy:</b> Vercel → Deployments → সর্বশেষ ডিপ্লয়ের ⋯ মেনু → <b>Redeploy</b> (নতুন env ভেরিয়েবল কার্যকর হবে)।
+              </li>
+              <li>
+                <b>টেস্ট:</b> বিল পেজে গিয়ে “Claim on Messenger” → চ্যাট খুলে কিছু লিখুন/ফোন নম্বর শেয়ার করুন → ১ মিনিটের মধ্যে
+                এই পেজে এসে “🔍 টোকেন ও সংযোগ টেস্ট করুন” চাপুন — ওয়েবহুক ইভেন্ট সবুজ হলে সব ঠিক!
+              </li>
+            </ol>
+            <p className="mt-3 rounded-lg bg-white p-2.5 text-xs leading-snug text-stone-600">
+              ⚠️ মনে রাখুন: সেটিংসের <b>“m.me/ পেজ ইউজারনেম”</b> আপনার পেজের আসল username হতে হবে (পেজ সেটিংস → Page
+              Setup/Page Info → Username)। ভুল হলে কাস্টমারের Messenger-এ পেজটিই খুঁজে পাবে না।
+              <br />
+              💡 Meta সেটআপ করতে না চাইলে “💌 মেসেঞ্জার অফার” সুইচ বন্ধ রাখুন — কাস্টমার বিল পেজেই সরাসরি ছাড় দাবি করতে পারবে,
+              কোনো সেটআপ ছাড়াই।
+            </p>
+          </details>
 
           <div className="rounded-lg border border-pink-200 bg-pink-50/60 p-4">
             <p className="mb-2 flex items-center gap-2 text-sm font-black text-stone-800">
