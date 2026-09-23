@@ -1,6 +1,12 @@
 // GET /api/admin/qrcode?tableNumber=N — print-ready QR PNG (logo + table number)
 // QR URL auto-matches the current deployment (proxy-aware): NO hardcoded localhost.
+// Bengali text needs a Bengali-capable font: Vercel's runtime ships NONE, so
+// we bundle Noto Sans Bengali (assets/fonts) and point fontconfig at it BEFORE
+// sharp/libvips initializes fontconfig — otherwise every Bangla letter renders
+// as □ tofu boxes on the printed card.
 import { NextRequest } from 'next/server'
+import { writeFileSync } from 'node:fs'
+import path from 'node:path'
 import QRCode from 'qrcode'
 import { fail, isAdmin } from '@/lib/api'
 import { db } from '@/lib/db'
@@ -8,6 +14,29 @@ import { getSetting } from '@/lib/settings'
 import { SETTING_KEYS } from '@/lib/constants'
 import { getPublicOrigin } from '@/lib/origin'
 import { requirePerm } from '@/lib/staff-auth'
+
+function ensureBundledBengaliFonts() {
+  if (process.env.FONTCONFIG_FILE) return
+  try {
+    const fontsDir = path.join(process.cwd(), 'assets', 'fonts')
+    const conf = [
+      '<?xml version="1.0"?>',
+      '<!DOCTYPE fontconfig SYSTEM "fonts.dtd">',
+      '<fontconfig>',
+      `  <dir>${fontsDir}</dir>`,
+      '  <include ignore_missing="yes">/etc/fonts/fonts.conf</include>',
+      '  <cachedir>/tmp/fontconfig-cache</cachedir>',
+      '</fontconfig>',
+    ].join('\n')
+    writeFileSync('/tmp/qrcode-fonts.conf', conf)
+    process.env.FONTCONFIG_FILE = '/tmp/qrcode-fonts.conf'
+  } catch {
+    /* fall back to system fonts (local dev always has some) */
+  }
+}
+ensureBundledBengaliFonts()
+
+const FONT = 'Noto Sans Bengali'
 
 export async function GET(req: NextRequest) {
   const denied = await requirePerm('settings')
@@ -49,7 +78,7 @@ export async function GET(req: NextRequest) {
   const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${W}" height="${H}">
   <rect width="${W}" height="${H}" fill="#ffffff" rx="24"/>
   <rect x="8" y="8" width="${W - 16}" height="${H - 16}" fill="none" stroke="#c2410c" stroke-width="6" rx="20"/>
-  <text x="${W / 2}" y="100" text-anchor="middle" font-family="Georgia, serif" font-size="44" font-weight="bold" fill="#1a1a2e">${esc(restaurantName)}</text>
+  <text x="${W / 2}" y="100" text-anchor="middle" font-family="${FONT}" font-size="44" font-weight="bold" fill="#1a1a2e">${esc(restaurantName)}</text>
   <line x1="80" y1="130" x2="${W - 80}" y2="130" stroke="#e7e5e4" stroke-width="3"/>
   ${
     logoImg
@@ -58,8 +87,8 @@ export async function GET(req: NextRequest) {
   }
   <image x="${W / 2 - qrSize / 2}" y="${logoImg ? 310 : 210}" width="${qrSize}" height="${qrSize}" href="${qrDataUrl}"/>
   <circle cx="${W / 2}" cy="${logoImg ? 310 : 210}" r="0"/>
-  <text x="${W / 2}" y="${(logoImg ? 310 : 210) + qrSize + 70}" text-anchor="middle" font-family="Arial" font-size="52" font-weight="bold" fill="#c2410c">টেবিল ${tableNumber}</text>
-  <text x="${W / 2}" y="${(logoImg ? 310 : 210) + qrSize + 120}" text-anchor="middle" font-family="Arial" font-size="26" fill="#57534e">মেনু দেখতে ও অর্ডার দিতে ক্যামেরা দিয়ে স্ক্যান করুন</text>
+  <text x="${W / 2}" y="${(logoImg ? 310 : 210) + qrSize + 70}" text-anchor="middle" font-family="${FONT}" font-size="52" font-weight="bold" fill="#c2410c">টেবিল ${tableNumber}</text>
+  <text x="${W / 2}" y="${(logoImg ? 310 : 210) + qrSize + 120}" text-anchor="middle" font-family="${FONT}" font-size="26" fill="#57534e">মেনু দেখতে ও অর্ডার দিতে ক্যামেরা দিয়ে স্ক্যান করুন</text>
 </svg>`
 
   // rasterize svg → png via qrcode's svg? We built custom svg; convert with sharp
