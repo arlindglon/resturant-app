@@ -193,6 +193,19 @@ export default function BillPage() {
     return () => clearInterval(t)
   }, [phase])
 
+  // poll until the discount shows up in the bill (applied via claim)
+  function startAppliedPoll() {
+    stopPolling()
+    pollRef.current = setInterval(async () => {
+      const b = await api.get<BillData>('/api/bill')
+      if (b.ok && b.data && b.data.summary.birthdayDiscount > 0) {
+        stopPolling()
+        setBill(b.data)
+        toast.success('🎉 ছাড় প্রয়োগ হয়েছে!')
+      }
+    }, 5000)
+  }
+
   async function callStaff() {
     setStaffBusy(true)
     const res = await api.post('/api/waiter', { type: 'BILL' })
@@ -220,14 +233,37 @@ export default function BillPage() {
       return
     }
 
-    setClaiming(true)
-    const res = await api.post<ReferralResponse>('/api/birthday/referral', {
+    const payload = {
       name: name.trim(),
       birthday,
       ...(selectedOccasionId ? { occasionId: selectedOccasionId } : {}),
       deviceId: getDeviceId(),
       deviceFp: getDeviceFp(),
-    })
+    }
+
+    // ── messenger OFF → instant direct claim (discount applied right away) ──
+    if (!offer.enabled) {
+      setClaiming(true)
+      const res = await api.post<{ applied: boolean; message: string }>('/api/birthday/direct-claim', payload)
+      setClaiming(false)
+
+      if (res.ok && res.data) {
+        toast.success(res.data.message || '🎉 ছাড় প্রয়োগ হয়েছে!')
+        // refresh immediately (the 5s poll below is just a safety net)
+        const b = await api.get<BillData>('/api/bill')
+        if (b.ok && b.data) setBill(b.data)
+        startAppliedPoll()
+      } else if (res.code === 'SESSION_INVALID') {
+        setPhase('invalid')
+      } else {
+        toast.error(res.error || 'অফার দাবি করা যায়নি')
+      }
+      return
+    }
+
+    // ── messenger ON → referral link flow (claim via m.me chat) ──
+    setClaiming(true)
+    const res = await api.post<ReferralResponse>('/api/birthday/referral', payload)
     setClaiming(false)
 
     if (res.ok && res.data) {
@@ -236,15 +272,7 @@ export default function BillPage() {
       toast.success('মেসেঞ্জার লিংক তৈরি হয়েছে!')
 
       // poll the bill every 5s — once the webhook applies the discount we celebrate
-      stopPolling()
-      pollRef.current = setInterval(async () => {
-        const b = await api.get<BillData>('/api/bill')
-        if (b.ok && b.data && b.data.summary.birthdayDiscount > 0) {
-          stopPolling()
-          setBill(b.data)
-          toast.success('🎂 জন্মদিনের ছাড় প্রয়োগ হয়েছে!')
-        }
-      }, 5000)
+      startAppliedPoll()
     } else if (res.code === 'SESSION_INVALID') {
       setPhase('invalid')
     } else {
@@ -304,7 +332,8 @@ export default function BillPage() {
   const paid = bill.payment.billPaid
   const occasions = bill.occasions ?? []
   const selectedOccasion = occasions.find((o) => o.id === selectedOccasionId) ?? null
-  const canClaim = selectedOccasion ? selectedOccasion.eligible : offer.eligible
+  const canClaim =
+    !offer.deviceAlreadyClaimed && (selectedOccasion ? selectedOccasion.eligible : offer.eligible)
 
   /* ---- main render ---- */
 
@@ -474,7 +503,8 @@ export default function BillPage() {
           </Button>
         )}
 
-        {/* ── birthday / occasion CRM offer (messenger master switch → offer.enabled) ── */}
+        {/* ── occasion / birthday CRM offer (shows whenever offers exist & not claimed —
+            messenger switch only decides HOW the claim happens: m.me chat vs direct) ── */}
         {offer.alreadyClaimed && (
           <div className="flex items-center gap-2 rounded-xl border border-green-200 bg-green-50 p-3.5">
             <BadgeCheck className="size-5 shrink-0 text-green-600" />
@@ -484,21 +514,33 @@ export default function BillPage() {
           </div>
         )}
 
-        {offer.enabled && !offer.alreadyClaimed && (offer.eligible || occasions.length > 0) && (
+        {!offer.alreadyClaimed && (offer.eligible || occasions.length > 0) && (
           <div className="overflow-hidden rounded-2xl bg-gradient-to-br from-amber-500 to-orange-600 p-5 shadow-lg shadow-amber-200/60">
             <div className="flex items-start gap-3">
               <span className="flex size-11 shrink-0 items-center justify-center rounded-full bg-white/20 ring-1 ring-white/30">
                 <CalendarHeart className="size-6 text-white" />
               </span>
               <div className="min-w-0 flex-1">
-                <h2 className="text-lg font-extrabold text-white">🎂 জন্মদিনের বিশেষ অফার!</h2>
-                <p className="mt-1 text-sm leading-relaxed text-amber-50">
-                  আপনার বা পরিবারের জন্মদিন যোগ করলেই এই বিলে এখনই{' '}
-                  <span className="font-extrabold text-white">{taka(offer.amount)} ইনস্ট্যান্ট ছাড়!</span>
-                </p>
-                <p className="mt-0.5 text-xs font-medium text-amber-100">
-                  (ন্যূনতম বিল {taka(offer.minBill)})
-                </p>
+                {occasions.length > 0 ? (
+                  <>
+                    <h2 className="text-lg font-extrabold text-white">🎉 আপনার জন্য বিশেষ অফার!</h2>
+                    <p className="mt-1 text-sm leading-relaxed text-amber-50">
+                      নিচ থেকে অফার বেছে নিয়ে নাম ও তারিখ দিন —{' '}
+                      <span className="font-extrabold text-white">ছাড় এই বিলে যোগ হবে!</span>
+                    </p>
+                  </>
+                ) : (
+                  <>
+                    <h2 className="text-lg font-extrabold text-white">🎂 জন্মদিনের বিশেষ অফার!</h2>
+                    <p className="mt-1 text-sm leading-relaxed text-amber-50">
+                      আপনার বা পরিবারের জন্মদিন যোগ করলেই এই বিলে এখনই{' '}
+                      <span className="font-extrabold text-white">{taka(offer.amount)} ইনস্ট্যান্ট ছাড়!</span>
+                    </p>
+                    <p className="mt-0.5 text-xs font-medium text-amber-100">
+                      (ন্যূনতম বিল {taka(offer.minBill)})
+                    </p>
+                  </>
+                )}
               </div>
             </div>
 
@@ -603,12 +645,19 @@ export default function BillPage() {
                   className="h-11 w-full bg-amber-500 text-base font-bold text-white hover:bg-amber-600 disabled:cursor-not-allowed"
                 >
                   {claiming && <Loader2 className="size-4 animate-spin" />}
-                  🎉 Claim on Messenger
+                  {offer.enabled ? '🎉 Claim on Messenger' : '🎉 এখনই ছাড় নিন'}
                 </Button>
-                {!canClaim && occasions.length > 0 && (
-                  <p className="text-center text-[11px] font-medium text-stone-500">
-                    উপরে থেকে প্রযোজ্য অফার বেছে নিলে বাটন চালু হবে
+                {offer.deviceAlreadyClaimed ? (
+                  <p className="text-center text-[11px] font-semibold text-stone-500">
+                    এই ডিভাইস থেকে অফারটি আগেই নেওয়া হয়েছে — একবারই প্রযোজ্য।
                   </p>
+                ) : (
+                  !canClaim &&
+                  occasions.length > 0 && (
+                    <p className="text-center text-[11px] font-medium text-stone-500">
+                      উপরে থেকে প্রযোজ্য অফার বেছে নিলে বাটন চালু হবে
+                    </p>
+                  )
                 )}
               </div>
             ) : (

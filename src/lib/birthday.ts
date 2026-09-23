@@ -19,6 +19,7 @@ export async function antiFraudCheck(p: {
   deviceId: string
   deviceFp?: string | null
   sessionId: string
+  occasionId?: string | null
 }): Promise<AntiFraudResult> {
   // 1. Facebook ID already claimed lifetime discount?
   const byPsid = await db.customer.findUnique({ where: { psid: p.psid } })
@@ -39,8 +40,12 @@ export async function antiFraudCheck(p: {
   const session = await db.tableSession.findUnique({ where: { id: p.sessionId } })
   if (session?.birthdayGranted) return { ok: false, reason: 'এই সেশনে ইতোমধ্যে ছাড় প্রয়োগ করা হয়েছে।' }
 
-  // 5. Minimum bill?
-  const minBill = await getSettingNumber(SETTING_KEYS.BIRTHDAY_MIN_BILL, 500)
+  // 5. Minimum bill? (occasion-specific min overrides the global birthday min)
+  let minBill = await getSettingNumber(SETTING_KEYS.BIRTHDAY_MIN_BILL, 500)
+  if (p.occasionId) {
+    const occ = await db.occasionOffer.findUnique({ where: { id: p.occasionId } }).catch(() => null)
+    if (occ && occ.active) minBill = occ.minBill
+  }
   const orders = await db.order.aggregate({
     where: { sessionId: p.sessionId, status: { notIn: ['CANCELLED'] } },
     _sum: { subtotal: true },
@@ -65,6 +70,14 @@ export async function applyBirthdayDiscount(p: {
   occasionId?: string | null
   occasionName?: string | null
 }): Promise<{ ok: boolean; message: string }> {
+  // occasion override (anniversary, wedding, custom occasion from admin panel)
+  let amount = await getSettingNumber(SETTING_KEYS.BIRTHDAY_DISCOUNT_AMOUNT, 50)
+  if (p.occasionId) {
+    const occ = await db.occasionOffer.findUnique({ where: { id: p.occasionId } }).catch(() => null)
+    if (!occ || !occ.active) return { ok: false, message: 'নির্বাচিত অফারটি এখন সক্রিয় নয়' }
+    amount = occ.discount
+  }
+
   const check = await antiFraudCheck(p)
   if (!check.ok) {
     await appendLedger({
@@ -76,13 +89,6 @@ export async function applyBirthdayDiscount(p: {
       payload: { psid: p.psid, phone: p.phone, reason: check.reason || 'anti_fraud' },
     })
     return { ok: false, message: check.reason || 'অ্যান্টি-ফ্রড চেক ব্যর্থ' }
-  }
-
-  // occasion override (anniversary, wedding, custom occasion from admin panel)
-  let amount = await getSettingNumber(SETTING_KEYS.BIRTHDAY_DISCOUNT_AMOUNT, 50)
-  if (p.occasionId) {
-    const occ = await db.occasionOffer.findUnique({ where: { id: p.occasionId } }).catch(() => null)
-    if (occ && occ.active) amount = occ.discount
   }
 
   const session = await db.tableSession.findUnique({

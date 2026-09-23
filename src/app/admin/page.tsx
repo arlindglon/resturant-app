@@ -2684,7 +2684,7 @@ function OccasionsTab({ onAuthRequired }: TabProps) {
       <div className="flex items-start gap-2 rounded-xl border border-amber-300 bg-amber-50 p-3 text-sm text-amber-900">
         <Info className="mt-0.5 h-4 w-4 shrink-0 text-amber-600" />
         <p className="font-bold">
-          এই অকেশনগুলো বিল পেজে কাস্টমার দেখবে; মেসেঞ্জার অফার চালু থাকলে কাস্টমার নিজের অকেশন বেছে নিতে পারবে (m.me চ্যাট থেকে ছাড় প্রয়োগ হয়)।
+          এই অকেশনগুলো সক্রিয় করলেই বিল পেজে কাস্টমার দেখতে পাবে। “মেসেঞ্জার অফার” চালু থাকলে কাস্টমার m.me চ্যাট করে ছাড় পাবে; বন্ধ থাকলে বিল পেজেই নাম-তারিখ দিয়ে সরাসরি ছাড় দাবি করতে পারবে।
         </p>
       </div>
 
@@ -3896,7 +3896,7 @@ function SettingsTab({ onAuthRequired }: TabProps) {
             <div className="min-w-0 pr-3">
               <p className="text-sm font-black text-stone-800">💌 মেসেঞ্জার অফার</p>
               <p className="text-xs leading-snug text-stone-500">
-                বিল পেজে জন্মদিন/অকেশন অফার (m.me চ্যাটে ছাড়) চালু/বন্ধ
+                চালু = বিল পেজে m.me চ্যাটে ছাড় দাবি; বন্ধ = বিল পেজেই সরাসরি দাবি (অকেশন অফার দুই অবস্থাতেই দেখাবে)
               </p>
             </div>
             <Switch
