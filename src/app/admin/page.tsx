@@ -3037,6 +3037,134 @@ function CustomerNotesDialog({
   )
 }
 
+interface FbProfileData {
+  messenger: boolean
+  psid: string
+  firstName?: string
+  lastName?: string
+  profilePic?: string | null
+}
+
+/**
+ * FB পরিচয় dialog — PSID দিয়ে Facebook-এ এই কাস্টমার কে, তা দেখায়:
+ * লাইভ FB নাম + প্রোফাইল ছবি (Graph API) + Business Suite Inbox-এ খোঁজার নির্দেশনা।
+ * PSID থেকে সরাসরি profile link পাওয়া যায় না (Meta privacy) — নাম+ছবিই একমাত্র পরিচয়।
+ */
+function FbProfileDialog({
+  customer,
+  onOpenChange,
+}: {
+  customer: CustomerRow | null
+  onOpenChange: () => void
+}) {
+  const [profile, setProfile] = useState<FbProfileData | null>(null)
+  const [direct, setDirect] = useState(false)
+  const [error, setError] = useState('')
+  const [loading, setLoading] = useState(true)
+
+  useEffect(() => {
+    if (!customer) return
+    let alive = true
+    // same defer pattern as the other dialogs (set-state-in-effect safe)
+    const t = setTimeout(async () => {
+      setLoading(true)
+      setError('')
+      setProfile(null)
+      setDirect(false)
+      const res = await api.get<FbProfileData>(`/api/admin/customers/${customer.id}/fb-profile`)
+      if (!alive) return
+      if (isAuthError(res)) return onOpenChange()
+      if (!res.ok || !res.data) setError(res.error || 'তথ্য আনা যায়নি')
+      else if (!res.data.messenger) setDirect(true)
+      else setProfile(res.data)
+      setLoading(false)
+    }, 0)
+    return () => {
+      alive = false
+      clearTimeout(t)
+    }
+  }, [customer?.id])
+
+  const copyPsid = async () => {
+    const psid = profile?.psid || customer?.psid
+    if (!psid) return
+    try {
+      await navigator.clipboard.writeText(psid)
+      toast.success('PSID কপি হয়েছে')
+    } catch {
+      toast.error('কপি করা যায়নি')
+    }
+  }
+
+  return (
+    <Dialog open={!!customer} onOpenChange={(v) => !v && onOpenChange()}>
+      <DialogContent className="sm:max-w-sm">
+        <DialogHeader>
+          <DialogTitle>👤 Facebook পরিচয়</DialogTitle>
+          <DialogDescription className="text-xs">{customer ? customerName(customer) : ''}</DialogDescription>
+        </DialogHeader>
+
+        {loading ? (
+          <div className="flex justify-center py-8">
+            <Loader2 className="h-6 w-6 animate-spin text-stone-400" />
+          </div>
+        ) : direct ? (
+          <p className="rounded-lg bg-stone-50 p-3 text-sm leading-relaxed text-stone-600">
+            এই কাস্টমার Messenger-এ চ্যাট করেননি (বিল পেজ থেকে এসেছেন) — তাই Facebook পরিচয় নেই।
+          </p>
+        ) : error ? (
+          <p className="rounded-lg bg-red-50 p-3 text-sm text-red-700">⚠️ {error}</p>
+        ) : profile ? (
+          <div className="space-y-3">
+            <div className="flex items-center gap-3 rounded-lg border border-stone-200 bg-stone-50 p-3">
+              {profile.profilePic ? (
+                <img
+                  src={profile.profilePic}
+                  alt="Facebook প্রোফাইল ছবি"
+                  referrerPolicy="no-referrer"
+                  className="size-16 shrink-0 rounded-full border-2 border-amber-200 object-cover"
+                />
+              ) : (
+                <span className="flex size-16 shrink-0 items-center justify-center rounded-full bg-amber-100 text-xl font-black text-amber-700">
+                  {customerName(customer!)?.slice(0, 1)}
+                </span>
+              )}
+              <div className="min-w-0">
+                <p className="truncate text-base font-black text-stone-900">
+                  {[profile.firstName, profile.lastName].filter(Boolean).join(' ') || 'নাম গোপন রেখেছে'}
+                </p>
+                <p className="text-[11px] font-semibold text-stone-500">Facebook Messenger প্রোফাইল</p>
+              </div>
+            </div>
+            <div className="rounded-lg bg-teal-50 p-3 text-[12px] leading-relaxed text-teal-900">
+              <b>FB-তে খুঁজতে:</b> Meta Business Suite → <b>Inbox</b> খুলুন → উপরের সার্চে এই নামটি লিখুন → ছবি মিলিয়ে নিন। এই PSID দিয়েই বট তার সাথে কথা বলে।
+            </div>
+            <div className="flex items-center gap-2 rounded-md border border-stone-200 bg-stone-50 px-2.5 py-1.5">
+              <span className="text-[10px] font-black uppercase tracking-wide text-stone-400">PSID</span>
+              <span className="min-w-0 flex-1 truncate font-mono text-[11px] text-stone-700" title={profile.psid}>
+                {profile.psid}
+              </span>
+              <button
+                onClick={copyPsid}
+                title="PSID কপি করুন"
+                className="shrink-0 rounded border border-stone-200 bg-white px-1.5 py-0.5 text-[10px] font-bold text-stone-500 transition-colors hover:bg-stone-100"
+              >
+                📋 কপি
+              </button>
+            </div>
+          </div>
+        ) : null}
+
+        <DialogFooter>
+          <Button variant="outline" onClick={onOpenChange}>
+            বন্ধ করুন
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  )
+}
+
 /** placeholder names the webhook stores when the Facebook lookup fails */
 const PLACEHOLDER_NAMES = ['Customer', 'নাম যাচাই বাকি']
 
@@ -3056,6 +3184,7 @@ function CustomersTab({ onAuthRequired }: TabProps) {
   const [editing, setEditing] = useState<CustomerRow | null>(null)
   const [msgTarget, setMsgTarget] = useState<CustomerRow | null>(null)
   const [notesTarget, setNotesTarget] = useState<CustomerRow | null>(null)
+  const [fbTarget, setFbTarget] = useState<CustomerRow | null>(null)
   const [query, setQuery] = useState('')
 
   const load = useCallback(async () => {
@@ -3205,18 +3334,24 @@ function CustomersTab({ onAuthRequired }: TabProps) {
           {filtered.map((c) => (
             <div key={c.id} className="rounded-lg border border-stone-100 bg-stone-50/60 p-3">
               <div className="flex flex-wrap items-center gap-2">
-                {c.photo ? (
-                  <img
-                    src={c.photo}
-                    alt={`${customerName(c)}-এর প্রোফাইল ছবি`}
-                    referrerPolicy="no-referrer"
-                    className="size-9 shrink-0 rounded-full border border-stone-200 object-cover"
-                  />
-                ) : (
-                  <span className="flex size-9 shrink-0 items-center justify-center rounded-full bg-amber-100 font-black text-amber-700">
-                    {PLACEHOLDER_NAMES.includes(customerName(c)) ? '?' : customerName(c).slice(0, 1)}
-                  </span>
-                )}
+                <button
+                  onClick={() => setFbTarget(c)}
+                  title="Facebook পরিচয় — নাম ও ছবি দেখুন"
+                  className="shrink-0 rounded-full transition-transform hover:scale-105"
+                >
+                  {c.photo ? (
+                    <img
+                      src={c.photo}
+                      alt={`${customerName(c)}-এর প্রোফাইল ছবি`}
+                      referrerPolicy="no-referrer"
+                      className="size-9 rounded-full border border-stone-200 object-cover"
+                    />
+                  ) : (
+                    <span className="flex size-9 items-center justify-center rounded-full bg-amber-100 font-black text-amber-700">
+                      {PLACEHOLDER_NAMES.includes(customerName(c)) ? '?' : customerName(c).slice(0, 1)}
+                    </span>
+                  )}
+                </button>
                 <div className="min-w-0 flex-1">
                   <p className="flex items-center gap-2 truncate text-sm font-black text-stone-900">
                     {customerName(c)}
@@ -3295,6 +3430,15 @@ function CustomersTab({ onAuthRequired }: TabProps) {
                 <Button
                   size="sm"
                   variant="ghost"
+                  className="text-teal-600 hover:bg-teal-50"
+                  onClick={() => setFbTarget(c)}
+                  title="Facebook পরিচয় — কোন ইউজার?"
+                >
+                  👤
+                </Button>
+                <Button
+                  size="sm"
+                  variant="ghost"
                   className="text-stone-500 hover:text-amber-600"
                   onClick={() => setEditing(c)}
                   title="তথ্য এডিট"
@@ -3326,6 +3470,9 @@ function CustomersTab({ onAuthRequired }: TabProps) {
 
       {/* send message dialog */}
       <SendMessageDialog key={msgTarget?.id || 'msg-none'} customer={msgTarget} onOpenChange={() => setMsgTarget(null)} />
+
+      {/* FB identity dialog — PSID দিয়ে FB নাম + ছবি */}
+      <FbProfileDialog key={fbTarget?.id || 'fb-none'} customer={fbTarget} onOpenChange={() => setFbTarget(null)} />
     </div>
   )
 }
@@ -3350,6 +3497,7 @@ function EditCustomerDialog({
   const [phone, setPhone] = useState(customer?.phone ?? '')
   const [birthday, setBirthday] = useState(customer?.birthday ? customer.birthday.slice(0, 10) : '')
   const [saving, setSaving] = useState(false)
+  const [fbPeek, setFbPeek] = useState(false)
 
   const copyPsid = async () => {
     if (!customer) return
@@ -3415,6 +3563,15 @@ function EditCustomerDialog({
               >
                 📋 কপি
               </button>
+              {customer.messenger && (
+                <button
+                  onClick={() => setFbPeek(true)}
+                  title="Facebook পরিচয় দেখুন — কোন ইউজার?"
+                  className="shrink-0 rounded border border-teal-200 bg-teal-50 px-1.5 py-0.5 text-[10px] font-bold text-teal-700 transition-colors hover:bg-teal-100"
+                >
+                  👤 FB
+                </button>
+              )}
             </div>
           )}
           <div className="space-y-1">
@@ -3466,6 +3623,8 @@ function EditCustomerDialog({
             {saving && <Loader2 className="h-4 w-4 animate-spin" />} সেভ করুন
           </Button>
         </DialogFooter>
+        {/* FB identity peek (nested) — PSID থেকে FB নাম+ছবি */}
+        {fbPeek && customer && <FbProfileDialog customer={customer} onOpenChange={() => setFbPeek(false)} />}
       </DialogContent>
     </Dialog>
   )
