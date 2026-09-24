@@ -4599,7 +4599,7 @@ function SettingsTab({ onAuthRequired }: TabProps) {
       [SETTING_KEYS.META_RN_TITLE]: form[SETTING_KEYS.META_RN_TITLE] ?? '',
       [SETTING_KEYS.GEMINI_ENABLED]: form[SETTING_KEYS.GEMINI_ENABLED] ?? 'false',
       [SETTING_KEYS.GEMINI_API_KEYS]: form[SETTING_KEYS.GEMINI_API_KEYS] ?? '',
-      [SETTING_KEYS.GEMINI_MODEL]: form[SETTING_KEYS.GEMINI_MODEL] ?? 'gemini-3.6-flash',
+      [SETTING_KEYS.GEMINI_MODEL]: form[SETTING_KEYS.GEMINI_MODEL] ?? 'gemini-3.5-flash-lite',
       [SETTING_KEYS.GEMINI_PERSONA]: form[SETTING_KEYS.GEMINI_PERSONA] ?? '',
       [SETTING_KEYS.AI_DELIVERY_RULES]: form[SETTING_KEYS.AI_DELIVERY_RULES] ?? '',
       [SETTING_KEYS.AI_EXTRA_INFO]: form[SETTING_KEYS.AI_EXTRA_INFO] ?? '',
@@ -5371,19 +5371,22 @@ function SettingsTab({ onAuthRequired }: TabProps) {
             <div className="space-y-1">
               <FieldLabel>AI মডেল</FieldLabel>
               <Select
-                value={form[SETTING_KEYS.GEMINI_MODEL] ?? 'gemini-3.6-flash'}
+                value={form[SETTING_KEYS.GEMINI_MODEL] ?? 'gemini-3.5-flash-lite'}
                 onValueChange={(v) => set(SETTING_KEYS.GEMINI_MODEL, v)}
               >
                 <SelectTrigger className="w-full">
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="gemini-3.6-flash">Gemini 3.6 Flash (সুপারিশকৃত)</SelectItem>
-                  <SelectItem value="gemini-3.5-flash">Gemini 3.5 Flash</SelectItem>
-                  <SelectItem value="gemini-3.5-flash-lite">Gemini 3.5 Flash-Lite (হালকা)</SelectItem>
-                  <SelectItem value="gemini-2.5-flash">Gemini 2.5 Flash (পুরনো)</SelectItem>
+                  <SelectItem value="gemini-3.5-flash-lite">Gemini 3.5 Flash-Lite (প্রাইমারি)</SelectItem>
+                  <SelectItem value="gemini-3.1-flash-lite">Gemini 3.1 Flash-Lite (ব্যাকআপ)</SelectItem>
+                  <SelectItem value="gemma-4-26b">Gemma 4 26B (হাই-ভলিউম)</SelectItem>
+                  <SelectItem value="gemma-4-31b">Gemma 4 31B (হাই-ভলিউম)</SelectItem>
                 </SelectContent>
               </Select>
+              <p className="text-xs leading-snug text-stone-500">
+                প্রাইমারি মডেলে কোটা/এরর হলে নিজে থেকেই ৩.১ Flash-Lite → Gemma-তে চলে যায় — কাস্টমার সবসময় সঠিক উত্তর পায়।
+              </p>
             </div>
             <div className="space-y-1">
               <FieldLabel>API কি সংখ্যা</FieldLabel>

@@ -183,6 +183,28 @@ export async function POST(req: NextRequest) {
 /** processed message ids (re-delivery guard) — per instance, 10-minute window */
 const seenMids = new Map<string, number>()
 
+/**
+ * ক্রস-ইনস্ট্যান্স ডুপ্লিকেট গার্ড: Meta একই মেসেজ অন্য instance-এ দিলে
+ * (মেমরি-ডিডুপ তখন কাজ করে না) DB-তে এইমাত্র (৬০ সেকেন্ডে) একই কাস্টমার-টেক্সট
+ * সেভ থাকলে সেটা ডুপ্লিকেট — দ্বিতীয়বার উত্তর যাবে না।
+ */
+async function isDuplicateCustomerMessage(psid: string, text: string): Promise<boolean> {
+  try {
+    const recent = await db.chatMessage.findFirst({
+      where: {
+        psid,
+        role: 'customer',
+        text: text.slice(0, 3000),
+        createdAt: { gte: new Date(Date.now() - 60_000) },
+      },
+      select: { id: true },
+    })
+    return !!recent
+  } catch {
+    return false
+  }
+}
+
 /* ───────────────────────── conversation helpers ───────────────────────── */
 
 /**
@@ -580,7 +602,11 @@ async function handleEvent(event: MessagingEvent) {
     const lang = pickBotLang(cust.language, await globalBotLang())
     const tokenRow = await pendingToken(psid)
     const dataTextIn = (text || sharedPhone || '').trim()
-    if (dataTextIn) await saveChatTurn(psid, 'customer', dataTextIn)
+    if (dataTextIn) {
+      // ক্রস-ইনস্ট্যান্স ডুপ্লিকেট — একই প্রশ্নে দ্বিতীয় উত্তর কখনো যাবে না
+      if (await isDuplicateCustomerMessage(psid, dataTextIn)) return
+      await saveChatTurn(psid, 'customer', dataTextIn)
+    }
 
     // 2a. no pending claim → AI chat (AI down → লাইভ নলেজ বেস থেকে সঠিক উত্তর)
     if (!tokenRow) {

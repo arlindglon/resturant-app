@@ -22,13 +22,17 @@ import { SETTING_KEYS, LANGUAGE_LABELS } from '@/lib/constants'
 
 const API_BASE = 'https://generativelanguage.googleapis.com/v1beta/models'
 
-// শুধু এখন চালু থাকা মডেল (Google পুরনোগুলো — 1.5/2.0 — বন্ধ করে দিয়েছে):
-// কি বৈধ কিন্তু মডেল মরা হলে API দেয় 404 NOT_FOUND — তখন পালানোর মডেল বদলাতে হয়
+// মালিকের নির্ধারিত মডেল তালিকা (পুরনোগুলো — 3.6/3.5-flash/2.5 — বাদ):
+//  ১. gemini-3.5-flash-lite  → প্রাইমারি (১৫ RPM, ৫০০/দিন)
+//  ২. gemini-3.1-flash-lite  → ব্যাকআপ (৫০০/দিন)
+//  ৩. gemma-4-26b            → হাই-ভলিউম ব্যাকআপ (৩০ RPM, ১৪,৪০০/দিন)
+//  ৪. gemma-4-31b            → হাই-ভলিউম ব্যাকআপ (৩০ RPM, ১৪,৪০০/দিন)
+// এই তালিকাই মডেল-ফলব্যাক চেইন নির্ধারণ করে (generateRotating দেখুন)।
 export const GEMINI_MODELS = [
-  { id: 'gemini-3.6-flash', label: 'Gemini 3.6 Flash (সুপারিশকৃত — দ্রুত ও স্মার্ট)' },
-  { id: 'gemini-3.5-flash', label: 'Gemini 3.5 Flash' },
-  { id: 'gemini-3.5-flash-lite', label: 'Gemini 3.5 Flash-Lite (হালকা)' },
-  { id: 'gemini-2.5-flash', label: 'Gemini 2.5 Flash (পুরনো কিন্তু স্থিতিশীল)' },
+  { id: 'gemini-3.5-flash-lite', label: 'Gemini 3.5 Flash-Lite (প্রাইমারি — দ্রুত, ৫০০/দিন)' },
+  { id: 'gemini-3.1-flash-lite', label: 'Gemini 3.1 Flash-Lite (ব্যাকআপ ১ — ৫০০/দিন)' },
+  { id: 'gemma-4-26b', label: 'Gemma 4 26B (ব্যাকআপ ২ — হাই-ভলিউম, ১৪,৪০০/দিন)' },
+  { id: 'gemma-4-31b', label: 'Gemma 4 31B (ব্যাকআপ ৩ — হাই-ভলিউম, ১৪,৪০০/দিন)' },
 ]
 
 export interface GeminiConfig {
@@ -73,10 +77,13 @@ export async function getGeminiConfig(): Promise<GeminiConfig> {
       if (!keys.includes(k)) keys.push(k)
     }
   }
+  // পুরনো/বাদ-পড়া মডেল সেটিং থাকলে সরাসরি নতুন প্রাইমারিতে ফিরিয়ে আনি —
+  // মালিকের নির্দেশ: আগের মডেলগুলো বাদ, শুধু নতুন চেইন চলবে
+  const safeModel = GEMINI_MODELS.some((m) => m.id === model) ? model : 'gemini-3.5-flash-lite'
   return {
     enabled: enabledRaw === 'true',
     keys,
-    model: model || 'gemini-3.6-flash',
+    model: safeModel,
     persona: (persona || '').trim(),
   }
 }
@@ -215,6 +222,40 @@ function retryDelaySeconds(msg: string): number | null {
 }
 
 /**
+ * Gemma মডেল systemInstruction / JSON-schema (responseMimeType/responseSchema)
+ * / thinkingConfig মানে না — সেই ফিল্ডগুলো বাদ দিয়ে system-টা প্রথম user
+ * মেসেজের ভেতরে জুড়ে দেওয়া হয়। (JSON ছাড়া উত্তর এলে caller-রা raw text-কেই
+ * reply ধরে — চেইন ভাঙে না।)
+ */
+function bodyForModel(body: Record<string, unknown>, model: string): Record<string, unknown> {
+  if (!/^gemma/i.test(model)) return body
+  const b: Record<string, unknown> = { ...body }
+  const sys = (b.systemInstruction as { parts?: { text?: string }[] } | undefined)?.parts
+    ?.map((p) => p.text || '')
+    .join('\n\n')
+  if (sys) {
+    const contents = (b.contents as { role: string; parts: { text?: string }[] }[] | undefined) || []
+    b.contents = contents.map((c, i) =>
+      i === 0
+        ? { ...c, parts: [{ text: `${sys}\n\n---\n\n${c.parts.map((p) => p.text || '').join('')}` }] }
+        : c,
+    )
+    delete b.systemInstruction
+  }
+  const gc = { ...((b.generationConfig as Record<string, unknown>) || {}) }
+  delete gc.responseMimeType
+  delete gc.responseSchema
+  delete gc.thinkingConfig
+  b.generationConfig = gc
+  return b
+}
+
+/** মডেল-নিজস্ব এরর (মরা মডেল / ফিল্ড না-মানা) — পরের মডেলে যাওয়ার সংকেত */
+function isModelError(msg: string): boolean {
+  return /NOT_FOUND|INVALID_ARGUMENT|UNSUPPORTED|not found|unsupported/i.test(msg)
+}
+
+/**
  * Quota-aware, model-fallback Gemini engine.
  *
  * আসল সমস্যা (production-এ ধরা পড়েছে): ফ্রি টিয়ারে প্রতি মডেলের কোটা আলাদা
@@ -241,17 +282,19 @@ async function generateRotating(
   const timeLeft = () => BUDGET_MS - (Date.now() - started)
 
   // thinkingConfig জাতীয় নতুন ফিল্ড পুরনো মডেল/শেপ মানে না — বাদ দিয়ে চেষ্টা করার জন্য
-  const stripThinking = (): Record<string, unknown> => {
-    const gc = body.generationConfig as Record<string, unknown> | undefined
-    if (!gc || typeof gc !== 'object' || !gc.thinkingConfig) return body
+  const stripThinking = (src: Record<string, unknown>): Record<string, unknown> => {
+    const gc = src.generationConfig as Record<string, unknown> | undefined
+    if (!gc || typeof gc !== 'object' || !gc.thinkingConfig) return src
     const { thinkingConfig: _drop, ...rest } = gc
-    return { ...body, generationConfig: rest }
+    return { ...src, generationConfig: rest }
   }
 
   const models = [cfg.model, ...GEMINI_MODELS.map((m) => m.id).filter((id) => id !== cfg.model)]
   let lastError = 'কোনো API কি নেই'
 
-  for (const model of models) {
+  modelLoop: for (const model of models) {
+    // gemma-তে আলাদা body-শেপ লাগে (system/JSON/thinking ফিল্ড বাদ)
+    const mBody = bodyForModel(body, model)
     for (let round = 0; round < 2; round++) {
       if (round) {
         if (timeLeft() < 3000) break
@@ -272,7 +315,7 @@ async function generateRotating(
           rotationCursor = (rotationCursor + i + 1) % Math.max(usable.length, 1)
         }
         try {
-          const text = await generateWithKey(key, model, body)
+          const text = await generateWithKey(key, model, mBody)
           markKeyGood(key)
           nextCursor()
           return { ok: true, text, error: null }
@@ -280,9 +323,9 @@ async function generateRotating(
           const msg = e instanceof Error ? e.message : String(e)
           // মডেল thinkingConfig মানে না (INVALID_ARGUMENT/unknown field) → ফিল্ডটা
           // বাদ দিয়ে একই কি-তে আরেকবার — বট কখনো পুরোপুরি বন্ধ হয়ে যায় না
-          if (body.generationConfig && (body.generationConfig as Record<string, unknown>).thinkingConfig) {
+          if (mBody.generationConfig && (mBody.generationConfig as Record<string, unknown>).thinkingConfig) {
             try {
-              const text = await generateWithKey(key, model, stripThinking())
+              const text = await generateWithKey(key, model, stripThinking(mBody))
               markKeyGood(key)
               nextCursor()
               return { ok: true, text, error: null }
@@ -300,9 +343,9 @@ async function generateRotating(
           // আরেকবার (thinking-ই বাজেট খেয়েছিল); নাহলে পরের কি/মডেলে
           const truncated = /MAX_TOKENS|কাটা পড়েছে/.test(msg)
           if (truncated) {
-            if (body.generationConfig && (body.generationConfig as Record<string, unknown>).thinkingConfig) {
+            if (mBody.generationConfig && (mBody.generationConfig as Record<string, unknown>).thinkingConfig) {
               try {
-                const text = await generateWithKey(key, model, stripThinking())
+                const text = await generateWithKey(key, model, stripThinking(mBody))
                 markKeyGood(key)
                 nextCursor()
                 return { ok: true, text, error: null }
@@ -318,7 +361,7 @@ async function generateRotating(
               // কোটা কয়েক সেকেন্ডেই রিসেট হবে → অপেক্ষা করে এই key+model-এই আবার
               await sleep(waitS * 1000 + 250)
               try {
-                const text = await generateWithKey(key, model, body)
+                const text = await generateWithKey(key, model, mBody)
                 markKeyGood(key)
                 nextCursor()
                 return { ok: true, text, error: null }
@@ -336,6 +379,9 @@ async function generateRotating(
             continue
           }
           if (isServerError(e)) continue // 5xx/নেটওয়ার্ক → পরের কি
+          // মডেল নিজেই ভাঙা (মরা/ফিল্ড না-মানা)? এই মডেলে বাকি কি দিয়েও একই ফল —
+          // সাথে সাথে পরের মডেলে (পুরো ইঞ্জিন বন্ধ করা যাবে না)
+          if (isModelError(msg)) continue modelLoop
           return { ok: false, text: null, error: msg } // non-retryable (bad request etc.)
         }
       }
@@ -723,10 +769,12 @@ JSON ফরম্যাট: {"extractedData":"","reply":"","action":"ASK"}`
   if (!res.ok || !res.text) return { ok: false, extracted: null, reply: null, action: 'ASK', error: res.error }
   const j = extractJson(res.text)
   const action = str(j?.action) === 'CANCEL' ? 'CANCEL' : 'ASK'
+  // gemma মডেলে JSON-মোড নেই — JSON না পার্স হলে পুরো টেক্সটই উত্তর (চেইন ভাঙে না)
+  const reply = str(j?.reply) || (j ? null : res.text.trim() || null)
   return {
     ok: true,
     extracted: str(j?.extractedData) || null,
-    reply: str(j?.reply) || null,
+    reply,
     action,
     error: null,
   }
@@ -747,7 +795,7 @@ export async function testGeminiKey(key: string): Promise<KeyTestResult> {
   try {
     const text = await generateWithKey(
       key,
-      'gemini-3.6-flash', // fixed current model for the ping — works for all keys
+      'gemini-3.5-flash-lite', // fixed primary model for the ping — works for all keys
       {
         contents: [{ role: 'user', parts: [{ text: 'Reply with exactly: OK' }] }],
         // Gemini 3.x thinking মডেল — ছোট বাজেট দিলে thinking-এই শেষ, উত্তরই আসে না
