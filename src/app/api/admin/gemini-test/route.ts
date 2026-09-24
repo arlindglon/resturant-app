@@ -28,10 +28,12 @@ export async function POST(req: Request) {
   // নতুন মডেল-নাম যাচাইয়ের সবচেয়ে নির্ভরযোগ্য উপায় (চেইনের অন্ধকারে না গিয়ে)।
   let probeModel: string | null = null
   let chatMode = false
+  let rawPrompt: string | null = null
   try {
-    const body = (await req.json()) as { model?: string; chat?: boolean }
+    const body = (await req.json()) as { model?: string; chat?: boolean; prompt?: string }
     if (body?.model && typeof body.model === 'string') probeModel = body.model.trim()
     chatMode = !!body?.chat
+    if (body?.prompt && typeof body.prompt === 'string') rawPrompt = body.prompt.slice(0, 8000)
   } catch {
     /* no body → normal chain test */
   }
@@ -60,14 +62,18 @@ export async function POST(req: Request) {
       })
     }
     const t0 = Date.now()
+    // raw prompt mode: {model, prompt} — মডেলের কাঁচা আচরণ দেখার জন্য
     try {
       const text = await generateWithKey(
         cfg.keys[0],
         probeModel,
-        { contents: [{ role: 'user', parts: [{ text: 'Reply with exactly: OK' }] }] },
+        rawPrompt
+          ? { contents: [{ role: 'user', parts: [{ text: rawPrompt }] }] }
+          : { contents: [{ role: 'user', parts: [{ text: 'Reply with exactly: OK' }] }] },
+        30_000,
       )
       return ok({
-        probe: { model: probeModel, ok: !!text, ms: Date.now() - t0, sample: text.slice(0, 120), error: null },
+        probe: { model: probeModel, ok: !!text, ms: Date.now() - t0, sample: text.slice(0, 800), error: null },
       })
     } catch (e) {
       return ok({
