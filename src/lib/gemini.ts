@@ -252,7 +252,21 @@ function bodyForModel(body: Record<string, unknown>, model: string): Record<stri
 
 /** মডেল-নিজস্ব এরর (মরা মডেল / ফিল্ড না-মানা) — পরের মডেলে যাওয়ার সংকেত */
 function isModelError(msg: string): boolean {
-  return /NOT_FOUND|INVALID_ARGUMENT|UNSUPPORTED|not found|unsupported/i.test(msg)
+  // "Request contains an invalid argument." — Google 400-এর লেখা রূপও ধরতে হয়
+  return /NOT_FOUND|INVALID_ARGUMENT|UNSUPPORTED|not found|unsupported|invalid argument/i.test(msg)
+}
+
+/**
+ * সরলীকৃত generationConfig — thinkingConfig + responseMimeType + responseSchema
+ * সব বাদ (কোনো মডেল JSON-schema/thinking ফিল্ড মানে না; প্রম্পটেই JSON ফরম্যাট
+ * বলা আছে, extractJson পার্স করে নেয়)।
+ */
+function simplifiedConfig(src: Record<string, unknown>): Record<string, unknown> {
+  const gc = { ...((src.generationConfig as Record<string, unknown>) || {}) }
+  delete gc.thinkingConfig
+  delete gc.responseMimeType
+  delete gc.responseSchema
+  return { ...src, generationConfig: gc }
 }
 
 /**
@@ -339,6 +353,19 @@ async function generateRotating(
             markKeyBad(key, msg)
             continue
           }
+          // মডেল ফিল্ড মানে না (thinking/JSON-schema)? সব বাদ দিয়ে একই কি-তে
+          // আরেকবার — লাইট মডেলও তখন প্লেইন JSON লিখে উত্তর দিতে পারে
+          if (isModelError(msg)) {
+            try {
+              const text = await generateWithKey(key, model, simplifiedConfig(mBody))
+              markKeyGood(key)
+              nextCursor()
+              return { ok: true, text }
+            } catch {
+              /* সরল করেও ব্যর্থ → মডেল নিজেই ভাঙা, পরের মডেলে */
+              continue modelLoop
+            }
+          }
           // কাটা উত্তর (MAX_TOKENS): thinkingConfig থাকলে বাদ দিয়ে একই জায়গায়
           // আরেকবার (thinking-ই বাজেট খেয়েছিল); নাহলে পরের কি/মডেলে
           const truncated = /MAX_TOKENS|কাটা পড়েছে/.test(msg)
@@ -379,10 +406,7 @@ async function generateRotating(
             continue
           }
           if (isServerError(e)) continue // 5xx/নেটওয়ার্ক → পরের কি
-          // মডেল নিজেই ভাঙা (মরা/ফিল্ড না-মানা)? এই মডেলে বাকি কি দিয়েও একই ফল —
-          // সাথে সাথে পরের মডেলে (পুরো ইঞ্জিন বন্ধ করা যাবে না)
-          if (isModelError(msg)) continue modelLoop
-          return { ok: false, text: null, error: msg } // non-retryable (bad request etc.)
+          return { ok: false, text: null, error: lastError } // non-retryable (prefixed কারণসহ)
         }
       }
       // এই মডেলের সব কি কোটা-শেষ → বাকি রাউন্ড বাদ, পরের মডেলের কোটা বাকেটে
