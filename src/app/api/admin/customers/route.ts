@@ -68,6 +68,8 @@ export async function GET() {
       birthday: c.birthday,
       eventLabel: c.eventLabel,
       dataText: c.dataText,
+      address: c.address ?? null,
+      statedName: c.statedName ?? null,
       discountClaimed: c.discountClaimed,
       claims: claimCount.get(c.psid) || 0,
       lastClaimAt: lastClaimAt.get(c.psid) || null,

@@ -24,6 +24,15 @@ import { applyBirthdayDiscount } from '@/lib/birthday'
 import { setSettings, getSetting } from '@/lib/settings'
 import { SETTING_KEYS } from '@/lib/constants'
 import { parseDateLoose, parsePhoneLoose } from '@/lib/verify'
+import { buildKnowledgeBase } from '@/lib/knowledge'
+import {
+  aiChatEnabled,
+  chatWithCustomer,
+  extractVerificationData,
+  getGeminiConfig,
+  loadChatHistory,
+  saveChatTurn,
+} from '@/lib/gemini'
 
 
 // ── diagnostics: record when Meta last called us (admin panel shows this) ──
@@ -105,6 +114,7 @@ interface MessagingEvent {
   postback?: { payload?: string; referral?: { ref?: string } }
   message?: {
     text?: string
+    is_echo?: boolean // our own page-sent messages echoed back — never reply to those
     quick_reply?: { payload?: string }
     attachments?: { type: string; payload?: unknown }[]
   }
@@ -251,11 +261,75 @@ async function sendBillReceipt(
   await sendReceipt(psid, [{ text: lines.join('\n') }])
 }
 
+/* ───────────────────────── AI chatbot (Gemini) ───────────────────────── */
+
+/**
+ * General conversation path (no pending offer claim): the customer just talked
+ * to the page. Gemini answers in the customer's own language (বাংলা/বাংলিশ/
+ * English/Hindi…) using the live knowledge base, and any customer data that
+ * appears naturally (name / phone / address / special day) lands in the CRM.
+ */
+async function aiGeneralReply(psid: string, profileName: string, customerMessage: string): Promise<boolean> {
+  const cfg = await getGeminiConfig()
+  if (!cfg.enabled || !cfg.keys.length) return false
+
+  const [kb, history] = await Promise.all([buildKnowledgeBase(), loadChatHistory(psid, 10)])
+  const ai = await chatWithCustomer({
+    knowledgeBase: kb.text,
+    history,
+    customerMessage,
+    customerName: profileName,
+    extraPersona: cfg.persona,
+    cfg,
+  })
+  if (!ai.ok || !ai.reply) {
+    console.error('[webhook:ai]', ai.error)
+    return false
+  }
+
+  await sendText(psid, ai.reply)
+
+  // history + CRM writes are best-effort — never block the conversation
+  // (the customer turn was already saved by the caller before routing)
+  await saveChatTurn(psid, 'bot', ai.reply)
+  await saveAiCrmData(psid, ai.extracted)
+  return true
+}
+
+/** persist the data the AI picked up during small talk (CRM enrichment) */
+async function saveAiCrmData(
+  psid: string,
+  extracted: { name: string | null; phone: string | null; address: string | null; specialDay: string | null; specialDayLabel: string | null },
+): Promise<void> {
+  const has = extracted.name || extracted.phone || extracted.address || extracted.specialDay
+  if (!has) return
+  try {
+    // a stated phone only counts when it parses; a special day only when it parses as a date
+    const phone = extracted.phone ? parsePhoneLoose(extracted.phone) : null
+    const day = extracted.specialDay ? parseDateLoose(extracted.specialDay) : null
+    await db.customer.updateMany({
+      where: { psid },
+      data: {
+        ...(extracted.name ? { statedName: extracted.name.slice(0, 120) } : {}),
+        ...(phone ? { phone } : {}),
+        ...(extracted.address ? { address: extracted.address.slice(0, 500) } : {}),
+        ...(day ? { birthday: day.date } : {}),
+        ...(day && extracted.specialDayLabel ? { eventLabel: extracted.specialDayLabel.slice(0, 80) } : {}),
+        lastSeenAt: new Date(),
+      },
+    })
+  } catch {
+    /* pre-migration DB or phone unique-collision — never block the chat */
+  }
+}
+
 /* ───────────────────────── event routing ───────────────────────── */
 
 async function handleEvent(event: MessagingEvent) {
   const psid = event.sender?.id
   if (!psid) return
+  // our own outgoing messages are echoed back as messages — never self-reply
+  if (event.message?.is_echo) return
 
   // Case 1: customer opened m.me?ref=TOKEN (referral or postback)
   const ref = event.referral?.ref || event.postback?.referral?.ref
@@ -305,13 +379,21 @@ async function handleEvent(event: MessagingEvent) {
   if (event.message) {
     const { name, lastName } = await upsertCustomer(psid)
     const tokenRow = await pendingToken(psid)
+    const dataTextIn = (text || sharedPhone || '').trim()
+    if (dataTextIn) await saveChatTurn(psid, 'customer', dataTextIn)
 
-    // 2a. no pending claim → friendly info (customer data still saved for CRM)
+    // 2a. no pending claim → AI chat (or friendly info fallback)
     if (!tokenRow) {
-      await sendText(
-        psid,
-        `${greet(name)}\n\nআমাদের বিশেষ অফার নিতে রেস্তোরাঁর বিল পেজ থেকে "🎉 Claim on Messenger" চাপুন — সেখান থেকে যাচাই করে ছাড় নিতে পারবেন।${await followNudge()}`
-      )
+      const aiHandled =
+        dataTextIn && (await aiChatEnabled())
+          ? await aiGeneralReply(psid, name, dataTextIn)
+          : false
+      if (!aiHandled) {
+        await sendText(
+          psid,
+          `${greet(name)}\n\nআমাদের বিশেষ অফার নিতে রেস্তোরাঁর বিল পেজ থেকে "🎉 Claim on Messenger" চাপুন — সেখান থেকে যাচাই করে ছাড় নিতে পারবেন।${await followNudge()}`
+        )
+      }
       return
     }
 
@@ -346,13 +428,50 @@ async function handleEvent(event: MessagingEvent) {
       if (dataText.length >= 2) validData = dataText.slice(0, 300)
     }
 
-    // 2c. WRONG data → re-ask, NO discount (scam attempt blocked)
+    // 2c. parsers failed → AI natural-language extraction (any language),
+    // re-validated with the SAME parsers — the AI can never bypass verification
+    if (!validData && dataText && (await aiChatEnabled())) {
+      const cfg = await getGeminiConfig()
+      const ai = await extractVerificationData({
+        fieldType: fieldType as 'DATE' | 'PHONE' | 'TEXT',
+        offerName: offer?.name || 'বিশেষ অফার',
+        askText: offer?.askText?.trim() || defaultAsk(fieldType),
+        customerMessage: dataText,
+        cfg,
+      })
+      if (ai.ok && ai.extracted) {
+        if (fieldType === 'PHONE') {
+          const p = parsePhoneLoose(ai.extracted)
+          if (p) {
+            validData = p
+            parsedPhone = p
+          }
+        } else if (fieldType === 'DATE') {
+          const d = parseDateLoose(ai.extracted)
+          if (d) {
+            validData = d.normalized
+            parsedBirthday = d.date
+          }
+        } else if (ai.extracted.length >= 2) {
+          validData = ai.extracted.slice(0, 300)
+        }
+      }
+      // still nothing → the AI writes a friendly re-ask in the customer's own
+      // language; no AI reply / AI off → the standard retry text
+      if (!validData) {
+        await sendText(psid, ai.ok && ai.reply ? ai.reply : retryAsk(fieldType))
+        if (ai.ok && ai.reply) await saveChatTurn(psid, 'bot', ai.reply)
+        return
+      }
+    }
+
+    // 2d. WRONG data → re-ask, NO discount (scam attempt blocked)
     if (!validData) {
       await sendText(psid, retryAsk(fieldType))
       return
     }
 
-    // 2d. correct data → AUTO-VERIFY: apply the offer to the bill right away
+    // 2e. correct data → AUTO-VERIFY: apply the offer to the bill right away
     const result = await applyBirthdayDiscount({
       psid,
       firstName: name || 'নাম যাচাই বাকি',

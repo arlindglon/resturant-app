@@ -244,6 +244,14 @@ interface MessengerTestResult {
   lastVerifyAt: string
 }
 
+interface GeminiTestResult {
+  enabled: boolean
+  model: string
+  keys: { masked: string; ok: boolean; ms: number; error: string | null }[]
+  kbStats: { categories: number; items: number; offers: number; vouchers: number; happyHours: number } | null
+  sample: { ok: boolean; reply: string | null; error: string | null }
+}
+
 /** Bengali relative time for webhook diagnostics */
 function bnAgo(iso: string | null | undefined): string {
   if (!iso) return ''
@@ -2898,6 +2906,8 @@ interface CustomerRow {
   birthday: string | null
   eventLabel: string | null
   dataText: string | null
+  address: string | null
+  statedName: string | null
   discountClaimed: boolean
   claims: number
   lastClaimAt: string | null
@@ -3084,6 +3094,12 @@ function CustomersTab({ onAuthRequired }: TabProps) {
               {c.dataText && (
                 <p className="mt-2 truncate rounded bg-white px-2 py-1.5 text-[11px] text-stone-600">
                   📝 যাচাইয়ের তথ্য: <span className="font-semibold">{c.dataText}</span>
+                </p>
+              )}
+              {(c.statedName || c.address) && (
+                <p className="mt-1 truncate rounded bg-sky-50 px-2 py-1.5 text-[11px] text-sky-800">
+                  🤖 AI জেনে নিয়েছে:{c.statedName ? ` নাম — ${c.statedName}` : ''}
+                  {c.address ? `${c.statedName ? ' • ' : ''}ঠিকানা — ${c.address}` : ''}
                 </p>
               )}
             </div>
@@ -3962,6 +3978,8 @@ function SettingsTab({ onAuthRequired }: TabProps) {
   const [runningCron, setRunningCron] = useState(false)
   const [testingMeta, setTestingMeta] = useState(false)
   const [metaTest, setMetaTest] = useState<MessengerTestResult | null>(null)
+  const [testingGemini, setTestingGemini] = useState(false)
+  const [geminiTest, setGeminiTest] = useState<GeminiTestResult | null>(null)
   const logoFileRef = useRef<HTMLInputElement>(null)
 
   const load = useCallback(async () => {
@@ -4044,6 +4062,12 @@ function SettingsTab({ onAuthRequired }: TabProps) {
       [SETTING_KEYS.DEVELOPER_NOTE_LINK]: form[SETTING_KEYS.DEVELOPER_NOTE_LINK] ?? '',
       [SETTING_KEYS.ITEM_SPECIAL_NOTE_ENABLED]: form[SETTING_KEYS.ITEM_SPECIAL_NOTE_ENABLED] ?? 'true',
       [SETTING_KEYS.MESSENGER_AUTO_REPLY_ENABLED]: form[SETTING_KEYS.MESSENGER_AUTO_REPLY_ENABLED] ?? 'true',
+      [SETTING_KEYS.GEMINI_ENABLED]: form[SETTING_KEYS.GEMINI_ENABLED] ?? 'false',
+      [SETTING_KEYS.GEMINI_API_KEYS]: form[SETTING_KEYS.GEMINI_API_KEYS] ?? '',
+      [SETTING_KEYS.GEMINI_MODEL]: form[SETTING_KEYS.GEMINI_MODEL] ?? 'gemini-2.0-flash',
+      [SETTING_KEYS.GEMINI_PERSONA]: form[SETTING_KEYS.GEMINI_PERSONA] ?? '',
+      [SETTING_KEYS.AI_DELIVERY_RULES]: form[SETTING_KEYS.AI_DELIVERY_RULES] ?? '',
+      [SETTING_KEYS.AI_EXTRA_INFO]: form[SETTING_KEYS.AI_EXTRA_INFO] ?? '',
       [SETTING_KEYS.TERMS_LINK_ENABLED]: form[SETTING_KEYS.TERMS_LINK_ENABLED] ?? 'true',
       [SETTING_KEYS.PRIVACY_LINK_ENABLED]: form[SETTING_KEYS.PRIVACY_LINK_ENABLED] ?? 'true',
       [SETTING_KEYS.DATADEL_LINK_ENABLED]: form[SETTING_KEYS.DATADEL_LINK_ENABLED] ?? 'true',
@@ -4099,6 +4123,17 @@ function SettingsTab({ onAuthRequired }: TabProps) {
     )
     if (res.data.tokenTest.ok) toast.success(`টোকেন ঠিক আছে — পেজ: ${res.data.tokenTest.pageName}`)
     else toast.error('টোকেন কাজ করছে না — নিচে বিস্তারিত দেখুন')
+  }
+
+  const runGeminiTest = async () => {
+    setTestingGemini(true)
+    const res = await api.post<GeminiTestResult>('/api/admin/gemini-test')
+    setTestingGemini(false)
+    if (!res.ok || !res.data) return toast.error(res.error || 'টেস্ট চালানো যায়নি')
+    setGeminiTest(res.data)
+    if (res.data.keys.length === 0) toast.warning('আগে অন্তত একটি API কি যোগ করুন')
+    else if (res.data.sample.ok) toast.success('AI কাজ করছে ✅')
+    else toast.error('AI উত্তর দিচ্ছে না — নিচে বিস্তারিত দেখুন')
   }
 
   if (err) return <LoadError msg={err} onRetry={load} />
@@ -4709,6 +4744,176 @@ function SettingsTab({ onAuthRequired }: TabProps) {
               {runningCron ? <Loader2 className="h-4 w-4 animate-spin" /> : '🎂'} জন্মদিন জব এখন চালান
             </Button>
           </div>
+        </CardContent>
+      </Card>
+
+      {/* ---- AI chatbot (Gemini) ---- */}
+      <Card className="border-sky-200 bg-gradient-to-br from-sky-50/60 to-white">
+        <CardHeader className="pb-2">
+          <CardTitle className="flex items-center gap-2 text-base">🤖 AI চ্যাটবট (Google Gemini)</CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <div className="flex items-center justify-between rounded-lg border border-sky-200 bg-white p-3">
+            <div className="min-w-0 pr-3">
+              <p className="text-sm font-black text-stone-800">💬 AI চ্যাটবট চালু</p>
+              <p className="text-xs leading-snug text-stone-500">
+                কাস্টমার মেসেঞ্জারে বাংলা/বাংলিশ/English/Hindi — যেভাবেই লিখুক, AI একজন মানুষের মতো বুঝে সেই ভাষাতেই উত্তর দেবে। মেনু, দাম, অফার, ডেলিভারি রুলস সব নিজে থেকেই জানবে।
+              </p>
+            </div>
+            <Switch
+              checked={form[SETTING_KEYS.GEMINI_ENABLED] === 'true'}
+              onCheckedChange={(v) => set(SETTING_KEYS.GEMINI_ENABLED, v ? 'true' : 'false')}
+            />
+          </div>
+          {form[SETTING_KEYS.GEMINI_ENABLED] === 'true' && (
+            <div className="rounded-lg border border-sky-200 bg-white p-3 text-xs leading-snug text-sky-800">
+              ℹ️ অফার যাচাই (Claim on Messenger) আগের মতোই নিরাপদ সিস্টেমে হয় — AI শুধু কাস্টমারের ভাষা বুঝে তথ্য বের করে দেয়, ভুয়া ছাড় দেওয়ার সুযোগ পায় না।
+            </div>
+          )}
+
+          <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+            <div className="space-y-1">
+              <FieldLabel>AI মডেল</FieldLabel>
+              <Select
+                value={form[SETTING_KEYS.GEMINI_MODEL] ?? 'gemini-2.0-flash'}
+                onValueChange={(v) => set(SETTING_KEYS.GEMINI_MODEL, v)}
+              >
+                <SelectTrigger className="w-full">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="gemini-2.0-flash">Gemini 2.0 Flash (সুপারিশকৃত)</SelectItem>
+                  <SelectItem value="gemini-2.5-flash">Gemini 2.5 Flash (নতুন)</SelectItem>
+                  <SelectItem value="gemini-2.0-flash-lite">Gemini 2.0 Flash-Lite (হালকা)</SelectItem>
+                  <SelectItem value="gemini-1.5-flash">Gemini 1.5 Flash (পুরনো)</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="space-y-1">
+              <FieldLabel>API কি সংখ্যা</FieldLabel>
+              <div className="flex h-9 items-center rounded-md border border-stone-200 bg-stone-50 px-3 text-sm font-bold text-stone-700">
+                {toBn(String(((form[SETTING_KEYS.GEMINI_API_KEYS] ?? '').match(/\S+/g) || []).length))} টি কি — একটা ব্যস্ত থাকলে পরেরটা অটো কাজ করবে
+              </div>
+            </div>
+          </div>
+
+          <div className="space-y-1">
+            <FieldLabel>Gemini API কি (এক লাইনে একটি — যত খুশি যোগ করুন)</FieldLabel>
+            <Textarea
+              rows={3}
+              value={form[SETTING_KEYS.GEMINI_API_KEYS] ?? ''}
+              onChange={(e) => set(SETTING_KEYS.GEMINI_API_KEYS, e.target.value)}
+              placeholder={'AIzaSy… প্রথম কি\nAIzaSy… দ্বিতীয় কি (ঐচ্ছিক — বেশি কি = বেশি ফ্রি লিমিট)'}
+              className="font-mono text-xs"
+            />
+            <p className="text-[11px] text-stone-500">
+              ফ্রি কি নিন: <b>aistudio.google.com/apikey</b> → Create API key → কপি করে উপরে পেস্ট করুন। একাধিক কি দিলে একটার লিমিট শেষ হলে AI নিজে থেকেই পরেরটা ব্যবহার করবে (আনলিমিটেড সেটআপ)।
+            </p>
+          </div>
+
+          <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+            <div className="space-y-1">
+              <FieldLabel>ডেলিভারি রুলস (AI এটি পড়ে উত্তর দেবে)</FieldLabel>
+              <Textarea
+                rows={3}
+                value={form[SETTING_KEYS.AI_DELIVERY_RULES] ?? ''}
+                onChange={(e) => set(SETTING_KEYS.AI_DELIVERY_RULES, e.target.value)}
+                placeholder={'যেমন: ৩ কিমির ভেতরে ফ্রি হোম ডেলিভারি, বিকাশে অগ্রিম টাকা দিতে হবে…'}
+              />
+            </div>
+            <div className="space-y-1">
+              <FieldLabel>আরও তথ্য (ঠিকানা, সময়, নিয়ম — যা জানাতে চান)</FieldLabel>
+              <Textarea
+                rows={3}
+                value={form[SETTING_KEYS.AI_EXTRA_INFO] ?? ''}
+                onChange={(e) => set(SETTING_KEYS.AI_EXTRA_INFO, e.target.value)}
+                placeholder={'যেমন: প্রতিদিন সকাল ১১টা থেকে রাত ১১টা পর্যন্ত খোলা থাকি…'}
+              />
+            </div>
+          </div>
+
+          <div className="space-y-1">
+            <FieldLabel>AI-এর ব্যক্তিত্ব / বাড়তি নির্দেশনা (ঐচ্ছিক)</FieldLabel>
+            <Textarea
+              rows={2}
+              value={form[SETTING_KEYS.GEMINI_PERSONA] ?? ''}
+              onChange={(e) => set(SETTING_KEYS.GEMINI_PERSONA, e.target.value)}
+              placeholder="যেমন: খুবই মজার ঢঙে কথা বলবে, কাস্টমারকে বিরিয়ানি recommend করবে…"
+            />
+          </div>
+
+          {/* live test */}
+          <div className="space-y-2">
+            <Button
+              onClick={runGeminiTest}
+              disabled={testingGemini}
+              variant="outline"
+              className="border-sky-300 font-black text-sky-700 hover:bg-sky-50"
+            >
+              {testingGemini ? <Loader2 className="h-4 w-4 animate-spin" /> : '🧪'} AI কি ও উত্তর টেস্ট করুন
+            </Button>
+            {geminiTest && (
+              <div className="rounded-lg border border-sky-200 bg-white p-3 text-xs leading-snug">
+                <p className="font-black text-stone-800">কি স্ট্যাটাস:</p>
+                {geminiTest.keys.length === 0 ? (
+                  <p className="mt-1 text-red-600">কোনো কি নেই — উপরে কি পেস্ট করে সেভ করুন</p>
+                ) : (
+                  <ul className="mt-1 space-y-1">
+                    {geminiTest.keys.map((k) => (
+                      <li key={k.masked} className="flex flex-wrap items-center gap-2">
+                        <span className={k.ok ? 'font-bold text-emerald-700' : 'font-bold text-red-600'}>
+                          {k.ok ? '✅' : '❌'} {k.masked}
+                        </span>
+                        {k.ok ? (
+                          <span className="text-stone-400">({toBn(String(k.ms))}ms)</span>
+                        ) : (
+                          <span className="text-red-500">{k.error}</span>
+                        )}
+                      </li>
+                    ))}
+                  </ul>
+                )}
+                {geminiTest.kbStats && (
+                  <p className="mt-2 text-stone-500">
+                    AI এখন জানে: {toBn(String(geminiTest.kbStats.items))}টি মেনু আইটেম, {toBn(String(geminiTest.kbStats.offers))}টি অফার,{' '}
+                    {toBn(String(geminiTest.kbStats.vouchers))}টি কুপন
+                  </p>
+                )}
+                {geminiTest.sample.reply && (
+                  <div className="mt-2 rounded-lg bg-sky-50 p-2.5">
+                    <p className="font-black text-sky-800">🤖 AI-এর নমুনা উত্তর:</p>
+                    <p className="mt-1 whitespace-pre-wrap text-stone-700">{geminiTest.sample.reply}</p>
+                  </div>
+                )}
+                {geminiTest.sample.error && !geminiTest.sample.ok && (
+                  <p className="mt-2 text-red-600">AI উত্তর ব্যর্থ: {geminiTest.sample.error}</p>
+                )}
+              </div>
+            )}
+          </div>
+
+          <details className="rounded-lg border border-sky-200 bg-white p-3">
+            <summary className="cursor-pointer text-sm font-black text-stone-800">
+              📖 ফ্রি Gemini API কি নেওয়ার ধাপে ধাপে গাইড
+            </summary>
+            <ol className="mt-3 list-decimal space-y-2 pl-4 text-xs leading-relaxed text-stone-700">
+              <li>
+                ব্রাউজারে যান: <b>aistudio.google.com/apikey</b> (Google অ্যাকাউন্ট দিয়ে লগইন — কার্ড দিতে হয় না)।
+              </li>
+              <li>
+                <b>Create API key</b> চাপুন → একটি নতুন/বর্তমান প্রজেক্ট সিলেক্ট করুন → কি তৈরি হবে।
+              </li>
+              <li>
+                কি কপি করে (AIzaSy… দিয়ে শুরু) উপরের বাক্সে পেস্ট করুন → <b>সেটিংস সেভ করুন</b> → AI চ্যাটবট চালু করুন।
+              </li>
+              <li>
+                <b>আনলিমিটেড টিপস:</b> একই কি দিয়ে প্রতি মিনিটে কিছু সংখ্যক ফ্রি রিকোয়েস্ট লিমিট আছে। আরও কি নিয়ে (একই অ্যাকাউন্টে একাধিক প্রজেক্ট বা ভিন্ন Google অ্যাকাউন্ট) আলাদা লাইনে পেস্ট করুন — একটা ব্যস্ত থাকলে সিস্টেম সাথে সাথেই পরেরটা ব্যবহার করবে।
+              </li>
+              <li>
+                <b>টেস্ট:</b> "🧪 AI কি ও উত্তর টেস্ট করুন" চাপুন — সব কি সবুজ ও নমুনা উত্তর এলেই সব ঠিক। এরপর কাস্টমার মেসেঞ্জারে মেসেজ করলেই AI উত্তর দেবে।
+              </li>
+            </ol>
+          </details>
         </CardContent>
       </Card>
     </div>

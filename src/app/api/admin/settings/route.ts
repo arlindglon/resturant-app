@@ -63,6 +63,11 @@ export async function PUT(req: NextRequest) {
       const n = parseFloat(String(v))
       if (isNaN(n) || n < 0) return fail('সঠিক পরিমাণ দিন', 400)
       updates[k] = String(n)
+    } else if (k === SETTING_KEYS.GEMINI_API_KEYS) {
+      // multi-key rotation list — one key per line, allow plenty of keys
+      updates[k] = String(v).slice(0, 20000)
+    } else if (k === SETTING_KEYS.GEMINI_PERSONA || k === SETTING_KEYS.AI_DELIVERY_RULES || k === SETTING_KEYS.AI_EXTRA_INFO) {
+      updates[k] = String(v).slice(0, 8000)
     } else {
       updates[k] = String(v).slice(0, 2000)
     }

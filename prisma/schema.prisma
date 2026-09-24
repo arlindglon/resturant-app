@@ -266,6 +266,8 @@ model Customer {
   birthday        DateTime?      // event date (birthday / anniversary — labelled by eventLabel)
   eventLabel      String?        // "জন্মদিন" | "বিয়ের বার্ষিকী" | custom — what birthday column means
   dataText        String?        @db.Text // last verification data the customer sent in messenger
+  address         String?        @db.Text // delivery/contact address (AI chatbot natural extraction)
+  statedName      String?        // name the customer stated in chat (when different from FB profile)
   lastSeenAt      DateTime?
   discountClaimed Boolean        @default(false) // lifetime lock after birthday discount
   claimedAt       DateTime?
@@ -317,6 +319,18 @@ model ReferralToken {
   occasionName String?
 
   @@map("referral_tokens")
+}
+
+// ---------------- AI Chatbot: per-PSID conversation history (Gemini context) ----------------
+model ChatMessage {
+  id        String   @id @default(cuid())
+  psid      String
+  role      String // customer | bot
+  text      String   @db.Text
+  createdAt DateTime @default(now())
+
+  @@index([psid, createdAt])
+  @@map("chat_messages")
 }
 
 // ---------------- ImgBB Multi-Key Management ----------------
