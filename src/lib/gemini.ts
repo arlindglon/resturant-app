@@ -226,21 +226,29 @@ function retryDelaySeconds(msg: string): number | null {
  * / thinkingConfig মানে না — সেই ফিল্ডগুলো বাদ দিয়ে system-টা প্রথম user
  * মেসেজের ভেতরে জুড়ে দেওয়া হয়। (JSON ছাড়া উত্তর এলে caller-রা raw text-কেই
  * reply ধরে — চেইন ভাঙে না।)
+ * এছাড়া যে জেমিনি মডেল একবার JSON-schema প্রত্যাখ্যান করেছে (simpleModelBodies)
+ * সেটার জন্যও সরলীকৃত body ব্যবহার হয় — প্রতি মেসেজে দুটো অপ্রয়োজনীয় ব্যর্থ কল বাঁচে।
  */
+const simpleModelBodies = new Set<string>()
+
 function bodyForModel(body: Record<string, unknown>, model: string): Record<string, unknown> {
-  if (!/^gemma/i.test(model)) return body
+  const isGemma = /^gemma/i.test(model)
+  const simplified = simpleModelBodies.has(model)
+  if (!isGemma && !simplified) return body
   const b: Record<string, unknown> = { ...body }
-  const sys = (b.systemInstruction as { parts?: { text?: string }[] } | undefined)?.parts
-    ?.map((p) => p.text || '')
-    .join('\n\n')
-  if (sys) {
-    const contents = (b.contents as { role: string; parts: { text?: string }[] }[] | undefined) || []
-    b.contents = contents.map((c, i) =>
-      i === 0
-        ? { ...c, parts: [{ text: `${sys}\n\n---\n\n${c.parts.map((p) => p.text || '').join('')}` }] }
-        : c,
-    )
-    delete b.systemInstruction
+  if (isGemma) {
+    const sys = (b.systemInstruction as { parts?: { text?: string }[] } | undefined)?.parts
+      ?.map((p) => p.text || '')
+      .join('\n\n')
+    if (sys) {
+      const contents = (b.contents as { role: string; parts: { text?: string }[] }[] | undefined) || []
+      b.contents = contents.map((c, i) =>
+        i === 0
+          ? { ...c, parts: [{ text: `${sys}\n\n---\n\n${c.parts.map((p) => p.text || '').join('')}` }] }
+          : c,
+      )
+      delete b.systemInstruction
+    }
   }
   const gc = { ...((b.generationConfig as Record<string, unknown>) || {}) }
   delete gc.responseMimeType
@@ -291,7 +299,7 @@ async function generateRotating(
   body: Record<string, unknown>,
 ): Promise<{ ok: boolean; text: string | null; error: string | null }> {
   const started = Date.now()
-  const BUDGET_MS = 30_000
+  const BUDGET_MS = 45_000
   const WAIT_CAP_S = 12
   const timeLeft = () => BUDGET_MS - (Date.now() - started)
 
@@ -335,30 +343,26 @@ async function generateRotating(
           return { ok: true, text, error: null }
         } catch (e) {
           const msg = e instanceof Error ? e.message : String(e)
-          // মডেল thinkingConfig মানে না (INVALID_ARGUMENT/unknown field) → ফিল্ডটা
-          // বাদ দিয়ে একই কি-তে আরেকবার — বট কখনো পুরোপুরি বন্ধ হয়ে যায় না
-          if (mBody.generationConfig && (mBody.generationConfig as Record<string, unknown>).thinkingConfig) {
-            try {
-              const text = await generateWithKey(key, model, stripThinking(mBody))
-              markKeyGood(key)
-              nextCursor()
-              return { ok: true, text, error: null }
-            } catch {
-              /* still failing → normal error handling below */
-            }
-          }
           lastError = `${model}: ${msg}`
           // মৃত কি (ভুল কি / পারমিশন নেই / অঞ্চল-ব্লক) — ১০ মিনিট স্কিপ
           if (isDeadKeyError(msg)) {
             markKeyBad(key, msg)
             continue
           }
+          // মডেল-লেভেল ওভারলোড ("high demand") — একই মডেলের অন্য কিতেও একই
+          // অবস্থা; বাকি কি নষ্ট না করে সরাসরি পরের মডেলে (বাজেট বাঁচে)
+          if (isQuotaError(e) && /high demand|overloaded/i.test(msg)) {
+            markKeyQuotaBad(key, model, 60, msg)
+            continue modelLoop
+          }
           // মডেল ফিল্ড মানে না (thinking/JSON-schema)? সব বাদ দিয়ে একই কি-তে
-          // আরেকবার — লাইট মডেলও তখন প্লেইন JSON লিখে উত্তর দিতে পারে
+          // আরেকবার — লাইট মডেলও তখন প্লেইন JSON লিখে উত্তর দিতে পারে; একবার
+          // সফল হলে মডেলটা মনে রাখা হয় (পরের কলে সরাসরি সরল body)
           if (isModelError(msg)) {
             try {
               const text = await generateWithKey(key, model, simplifiedConfig(mBody))
               markKeyGood(key)
+              simpleModelBodies.add(model)
               nextCursor()
               return { ok: true, text }
             } catch {
