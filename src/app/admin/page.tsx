@@ -9,7 +9,7 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { api, type ApiResponse } from '@/lib/client'
-import { SETTING_KEYS, SUB_ADMIN_PERMISSIONS } from '@/lib/constants'
+import { SETTING_KEYS, SUB_ADMIN_PERMISSIONS, LANGUAGE_LABELS } from '@/lib/constants'
 import { bnDateTime, bnDateOnly, bnDays, bnTaka, parseJsonSafe, toBn } from '@/lib/bn'
 import {
   armStaffSound,
@@ -2910,6 +2910,7 @@ interface CustomerRow {
   dataText: string | null
   address: string | null
   statedName: string | null
+  language: string | null
   discountClaimed: boolean
   claims: number
   noteCount: number
@@ -3076,11 +3077,11 @@ function CustomersTab({ onAuthRequired }: TabProps) {
 
   const customers = data.customers
 
-  // quick lookup: code (C-0007), phone, name or AI-learned name — case/digit-insensitive
+  // quick lookup: code (C-0007), phone, name, AI-learned name or language — case-insensitive
   const q = query.trim().toLowerCase()
   const filtered = q
     ? customers.filter((c) =>
-        [c.code, c.phone, c.statedName, customerName(c), c.firstName, c.lastName]
+        [c.code, c.phone, c.statedName, customerName(c), c.firstName, c.lastName, c.language ? LANGUAGE_LABELS[c.language] : null]
           .filter(Boolean)
           .some((v) => String(v).toLowerCase().includes(q))
       )
@@ -3102,7 +3103,7 @@ function CustomersTab({ onAuthRequired }: TabProps) {
       <div className="flex items-start gap-2 rounded-xl border border-amber-300 bg-amber-50 p-3 text-sm text-amber-900">
         <Info className="mt-0.5 h-4 w-4 shrink-0 text-amber-600" />
         <p className="font-bold">
-          মেসেঞ্জারে অফার দাবি করা প্রতিটি কাস্টমারের নাম (Facebook থেকে), ফোন, ইভেন্টের তারিখ ও যাচাইয়ের তথ্য এখানে জমা থাকে। আসন্ন ইভেন্ট থেকে সরাসরি মেসেঞ্জারে অফার পাঠাতে পারবেন।
+          মেসেঞ্জারে চ্যাট করা প্রতিটি কাস্টমার এখানে জমা থাকে — অফার দাবি করুক বা সরাসরি পেজে মেসেজ দিন, সব একইভাবে ট্র্যাক হয় (নাম, ফোন, ইভেন্টের তারিখ, যাচাইয়ের তথ্য, ভাষা)। AI কথার ছলে তথ্য শিখে নোটে রাখে; এডিটে গিয়ে ভাষা মার্ক করে দিলে বট সেই ভাষায়ই কথা বলবে।
         </p>
       </div>
 
@@ -3240,6 +3241,11 @@ function CustomersTab({ onAuthRequired }: TabProps) {
                 >
                   {c.messenger ? '💬 মেসেঞ্জার' : 'বিল পেজ'}
                 </Badge>
+                {c.language && (
+                  <Badge variant="outline" className="border-teal-200 bg-teal-50 text-[10px] text-teal-700" title="কথা বলার ভাষা (AI জেনেছে বা আপনি মার্ক করেছেন)">
+                    🗣️ {LANGUAGE_LABELS[c.language] || c.language}
+                  </Badge>
+                )}
                 {c.messenger && (
                   <Button
                     size="sm"
@@ -3319,6 +3325,7 @@ function EditCustomerDialog({
     return PLACEHOLDER_NAMES.includes(current) ? '' : current
   })
   const [eventLabel, setEventLabel] = useState(customer?.eventLabel ?? '')
+  const [language, setLanguage] = useState(customer?.language ?? 'unknown')
   const [phone, setPhone] = useState(customer?.phone ?? '')
   const [birthday, setBirthday] = useState(customer?.birthday ? customer.birthday.slice(0, 10) : '')
   const [saving, setSaving] = useState(false)
@@ -3329,6 +3336,7 @@ function EditCustomerDialog({
     const res = await api.patch(`/api/admin/customers/${customer.id}`, {
       ...(name.trim() ? { firstName: name } : {}),
       eventLabel,
+      language: language === 'unknown' ? null : language,
       phone,
       birthday: birthday || null,
     })
@@ -3371,6 +3379,25 @@ function EditCustomerDialog({
           <div className="space-y-1">
             <FieldLabel>ইভেন্টের নাম</FieldLabel>
             <Input value={eventLabel} onChange={(e) => setEventLabel(e.target.value)} placeholder="জন্মদিন / বিয়ের বার্ষিকী / অন্য কিছু" />
+          </div>
+          <div className="space-y-1">
+            <FieldLabel>কথা বলার ভাষা</FieldLabel>
+            <Select value={language} onValueChange={setLanguage}>
+              <SelectTrigger className="w-full">
+                <SelectValue placeholder="ভাষা বেছে নিন" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="unknown">অটো — কাস্টমারের ভাষায়ই কথা বলবে</SelectItem>
+                {Object.entries(LANGUAGE_LABELS).map(([code, label]) => (
+                  <SelectItem key={code} value={code}>
+                    {label}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            <p className="text-[10px] text-stone-400">
+              নির্দিষ্ট ভাষা মার্ক করলে বট এই কাস্টমারকে সবসময় সেই ভাষায় উত্তর দেবে (AI নিজেও এই তালিকা থেকে ভাষা শিখে নেয়)।
+            </p>
           </div>
           <div className="space-y-1">
             <FieldLabel>ইভেন্টের তারিখ</FieldLabel>

@@ -288,12 +288,18 @@ async function aiGeneralReply(psid: string, profileName: string, customerMessage
 
   // CRM notes & tags → the bot genuinely remembers this customer
   // ("আবার দেখা হলো রাকিব ভাই! গতবারের মতো বিরিয়ানি হবে?")
+  // admin-marked language → the bot always replies in it
   let customerNotes: string | undefined
+  let customerLanguage: string | null | undefined
   try {
     const cust = await db.customer.findUnique({
       where: { psid },
-      select: { notes: { orderBy: { createdAt: 'desc' as const }, take: 10, select: { kind: true, text: true } } },
+      select: {
+        language: true,
+        notes: { orderBy: { createdAt: 'desc' as const }, take: 10, select: { kind: true, text: true } },
+      },
     })
+    customerLanguage = cust?.language ?? null
     if (cust?.notes?.length) {
       customerNotes = cust.notes.map((n) => `- ${n.text}`).join('\n')
     }
@@ -308,6 +314,7 @@ async function aiGeneralReply(psid: string, profileName: string, customerMessage
     customerMessage,
     customerName: profileName,
     customerNotes,
+    customerLanguage,
     extraPersona: cfg.persona,
     cfg,
   })
@@ -328,9 +335,9 @@ async function aiGeneralReply(psid: string, profileName: string, customerMessage
 /** persist the data the AI picked up during small talk (CRM enrichment) */
 async function saveAiCrmData(
   psid: string,
-  extracted: { name: string | null; phone: string | null; address: string | null; specialDay: string | null; specialDayLabel: string | null; note: string | null },
+  extracted: { name: string | null; phone: string | null; address: string | null; specialDay: string | null; specialDayLabel: string | null; note: string | null; language?: string | null },
 ): Promise<void> {
-  const has = extracted.name || extracted.phone || extracted.address || extracted.specialDay || extracted.note
+  const has = extracted.name || extracted.phone || extracted.address || extracted.specialDay || extracted.note || extracted.language
   if (!has) return
   try {
     // a stated phone only counts when it parses; a special day only when it parses as a date
@@ -338,10 +345,13 @@ async function saveAiCrmData(
     const day = extracted.specialDay ? parseDateLoose(extracted.specialDay) : null
     // a learned name also fills a placeholder profile name ("নাম যাচাই বাকি" / "Customer")
     // so the admin sees the real name on the CRM card right away
-    const current = extracted.name
-      ? await db.customer.findUnique({ where: { psid }, select: { firstName: true } })
+    const current = extracted.name || extracted.language
+      ? await db.customer.findUnique({ where: { psid }, select: { firstName: true, language: true } })
       : null
     const fillsName = !!extracted.name && isPlaceholderName(current?.firstName)
+    // detected language only fills an EMPTY preference — the admin's manual
+    // mark always wins and is never overwritten by the AI
+    const fillsLanguage = !!extracted.language && !current?.language
     await db.customer.updateMany({
       where: { psid },
       data: {
@@ -351,6 +361,7 @@ async function saveAiCrmData(
         ...(extracted.address ? { address: extracted.address.slice(0, 500) } : {}),
         ...(day ? { birthday: day.date } : {}),
         ...(day && extracted.specialDayLabel ? { eventLabel: extracted.specialDayLabel.slice(0, 80) } : {}),
+        ...(fillsLanguage ? { language: extracted.language } : {}),
         lastSeenAt: new Date(),
       },
     })
@@ -492,6 +503,8 @@ async function handleEvent(event: MessagingEvent) {
       // history already contains the current customer message (saved by the caller) — drop the duplicate
       const history = hist.filter((h, i) => !(i === hist.length - 1 && h.role === 'user' && h.text === dataText))
       const askCount = tokenRow.askCount || 0
+      // admin-marked language → the verify conversation respects it too
+      const markedLang = await db.customer.findUnique({ where: { psid }, select: { language: true } })
       const ai = await verificationChat({
         fieldType: fieldType as 'DATE' | 'PHONE' | 'TEXT',
         offerName: offer?.name || 'বিশেষ অফার',
@@ -501,6 +514,7 @@ async function handleEvent(event: MessagingEvent) {
         knowledgeBase: kb.text,
         history,
         customerMessage: dataText,
+        customerLanguage: markedLang?.language ?? null,
         cfg,
       })
 

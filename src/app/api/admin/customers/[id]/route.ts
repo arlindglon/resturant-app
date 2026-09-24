@@ -1,10 +1,11 @@
 // PATCH /api/admin/customers/[id] — admin edits the CRM record:
-// name (manual entry when Facebook/AI never learned it), event label
-// ("জন্মদিন" / "বিয়ের বার্ষিকী" / custom), event date, phone.
+// name (manual entry when Facebook/AI never learned it), chat language the
+// bot must use, event label ("জন্মদিন" / "বিয়ের বার্ষিকী" / custom), date, phone.
 import { NextRequest } from 'next/server'
 import { db } from '@/lib/db'
 import { ok, fail } from '@/lib/api'
 import { requirePerm } from '@/lib/staff-auth'
+import { LANGUAGE_CODES } from '@/lib/constants'
 
 export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   const denied = await requirePerm('tables')
@@ -26,6 +27,10 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
     }
   }
   if (typeof body.eventLabel === 'string') data.eventLabel = body.eventLabel.trim().slice(0, 60) || null
+  // admin marks the language the bot must always use with this customer
+  // ("" / null clears the mark → the bot mirrors the customer again)
+  if (body.language === null || body.language === '') data.language = null
+  else if (typeof body.language === 'string' && LANGUAGE_CODES.includes(body.language)) data.language = body.language
   if (typeof body.phone === 'string') {
     const phone = body.phone.replace(/[^\d+]/g, '')
     data.phone = phone || null

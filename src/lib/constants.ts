@@ -156,3 +156,14 @@ export const REALTIME_EVENTS = {
 } as const
 
 export const taka = (n: number) => `৳${n.toFixed(n % 1 === 0 ? 0 : 2)}`
+
+/** chat-language codes the AI detects / the admin can mark per customer —
+ *  the bot then always replies in the marked language */
+export const LANGUAGE_LABELS: Record<string, string> = {
+  bn: 'বাংলা',
+  banglish: 'বাংলিশ',
+  en: 'English',
+  hi: 'হিন্দি',
+  other: 'অন্যান্য',
+}
+export const LANGUAGE_CODES = Object.keys(LANGUAGE_LABELS)

@@ -18,7 +18,7 @@
 // discount, only understand the customer's language.
 import { db } from '@/lib/db'
 import { getSetting } from '@/lib/settings'
-import { SETTING_KEYS } from '@/lib/constants'
+import { SETTING_KEYS, LANGUAGE_LABELS } from '@/lib/constants'
 
 const API_BASE = 'https://generativelanguage.googleapis.com/v1beta/models'
 
@@ -235,6 +235,7 @@ const CHAT_SCHEMA = {
     specialDay: { type: 'STRING' },
     specialDayLabel: { type: 'STRING' },
     note: { type: 'STRING' },
+    language: { type: 'STRING', enum: ['bn', 'banglish', 'en', 'hi', 'other'] },
   },
   required: ['reply'],
 } as const
@@ -270,6 +271,7 @@ export interface AiChatResult {
     specialDay: string | null // raw date text found in the conversation
     specialDayLabel: string | null // জন্মদিন / বিবাহবার্ষিকী / custom
     note: string | null // notable customer fact worth remembering in the CRM
+    language: string | null // detected customer language (bn/banglish/en/hi/other)
   }
   error: string | null
 }
@@ -291,6 +293,7 @@ const BASE_PERSONA = `তুমি একটি রেস্টুরেন্�
 
 কাস্টমারের তথ্য সংগ্রহ (স্বাভাবিকভাবে, জোর করে নয়):
 - কথার মধ্যে নাম, ফোন, ঠিকানা, বিশেষ দিন (জন্মদিন/বিবাহবার্ষিকী) বললে ফিল্ডে পূরণ করো; না থাকলে ফাঁকা।
+- কাস্টমার এই মেসেজে যে ভাষায় লিখছে সেটা language ফিল্ডে ছোট কোডে লিখো: bn (শুদ্ধ বাংলা), banglish (বাংলা কথা english অক্ষরে), en (english), hi (হিন্দি), other — বোঝা না গেলে ফাঁকা।
 - কাস্টমার সম্পর্কে ভবিষ্যতে কাজে লাগার মতো উল্লেখযোগ্য তথ্য (যেমন: আজ রাতে ৬ জনের দল নিয়ে আসবে, ঝাল খেতে ভালোবাসে, বাচ্চা সহ আসবে, ক্যাটারিং জানতে চায়) থাকলে note ফিল্ডে ১ লাইনে লিখো — না থাকলে ফাঁকা।
 - reply সবসময় কাস্টমারের ভাষায় পরিষ্কার উত্তর — ইংরেজি টেকনিক্যাল বক্তব্য নয়।`
 
@@ -300,19 +303,24 @@ export async function chatWithCustomer(opts: {
   customerMessage: string
   customerName: string
   customerNotes?: string
+  /** admin-marked language (bn/banglish/en/hi/other) — when set, ALWAYS reply in it */
+  customerLanguage?: string | null
   extraPersona?: string
   cfg: GeminiConfig
 }): Promise<AiChatResult> {
-  const empty = { name: null, phone: null, address: null, specialDay: null, specialDayLabel: null, note: null }
+  const empty = { name: null, phone: null, address: null, specialDay: null, specialDayLabel: null, note: null, language: null }
   const system = [
     BASE_PERSONA,
     opts.extraPersona ? `রেস্টুরেন্ট মালিকের বাড়তি নির্দেশনা:\n${opts.extraPersona}` : '',
+    opts.customerLanguage
+      ? `মালিকের বিশেষ নির্দেশ: এই কাস্টমারকে সবসময় ${LANGUAGE_LABELS[opts.customerLanguage] || opts.customerLanguage} ভাষায় উত্তর দাও — কাস্টমার অন্য ভাষায় লিখলেও এই ভাষাতেই উত্তর দিতে হবে।`
+      : '',
     `KNOWLEDGE BASE (একমাত্র সত্যের উৎস):\n${opts.knowledgeBase}`,
     opts.customerNotes ? `এই কাস্টমার সম্পর্কে আগে জমানো নোট/ট্যাগ (ব্যক্তিগত মনে রেখে কথা বলো, খুশি করো):\n${opts.customerNotes}` : '',
     opts.customerName
       ? `কাস্টমারের Facebook প্রোফাইল নাম: ${opts.customerName} (তাকে নাম ধরে ডাকতে পারো)`
       : '',
-    `আউটপুট অবশ্যই এই JSON ফরম্যাটে: {"reply": "...", "customerName": "", "phone": "", "address": "", "specialDay": "", "specialDayLabel": "", "note": ""} — যে তথ্য নেই সেটি ফাঁকা স্ট্রিং ""।`,
+    `আউটপুট অবশ্যই এই JSON ফরম্যাটে: {"reply": "...", "customerName": "", "phone": "", "address": "", "specialDay": "", "specialDayLabel": "", "note": "", "language": "bn|banglish|en|hi|other"} — যে তথ্য নেই সেটি ফাঁকা স্ট্রিং ""।`,
   ]
     .filter(Boolean)
     .join('\n\n')
@@ -344,6 +352,7 @@ export async function chatWithCustomer(opts: {
     return { ok: false, reply: null, extracted: empty, error: 'JSON ট্রানকেটেড (thinking বাজেট শেষ)' }
   }
   const reply = str(j?.reply) || res.text // JSON parse fail → send raw text as reply
+  const lang = str(j?.language)
   return {
     ok: true,
     reply,
@@ -354,6 +363,7 @@ export async function chatWithCustomer(opts: {
       specialDay: str(j?.specialDay) || null,
       specialDayLabel: str(j?.specialDayLabel) || null,
       note: str(j?.note) || null,
+      language: ['bn', 'banglish', 'en', 'hi', 'other'].includes(lang) ? lang : null,
     },
     error: null,
   }
@@ -399,6 +409,8 @@ export async function verificationChat(opts: {
   knowledgeBase: string
   history: { role: 'user' | 'model'; text: string }[]
   customerMessage: string
+  /** admin-marked language (bn/banglish/en/hi/other) — when set, ALWAYS reply in it */
+  customerLanguage?: string | null
   cfg: GeminiConfig
 }): Promise<AiVerifyResult> {
   const typeHint =
@@ -416,7 +428,7 @@ export async function verificationChat(opts: {
   const system = `তুমি একটি রেস্টুরেন্টের অভিজ্ঞ হোস্ট + সেলস প্রো — উষ্ণ, পেশাদার, মানুষের মতো। কাস্টমার "${opts.offerName}" অফার নিতে চেয়েছিল; যাচাইয়ে বট চেয়েছে: "${opts.askText}"
 
 চরিত্রের নিয়ম:
-- কাস্টমার যে ভাষায়/স্টাইলে লিখবে ঠিক সেভাবেই উত্তর (বাংলা/বাংলিশ/English/Hindi)।
+- কাস্টমার যে ভাষায়/স্টাইলে লিখবে ঠিক সেভাবেই উত্তর (বাংলা/বাংলিশ/English/Hindi)।${opts.customerLanguage ? ` তবে মালিকের বিশেষ নির্দেশ: এই কাস্টমারকে সবসময় ${LANGUAGE_LABELS[opts.customerLanguage] || opts.customerLanguage} ভাষায় উত্তর দাও।` : ''}
 - আগে কাস্টমারের কথাটার স্বাভাবিক উত্তর দাও (খোঁজখবর, জোক, আসার কথা, নাম বলা — সব মেনে নাও), তারপর প্রয়োজনে ব্যবসা।
 - ১-৩ বাক্যে উত্তর; একই বাক্য দুবার কখনো নয় — বিশেষ করে এই মেসেজটা আগেই পাঠানো হয়েছে, হুবহু আর লিখবে না: "${(opts.lastAskSent || '').slice(0, 200)}"
 - জোর-জবরদস্তি বা একঘেয়ে দাবি কখনো নয় — বন্ধুর মতো মনে করিয়ে দেওয়া মাত্র।

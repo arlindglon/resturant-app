@@ -269,6 +269,7 @@ model Customer {
   dataText        String?        @db.Text // last verification data the customer sent in messenger
   address         String?        @db.Text // delivery/contact address (AI chatbot natural extraction)
   statedName      String?        // name the customer stated in chat (when different from FB profile)
+  language        String?        // preferred chat language code (bn/banglish/en/hi/other) — AI-detected or admin-marked; bot replies in it
   notes           CustomerNote[]
   lastSeenAt      DateTime?
   discountClaimed Boolean        @default(false) // lifetime lock after birthday discount
