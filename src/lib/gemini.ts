@@ -240,6 +240,76 @@ const CHAT_SCHEMA = {
   required: ['reply'],
 } as const
 
+const BLAST_SCHEMA = {
+  type: 'OBJECT',
+  properties: {
+    text: { type: 'STRING' },
+  },
+  required: ['text'],
+} as const
+
+/**
+ * AI-ব্রডকাস্ট: মালিকের দেওয়া কাঁচা তথ্য (আবহাওয়া / ছুটি / খবর / ইভেন্ট যা কিছু)
+ * থেকে এই এক কাস্টমারের জন্য আলাদা, প্রফেশনাল, এনগেজিং মেসেজ লেখে —
+ * প্রতিটা কাস্টমার ইউনিক মেসেজ পায়, কপি-পেস্ট ব্রডকাস্ট নয়।
+ */
+export async function composePersonalBlast(opts: {
+  knowledgeBase: string
+  adminInfo: string
+  customerName: string
+  customerNotes?: string
+  customerLanguage?: string | null
+  lastBotMessage?: string | null
+  recentHistory?: { role: 'user' | 'model'; text: string }[]
+  extraPersona?: string
+  cfg: GeminiConfig
+}): Promise<{ ok: boolean; text: string | null; error: string | null }> {
+  const system = [
+    `তুমি একটি রেস্তোরাঁর সিনিয়র মার্কেটিং + কাস্টমার রিলেশন প্রো। মালিক তোমাকে একটা তথ্য/খবর দিয়েছে — তোমার কাজ: একজন নির্দিষ্ট কাস্টমারের জন্য সেটা নিজের ভাষায় সাজিয়ে একটা ছোট, উষ্ণ, প্রফেশনাল মেসেজ লেখা যাতে সে রেস্তোরাঁয় আসতে আগ্রহী হয় (কিন্তু বিরক্ত না হয়)।
+
+লেখার নিয়ম:
+- ২-৪ বাক্য, ১-২টা মানানসই emoji, স্বাভাবিক মানুষের মতো — বিজ্ঞাপনের স্ক্রিপ্টের মতো নয়।
+- মালিকের তথ্য (আবহাওয়া/ছুটি/ঘটনা/খবর) মেসেজের মূল সুর হবে — সেটাকে খাবার/আমন্ত্রণের সাথে স্বাভাবিকভাবে জুড়ে দাও।
+- কাস্টমারকে নাম ধরে ডাকো (নাম থাকলে)। তার নোট/আগের কথাবার্তা মনে রেখে ব্যক্তিগত ছোঁয়া দাও।
+- চাইলে KNOWLEDGE BASE-এর মেনু/চলমান কুপন থেকে ১টা মানানসই জিনিস উল্লেখ করতে পারো — কিন্তু তালিকার বাইরে কিছু বানিয়ে বলবে না, আর ১টার বেশি কুপন কোড লিখবে না।
+- আগের শেষ বট-মেসেজের সাথে মিল থাকতে পারবে না — একেক জনের মেসেজ একেক রকম।
+- মেসেজের শেষে চাপ দিয়ে কিছু চাইবে না — হালকা আমন্ত্রণ যথেষ্ট।
+- ভাষা: মালিকের নির্দেশ থাকলে সেই ভাষায়; নাহলে বাংলায়।
+- শুধু মেসেজটাই লিখো — কোনো ভূমিকা/ব্যাখ্যা নয়।`,
+    opts.extraPersona ? `রেস্টুরেন্ট মালিকের বাড়তি নির্দেশনা:\n${opts.extraPersona}` : '',
+    opts.customerLanguage
+      ? `এই কাস্টমারকে অবশ্যই ${LANGUAGE_LABELS[opts.customerLanguage] || opts.customerLanguage} ভাষায় লিখতে হবে।`
+      : '',
+    `KNOWLEDGE BASE:\n${opts.knowledgeBase}`,
+    opts.customerNotes ? `কাস্টমার সম্পর্কে জমানো নোট/ট্যাগ:\n${opts.customerNotes}` : '',
+    opts.customerName ? `কাস্টমারের নাম: ${opts.customerName}` : '',
+    opts.lastBotMessage ? `শেষ পাঠানো মেসেজ (এর সাথে মিল থাকতে পারবে না):\n${opts.lastBotMessage}` : '',
+    opts.recentHistory?.length
+      ? `সাম্প্রতিক কথোপকথন:\n${opts.recentHistory.map((h) => `${h.role === 'user' ? 'কাস্টমার' : 'বট'}: ${h.text}`).join('\n')}`
+      : '',
+    `মালিকের দেওয়া তথ্য (এটাই মূল বিষয়):\n${opts.adminInfo}`,
+    `আউটপুট JSON: {"text": "মেসেজ"}`,
+  ]
+    .filter(Boolean)
+    .join('\n\n')
+
+  const res = await generateRotating(opts.cfg, {
+    systemInstruction: { parts: [{ text: system }] },
+    contents: [{ role: 'user', parts: [{ text: 'এই কাস্টমারের জন্য মেসেজটা লিখো।' }] }],
+    generationConfig: {
+      temperature: 1.0,
+      maxOutputTokens: 1024,
+      responseMimeType: 'application/json',
+      responseSchema: BLAST_SCHEMA,
+    },
+  })
+  if (!res.ok || !res.text) return { ok: false, text: null, error: res.error }
+  const j = extractJson(res.text)
+  const text = str(j?.text) || (res.text.trimStart().startsWith('{') ? '' : res.text.trim())
+  if (!text) return { ok: false, text: null, error: 'খালি উত্তর (thinking বাজেট শেষ?)' }
+  return { ok: true, text, error: null }
+}
+
 function extractJson(text: string): Record<string, unknown> | null {
   try {
     return JSON.parse(text) as Record<string, unknown>

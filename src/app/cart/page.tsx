@@ -167,7 +167,9 @@ export default function CartPage() {
   useEffect(() => {
     if (sessionPhase !== 'ok') return
     ;(async () => {
-      const res = await api.get<{ vouchers: SliderVoucher[] }>('/api/vouchers/available')
+      // নিজের ডিভাইস পরিচয় পাঠাই — আগে ব্যবহৃত কুপনগুলো স্লাইডারেই আসবে না
+      const qs = `deviceId=${encodeURIComponent(getDeviceId())}&deviceFp=${encodeURIComponent(getDeviceFp())}`
+      const res = await api.get<{ vouchers: SliderVoucher[] }>(`/api/vouchers/available?${qs}`)
       if (res.ok && res.data) setVouchers(res.data.vouchers)
       else setVouchers([])
     })()

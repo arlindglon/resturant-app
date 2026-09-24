@@ -25,6 +25,7 @@ import { setSettings, getSetting } from '@/lib/settings'
 import { SETTING_KEYS } from '@/lib/constants'
 import { parseDateLoose, parsePhoneLoose } from '@/lib/verify'
 import { nextCustomerCode } from '@/lib/customer-code'
+import { usedVoucherIdsForPsid } from '@/lib/vouchers'
 import { buildKnowledgeBase } from '@/lib/knowledge'
 import { t, pickBotLang, globalBotLang, aiLanguageFor, nameVar, type BotLang } from '@/lib/bot-text'
 import {
@@ -186,6 +187,19 @@ async function followNudge(lang: BotLang): Promise<string> {
   return t(lang, 'followNudge', { url: `https://facebook.com/${username}` })
 }
 
+/**
+ * has this customer EVER received an AI bot reply? (welcome-once guard —
+ * একই "স্বাগতম + অফার" বিজ্ঞাপন বারবার গিয়ে কাস্টমার বিরক্ত হওয়া ঠেকায়)
+ */
+async function hasPriorBotTurn(psid: string): Promise<boolean> {
+  try {
+    const m = await db.chatMessage.findFirst({ where: { psid, role: 'bot' }, select: { id: true } })
+    return Boolean(m)
+  } catch {
+    return false
+  }
+}
+
 /** default ask-text per field type (when the admin left askText empty) */
 function defaultAsk(fieldType: string, lang: BotLang): string {
   if (fieldType === 'PHONE') return t(lang, 'askPhone')
@@ -326,8 +340,11 @@ async function aiGeneralReply(psid: string, profileName: string, customerMessage
     /* notes are optional — chat works without them */
   }
 
-  const [kb, history] = await Promise.all([buildKnowledgeBase(), loadChatHistory(psid, 10)])
-  const ai = await chatWithCustomer({
+  const [kb, history] = await Promise.all([
+    buildKnowledgeBase({ excludeVoucherIds: await usedVoucherIdsForPsid(psid) }),
+    loadChatHistory(psid, 10),
+  ])
+  const chatOpts = {
     knowledgeBase: kb.text,
     history,
     customerMessage,
@@ -336,7 +353,13 @@ async function aiGeneralReply(psid: string, profileName: string, customerMessage
     customerLanguage,
     extraPersona: cfg.persona,
     cfg,
-  })
+  }
+  // একটা retry — মাঝে মাঝে Gemini rate-limit/খালি উত্তর দেয়; retry-তেই বেশিরভাগ ঠিক হয়ে যায়
+  let ai = await chatWithCustomer(chatOpts)
+  if (!ai.ok || !ai.reply) {
+    await new Promise((r) => setTimeout(r, 1200))
+    ai = await chatWithCustomer(chatOpts)
+  }
   if (!ai.ok || !ai.reply) {
     console.error('[webhook:ai]', ai.error)
     return false
@@ -538,15 +561,21 @@ async function handleEvent(event: MessagingEvent) {
 
     // 2a. no pending claim → AI chat (or friendly info fallback)
     if (!tokenRow) {
-      const aiHandled =
-        dataTextIn && (await aiChatEnabled())
-          ? await aiGeneralReply(psid, name, dataTextIn)
-          : false
-      if (!aiHandled) {
-        await sendText(
-          psid,
-          `${greet(name, lang)}\n\n${t(lang, 'generalFallback')}${await followNudge(lang)}`
-        )
+      const aiOn = dataTextIn ? await aiChatEnabled() : false
+      const aiHandled = aiOn ? await aiGeneralReply(psid, name, dataTextIn) : false
+      if (!aiHandled && dataTextIn) {
+        // একই অফার-বিজ্ঞাপন বারবার যেতে পারে না (কাস্টমার বিরক্ত):
+        // • প্রথম যোগাযোগে একবারই স্বাগতম + অফার তথ্য (lifetime একবার)
+        // • এরপর AI fail/disabled হলে ছোট্ট "একটু পরে আবার লিখুন" মেসেজ
+        if (!(await hasPriorBotTurn(psid))) {
+          await sendText(
+            psid,
+            `${greet(name, lang)}\n\n${t(lang, 'generalFallback')}${await followNudge(lang)}`
+          )
+          await saveChatTurn(psid, 'bot', t(lang, 'generalFallback'))
+        } else {
+          await sendText(psid, t(lang, 'aiFailRetry'))
+        }
       }
       // সরাসরি পেজে মেসেজ দেওয়া কাস্টমারও RN-এর সুযোগ পাক (একবারই, কুলডাউন গার্ড সহ)
       await maybeAskRnOptIn(psid)

@@ -21,8 +21,10 @@ export function invalidateKnowledgeCache() {
   cache = null
 }
 
-export async function buildKnowledgeBase(): Promise<KnowledgeBase> {
-  if (cache && Date.now() - cache.builtAt < TTL_MS) return cache
+export async function buildKnowledgeBase(opts: { excludeVoucherIds?: string[] } = {}): Promise<KnowledgeBase> {
+  // কাস্টমার-নির্দিষ্ট সংস্করণ (already-used কুপন বাদ) ক্যাশ হয় না — শুধু base ক্যাশ হয়
+  const exclude = opts.excludeVoucherIds || []
+  if (exclude.length === 0 && cache && Date.now() - cache.builtAt < TTL_MS) return cache
 
   const [restaurantName, currency, deliveryRules, extraInfo, pageUsername, categories, items, offers, vouchers, happyHours] =
     await Promise.all([
@@ -37,6 +39,8 @@ export async function buildKnowledgeBase(): Promise<KnowledgeBase> {
       db.voucher.findMany({ where: { active: true }, orderBy: { createdAt: 'desc' }, take: 20 }),
       db.happyHour.findMany({ where: { active: true } }),
     ])
+
+  const liveVouchers = exclude.length ? vouchers.filter((v) => !exclude.includes(v.id)) : vouchers
 
   const cur = currency || '৳'
   const lines: string[] = []
@@ -72,13 +76,19 @@ export async function buildKnowledgeBase(): Promise<KnowledgeBase> {
   }
 
   // ── vouchers ──
-  if (vouchers.length) {
-    lines.push('\nকুপন/ভাউচার ক্যাম্পেইন:')
-    for (const v of vouchers) {
+  if (liveVouchers.length) {
+    lines.push(
+      exclude.length
+        ? '\nকুপন/ভাউচার ক্যাম্পেইন (শুধু এই তালিকার কুপনই প্রস্তাব করবে — তালিকার বাইরের কোনো কোডের কথা বলবে না):'
+        : '\nকুপন/ভাউচার ক্যাম্পেইন:'
+    )
+    for (const v of liveVouchers) {
       const disc = v.discountType === 'PERCENT' ? `${v.discountValue}%` : `${cur}${v.discountValue}`
       const min = v.minOrderAmount > 0 ? ` (মিনিমাম অর্ডার ${cur}${v.minOrderAmount})` : ''
       lines.push(`- কোড "${v.code}" — ${v.title}: ${disc} ছাড়${min}`)
     }
+  } else if (exclude.length) {
+    lines.push('\nকুপন/ভাউচার: এই কাস্টমারের জন্য এখন আর কোনো নতুন কুপন প্রস্তাব করার নেই — কোনো কুপন কোড বলবে না।')
   }
 
   // ── happy hour ──
@@ -103,11 +113,12 @@ export async function buildKnowledgeBase(): Promise<KnowledgeBase> {
       categories: categories.length,
       items: items.length,
       offers: offers.length,
-      vouchers: vouchers.length,
+      vouchers: liveVouchers.length,
       happyHours: happyHours.length,
     },
     builtAt: Date.now(),
   }
-  cache = kb
+  // শুধু base (exclude ছাড়া) সংস্করণ ক্যাশ হয় — per-customer সংস্করণ প্রতিবার টাটকা
+  if (exclude.length === 0) cache = kb
   return kb
 }

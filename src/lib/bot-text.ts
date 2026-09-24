@@ -35,6 +35,8 @@ const bn: Pack = {
   askTail: '\n\nযেভাবে সুবিধা হয় লিখতে পারেন (বাংলা/English)।\n✅ তথ্যটি মিলে গেলেই ছাড়টি আপনার বিলে (টেবিল {table}) যোগ হয়ে যাবে।',
   generalFallback:
     'আমাদের বিশেষ অফার নিতে রেস্তোরাঁর বিল পেজ থেকে "🎉 Claim on Messenger" চাপুন — সেখান থেকে যাচাই করে ছাড় নিতে পারবেন।',
+  aiFailRetry:
+    'আপনার মেসেজটা পেয়েছি! 😊 এই মুহূর্তে সঠিকভাবে উত্তর দিতে ছোট্ট একটা সমস্যা হচ্ছে — একটু পরে আবার লিখবেন, খুব দ্রুত উত্তর দেবো! 🙏',
   cancelPivot: 'কোনো সমস্যা নেই! 😊 আমাদের আরও দারুণ অফার আছে — রেস্তোরাঁয় এসে উপভোগ করুন!',
   softWait: '😊 ঠিক আছে! সুবিধামতো সময়ে তথ্যটি পাঠিয়ে দিলেই অফারটি আপনার বিলে যোগ হয়ে যাবে।',
   softWaitMore: '😊 ঠিক আছে! সুবিধামতো সময়ে তথ্যটি পাঠিয়ে দিলেই অফারটি আপনার বিলে যোগ হয়ে যাবে। আর কিছু জানতে চাইলে বলুন!',
@@ -81,6 +83,8 @@ const banglish: Pack = {
   askTail: '\n\nJe bhabe subidha hoy likhte paren (Bangla/English).\n✅ Tothyo ta mile gele discount ta apnar bille (table {table}) jog hoye jabe.',
   generalFallback:
     'Amader special offer nite restaurant er bill page theke "🎉 Claim on Messenger" chapun — shekhane theke verify kore discount nite parben.',
+  aiFailRetry:
+    'Apnar message ta peyechi! 😊 Ei muhurte thikbhabe uttor dite chotto ekta somossa hocche — ektu pore abar likhben, khub druto uttor debo! 🙏',
   cancelPivot: 'Kono somossa nai! 😊 Amader aro darun offer ache — restaurant e eshe upobhog korun!',
   softWait: '😊 Thik ache! Subidhamoto shomoye tothyo ta pathiye dile offer ta apnar bille jog hoye jabe.',
   softWaitMore: '😊 Thik ache! Subidhamoto shomoye tothyo ta pathiye dile offer ta apnar bille jog hoye jabe. Ar kichhu jante chaile bolun!',
@@ -127,6 +131,8 @@ const en: Pack = {
   askTail: "\n\nWrite it however is easiest (Bangla/English).\n✅ Once it matches, the discount is added to your bill (table {table}).",
   generalFallback:
     'To grab our special offer, tap "🎉 Claim on Messenger" on the restaurant\'s bill page — you can verify there and get your discount.',
+  aiFailRetry:
+    "Got your message! 😊 We're having a small hiccup replying right now — please text again in a moment, we'll answer quickly! 🙏",
   cancelPivot: 'No problem at all! 😊 We have more great offers — come visit the restaurant and enjoy!',
   softWait: "😊 All good! Whenever you send the details, the offer will be added to your bill.",
   softWaitMore:
@@ -174,6 +180,8 @@ const hi: Pack = {
   askTail: '\n\nजो तरीका आसान हो, लिख दें (बांग्ला/English)।\n✅ जानकारी मैच होते ही छूट आपके बिल (टेबल {table}) में जुड़ जाएगी।',
   generalFallback:
     'हमारा स्पेशल ऑफ़र पाने के लिए रेस्टोरेंट के बिल पेज पर "🎉 Claim on Messenger" दबाएं — वहीं से सत्यापन करके छूट पा सकते हैं।',
+  aiFailRetry:
+    'आपका मैसेज मिल गया! 😊 इस समय जवाब देने में छोटी सी दिक्कत हो रही है — थोड़ी देर बाद फिर लिखें, बहुत जल्दी जवाब देंगे! 🙏',
   cancelPivot: 'कोई बात नहीं! 😊 हमारे पास और भी शानदार ऑफ़र हैं — रेस्टोरेंट आकर आनंद लें!',
   softWait: '😊 ठीक है! जब आप सुविधानुसार जानकारी भेज देंगे, ऑफ़र आपके बिल में जुड़ जाएगा।',
   softWaitMore: '😊 ठीक है! जब आप सुविधानुसार जानकारी भेज देंगे, ऑफ़र आपके बिल में जुड़ जाएगा। और कुछ जानना हो तो पूछिए!',

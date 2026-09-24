@@ -132,18 +132,20 @@ export async function fetchProfilePhoto(psid: string): Promise<string | null> {
   return p.profilePic
 }
 
-/** Send a plain text message to a PSID */
+/** Send a plain text message to a PSID — returns REAL success (Graph errors count as failure) */
 export async function sendText(psid: string, text: string): Promise<boolean> {
   const token = pageToken()
   if (!token) return false
   try {
-    await fetch(`${GRAPH}/me/messages?access_token=${token}`, {
+    const res = await fetch(`${GRAPH}/me/messages?access_token=${token}`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ recipient: { id: psid }, message: { text } }),
       signal: AbortSignal.timeout(10_000),
     })
-    return true
+    if (!res.ok) return false
+    const j = (await res.json().catch(() => ({}))) as { error?: { message?: string } }
+    return !j.error
   } catch {
     return false
   }

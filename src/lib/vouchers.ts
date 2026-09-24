@@ -243,14 +243,49 @@ export async function recordVoucherUse(
   })
 }
 
-/** Which vouchers should appear in the cart slider right now (time-filtered) */
-export async function getSliderVouchers(now = new Date()) {
+/** voucher ids a device already used (lifetime anti-fraud identity) */
+export async function usedVoucherIds(device: DeviceIdentity): Promise<string[]> {
+  const or: Record<string, string>[] = []
+  if (device.id) or.push({ deviceId: device.id })
+  if (device.fp) or.push({ deviceFp: device.fp })
+  if (!or.length) return []
+  const uses = await db.voucherUse.findMany({ where: { OR: or }, select: { voucherId: true } })
+  return [...new Set(uses.map((u) => u.voucherId))]
+}
+
+/**
+ * একজন Messenger কাস্টমার (PSID) ইতিমধ্যে যেসব ভাউচার ব্যবহার করেছে —
+ * বিল পেজের ডিভাইস পরিচয় referral/birthday claim থেকে লিংক করে খোঁজা হয়।
+ * AI বট + ব্রডকাস্ট এটা দিয়ে ব্যবহৃত অফার আর প্রস্তাব করে না।
+ */
+export async function usedVoucherIdsForPsid(psid: string): Promise<string[]> {
+  try {
+    const [refs, claims] = await Promise.all([
+      db.referralToken.findMany({ where: { psid }, select: { deviceId: true, deviceFp: true } }),
+      db.birthdayClaim.findMany({ where: { psid }, select: { deviceId: true, deviceFp: true } }),
+    ])
+    const ids = [...new Set([...refs, ...claims].map((r) => r.deviceId).filter((v): v is string => !!v))]
+    const fps = [...new Set([...refs, ...claims].map((r) => r.deviceFp).filter((v): v is string => !!v))]
+    const or: Record<string, unknown>[] = []
+    if (ids.length) or.push({ deviceId: { in: ids } })
+    if (fps.length) or.push({ deviceFp: { in: fps } })
+    if (!or.length) return []
+    const uses = await db.voucherUse.findMany({ where: { OR: or }, select: { voucherId: true } })
+    return [...new Set(uses.map((u) => u.voucherId))]
+  } catch {
+    return []
+  }
+}
+
+/** Which vouchers should appear in the cart slider right now (time-filtered, already-used hidden) */
+export async function getSliderVouchers(now = new Date(), excludeIds: string[] = []) {
   const vouchers = await db.voucher.findMany({
     where: { active: true },
     orderBy: { createdAt: 'desc' },
   })
   return vouchers
     .filter((v) => {
+      if (excludeIds.includes(v.id)) return false // এই ডিভাইস/কাস্টমার আগেই ব্যবহার করেছে — আর দেখাবে না
       if (v.usageLimit !== null && v.usedCount >= v.usageLimit) return false
       if (v.ruleType === VOUCHER_RULES.HOT_TIME) return isWithinTimeWindow(v, now)
       if (v.ruleType === VOUCHER_RULES.SPECIAL_DAY) {
