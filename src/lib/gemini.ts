@@ -22,18 +22,19 @@ import { SETTING_KEYS, LANGUAGE_LABELS } from '@/lib/constants'
 
 const API_BASE = 'https://generativelanguage.googleapis.com/v1beta/models'
 
-// মালিকের নির্ধারিত মডেল তালিকা (পুরনোগুলো — 3.6/3.5-flash/2.5 — বাদ):
-//  ১. gemini-3.5-flash-lite  → প্রাইমারি (১৫ RPM, ৫০০/দিন)
-//  ২. gemini-3.1-flash-lite  → ব্যাকআপ (৫০০/দিন)
-//  ৩. gemma-4-31b-it         → হাই-ভলিউম ব্যাকআপ (৩০ RPM, ১৪,৪০০/দিন)
-// নোট: মালিকের দেওয়া "gemma-4-26b" / "gemma-4-31b" নাম দুটি API-তে নেই (404 —
-// লাইভ যাচাই); Gemma 4-এর আসল নাম gemma-4-31b-it (instruction-tuned suffix)।
-// এই তালিকাই মডেল-ফলব্যাক চেইন নির্ধারণ করে (generateRotating দেখুন)।
+// মালিকের চূড়ান্ত নির্দেশ (লাইভ টেস্টের পর): ফ্ল্যাশ-লাইট মডেলগুলো (3.5/3.1) আর
+// রাখতে হবে না — শুধু হাই-ভলিউম Gemma চলবে (কাস্টমার ভলিউম অনেক বেশি, ১৪,৪০০/দিন):
+//  ১. gemma-4-26b-a4b-it → প্রাইমারি (MoE — ২৬B মোট, ৪B একটিভ: দ্রুত উত্তর)
+//  ২. gemma-4-31b-it     → ব্যাকআপ (ডেন্স ৩১B — ধীর কিন্তু ভরসার শেষ দেয়াল)
+// নোট: "gemma-4-26b" নামটি API-তে নেই (404 — লাইভ যাচাই); আসল MoE নাম
+// gemma-4-26b-a4b-it। এই তালিকাই মডেল-ফলব্যাক চেইন নির্ধারণ করে (generateRotating)।
 export const GEMINI_MODELS = [
-  { id: 'gemini-3.5-flash-lite', label: 'Gemini 3.5 Flash-Lite (প্রাইমারি — দ্রুত, ৫০০/দিন)' },
-  { id: 'gemini-3.1-flash-lite', label: 'Gemini 3.1 Flash-Lite (ব্যাকআপ ১ — ৫০০/দিন)' },
-  { id: 'gemma-4-31b-it', label: 'Gemma 4 31B (ব্যাকআপ — হাই-ভলিউম, ১৪,৪০০/দিন)' },
+  { id: 'gemma-4-26b-a4b-it', label: 'Gemma 4 26B-A4B (প্রাইমারি — দ্রুত, হাই-ভলিউম)' },
+  { id: 'gemma-4-31b-it', label: 'Gemma 4 31B (ব্যাকআপ — হাই-ভলিউম)' },
 ]
+
+/** প্রাইমারি মডেল — কনফিগ ভাঙলে/পুরনো সেটিং থাকলে এতেই ফেরে */
+export const PRIMARY_MODEL = GEMINI_MODELS[0].id
 
 export interface GeminiConfig {
   enabled: boolean
@@ -77,9 +78,9 @@ export async function getGeminiConfig(): Promise<GeminiConfig> {
       if (!keys.includes(k)) keys.push(k)
     }
   }
-  // পুরনো/বাদ-পড়া মডেল সেটিং থাকলে সরাসরি নতুন প্রাইমারিতে ফিরিয়ে আনি —
-  // মালিকের নির্দেশ: আগের মডেলগুলো বাদ, শুধু নতুন চেইন চলবে
-  const safeModel = GEMINI_MODELS.some((m) => m.id === model) ? model : 'gemini-3.5-flash-lite'
+  // পুরনো/বাদ-পড়া মডেল সেটিং (flash-lite ইত্যাদি) থাকলে সরাসরি নতুন প্রাইমারিতে —
+  // মালিকের নির্দেশ: ফ্ল্যাশ-লাইট যুগ শেষ, শুধু দুই Gemma চলবে
+  const safeModel = GEMINI_MODELS.some((m) => m.id === model) ? model : PRIMARY_MODEL
   return {
     enabled: enabledRaw === 'true',
     keys,
@@ -158,9 +159,9 @@ async function generateWithKey(
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
-    // 20s ছোট মডেলের জন্য যথেষ্ট; বড় ফলব্যাক মডেল (gemma-4-31b-it) লম্বা প্রম্পটে
-    // বেশি সময় নেয় — ২৮ সে; বাজেট (45s) তবু সর্বোচ্চ সীমা টেনে ধরে
-    signal: AbortSignal.timeout(28_000),
+    // প্রতি-মডেল টাইমআউট: MoE 26B দ্রুত (২২ সে যথেষ্ট), ডেন্স 31B লম্বা প্রম্পটে
+    // ধীর — প্রোডাকশনে ২৮ সে-তে টাইমআউট খেয়েছিল, তাই ৪০ সে
+    signal: AbortSignal.timeout(model === 'gemma-4-31b-it' ? 40_000 : 22_000),
   })
   const j = (await res.json().catch(() => ({}))) as GeminiResponse
   if (!res.ok || j.error) {
@@ -259,6 +260,9 @@ function bodyForModel(body: Record<string, unknown>, model: string): Record<stri
   delete gc.responseMimeType
   delete gc.responseSchema
   delete gc.thinkingConfig
+  // Gemma JSON-মোড মানে না — রিপ্লাই সংক্ষিপ্ত (২-৫ বাক্য + JSON ফিল্ড); বিশাল
+  // বাজেট দিলে runaway জেনারেশন ধরা পড়তে দেরি হয় → ২০৪৮-ই যথেষ্ট
+  gc.maxOutputTokens = Math.min((gc.maxOutputTokens as number | undefined) || 2048, 2048)
   b.generationConfig = gc
   return b
 }
@@ -304,7 +308,9 @@ async function generateRotating(
   body: Record<string, unknown>,
 ): Promise<{ ok: boolean; text: string | null; error: string | null }> {
   const started = Date.now()
-  const BUDGET_MS = 45_000
+  // webhook after()-ফেজের maxDuration ৬০ সে — দুই Gemma-র ধীর উত্তরেও যেন ফলব্যাক
+  // (static reply) যাওয়ার সময় থাকে, তাই বাজেট ৫৫ সে
+  const BUDGET_MS = 55_000
   const WAIT_CAP_S = 12
   const timeLeft = () => BUDGET_MS - (Date.now() - started)
 
@@ -828,7 +834,7 @@ export async function testGeminiKey(key: string): Promise<KeyTestResult> {
   try {
     const text = await generateWithKey(
       key,
-      'gemini-3.5-flash-lite', // fixed primary model for the ping — works for all keys
+      PRIMARY_MODEL, // fixed primary model for the ping — works for all keys
       {
         contents: [{ role: 'user', parts: [{ text: 'Reply with exactly: OK' }] }],
         // Gemini 3.x thinking মডেল — ছোট বাজেট দিলে thinking-এই শেষ, উত্তরই আসে না

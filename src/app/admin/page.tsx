@@ -4599,7 +4599,7 @@ function SettingsTab({ onAuthRequired }: TabProps) {
       [SETTING_KEYS.META_RN_TITLE]: form[SETTING_KEYS.META_RN_TITLE] ?? '',
       [SETTING_KEYS.GEMINI_ENABLED]: form[SETTING_KEYS.GEMINI_ENABLED] ?? 'false',
       [SETTING_KEYS.GEMINI_API_KEYS]: form[SETTING_KEYS.GEMINI_API_KEYS] ?? '',
-      [SETTING_KEYS.GEMINI_MODEL]: form[SETTING_KEYS.GEMINI_MODEL] ?? 'gemini-3.5-flash-lite',
+      [SETTING_KEYS.GEMINI_MODEL]: form[SETTING_KEYS.GEMINI_MODEL] ?? 'gemma-4-26b-a4b-it',
       [SETTING_KEYS.GEMINI_PERSONA]: form[SETTING_KEYS.GEMINI_PERSONA] ?? '',
       [SETTING_KEYS.AI_DELIVERY_RULES]: form[SETTING_KEYS.AI_DELIVERY_RULES] ?? '',
       [SETTING_KEYS.AI_EXTRA_INFO]: form[SETTING_KEYS.AI_EXTRA_INFO] ?? '',
@@ -5371,20 +5371,19 @@ function SettingsTab({ onAuthRequired }: TabProps) {
             <div className="space-y-1">
               <FieldLabel>AI মডেল</FieldLabel>
               <Select
-                value={form[SETTING_KEYS.GEMINI_MODEL] ?? 'gemini-3.5-flash-lite'}
+                value={form[SETTING_KEYS.GEMINI_MODEL] ?? 'gemma-4-26b-a4b-it'}
                 onValueChange={(v) => set(SETTING_KEYS.GEMINI_MODEL, v)}
               >
                 <SelectTrigger className="w-full">
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="gemini-3.5-flash-lite">Gemini 3.5 Flash-Lite (প্রাইমারি)</SelectItem>
-                  <SelectItem value="gemini-3.1-flash-lite">Gemini 3.1 Flash-Lite (ব্যাকআপ)</SelectItem>
-                  <SelectItem value="gemma-4-31b-it">Gemma 4 31B (হাই-ভলিউম)</SelectItem>
+                  <SelectItem value="gemma-4-26b-a4b-it">Gemma 4 26B-A4B (প্রাইমারি — দ্রুত)</SelectItem>
+                  <SelectItem value="gemma-4-31b-it">Gemma 4 31B (ব্যাকআপ)</SelectItem>
                 </SelectContent>
               </Select>
               <p className="text-xs leading-snug text-stone-500">
-                প্রাইমারি মডেলে কোটা/এরর হলে নিজে থেকেই ৩.১ Flash-Lite → Gemma-তে চলে যায় — কাস্টমার সবসময় সঠিক উত্তর পায়।
+                প্রাইমারি মডেলে কোটা/এরর হলে নিজে থেকেই Gemma 31B-তে চলে যায় — কাস্টমার সবসময় সঠিক উত্তর পায়। উভয় মডেল হাই-ভলিউম (দিনে ১৪,৪০০+ মেসেজ)।
               </p>
             </div>
             <div className="space-y-1">

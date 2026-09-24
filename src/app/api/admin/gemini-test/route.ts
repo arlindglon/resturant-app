@@ -5,9 +5,9 @@
 import { ok } from '@/lib/api'
 import { requirePerm } from '@/lib/staff-auth'
 import { buildKnowledgeBase } from '@/lib/knowledge'
-import { getGeminiConfig, chatWithCustomer, verificationChat, testGeminiKey } from '@/lib/gemini'
+import { getGeminiConfig, chatWithCustomer, verificationChat, testGeminiKey, generateWithKey } from '@/lib/gemini'
 
-export async function POST() {
+export async function POST(req: Request) {
   const denied = await requirePerm('settings')
   if (denied) return denied
 
@@ -21,6 +21,40 @@ export async function POST() {
       sample: { ok: false, reply: null, error: 'কোনো API কি যোগ করা হয়নি' },
       verifySample: null,
     })
+  }
+
+  // মডেল-প্রোব মোড: {model} পাঠালে সেই এক মডেলেই ন্যূনতম কল — নাম ঠিক আছে
+  // কি না (404), কোটা আছে কি না (429), কত সময় নেয় — হুবহু রিপোর্ট দেয়।
+  // নতুন মডেল-নাম যাচাইয়ের সবচেয়ে নির্ভরযোগ্য উপায় (চেইনের অন্ধকারে না গিয়ে)।
+  let probeModel: string | null = null
+  try {
+    const body = (await req.json()) as { model?: string }
+    if (body?.model && typeof body.model === 'string') probeModel = body.model.trim()
+  } catch {
+    /* no body → normal chain test */
+  }
+  if (probeModel) {
+    const t0 = Date.now()
+    try {
+      const text = await generateWithKey(
+        cfg.keys[0],
+        probeModel,
+        { contents: [{ role: 'user', parts: [{ text: 'Reply with exactly: OK' }] }] },
+      )
+      return ok({
+        probe: { model: probeModel, ok: !!text, ms: Date.now() - t0, sample: text.slice(0, 120), error: null },
+      })
+    } catch (e) {
+      return ok({
+        probe: {
+          model: probeModel,
+          ok: false,
+          ms: Date.now() - t0,
+          sample: null,
+          error: e instanceof Error ? e.message : String(e),
+        },
+      })
+    }
   }
 
   // 1) ping every key in parallel
