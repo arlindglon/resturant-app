@@ -159,9 +159,9 @@ export async function generateWithKey(
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
-    // প্রতি-মডেল টাইমআউট: MoE 26B দ্রুত (২২ সে যথেষ্ট), ডেন্স 31B লম্বা প্রম্পটে
-    // ধীর — প্রোডাকশনে ২৮ সে-তে টাইমআউট খেয়েছিল, তাই ৪০ সে
-    signal: AbortSignal.timeout(model === 'gemma-4-31b-it' ? 40_000 : 22_000),
+    // প্রতি-মডেল টাইমআউট: দুই Gemma-ই বড় প্রম্পটে ধীর — MoE 26B ছোট প্রম্পটে দ্রুত
+    // হলেও ফুল চ্যাট-প্রম্পটে ২২ সে-তে টাইমআউট খেয়েছিল (লাইভ যাচাই), তাই দুটোতেই ৪০ সে
+    signal: AbortSignal.timeout(40_000),
   })
   const j = (await res.json().catch(() => ({}))) as GeminiResponse
   if (!res.ok || j.error) {
@@ -240,17 +240,19 @@ function bodyForModel(body: Record<string, unknown>, model: string): Record<stri
   if (!isGemma && !simplified) return body
   const b: Record<string, unknown> = { ...body }
   if (isGemma) {
-    // বড় 31B মডেল লম্বা প্রম্পটে খুব ধীর (টাইমআউট খায়) — সিস্টেম টেক্সট
-    // ছোট করে (persona+KB-র শুরুতেই মেনু/অফার থাকে) দ্রুত উত্তরে আনা হয়
+    // Gemma মডেলগুলো উত্তরের আগে লম্বা “চিন্তা-বিশ্লেষণ” লিখে ফেলে (লাইভ টেস্টে
+    // ধরা পড়েছে) — আউটপুট ৫-১০ গুণ বড় হয়ে টাইমআউট খায়, কখনো কাস্টমারের
+    // রিপ্লাই-ও বিশ্লেষণ-টেক্সট হয়ে যায়। তাই মার্জ করা সিস্টেমের একদম শুরুতেই
+    // কড়া নির্দেশ: শুধু চূড়ান্ত উত্তর/JSON, কোনো বিশ্লেষণ নয়।
     const sysFull = (b.systemInstruction as { parts?: { text?: string }[] } | undefined)?.parts
       ?.map((p) => p.text || '')
       .join('\n\n')
-    const sys = sysFull ? sysFull.slice(0, 6000) : ''
+    const sys = sysFull ? sysFull.slice(0, 5500) : ''
     if (sys) {
       const contents = (b.contents as { role: string; parts: { text?: string }[] }[] | undefined) || []
       b.contents = contents.map((c, i) =>
         i === 0
-          ? { ...c, parts: [{ text: `${sys}\n\n---\n\n${c.parts.map((p) => p.text || '').join('')}` }] }
+          ? { ...c, parts: [{ text: `${DIRECT_ANSWER_RULE}\n${sys}\n\n---\n\n${c.parts.map((p) => p.text || '').join('')}` }] }
           : c,
       )
       delete b.systemInstruction
@@ -265,6 +267,27 @@ function bodyForModel(body: Record<string, unknown>, model: string): Record<stri
   gc.maxOutputTokens = Math.min((gc.maxOutputTokens as number | undefined) || 2048, 2048)
   b.generationConfig = gc
   return b
+}
+
+/**
+ * Gemma-র জন্য সরাসরি-উত্তর নির্দেশ — মার্জ করা প্রম্পটের প্রথম লাইন। English-
+ * এ দেওয়া (instruction-following সবচেয়ে শক্ত হয়): reasoning/বিশ্লেষণ বন্ধ করে
+ * উত্তর ৩-৮ সেকেন্ডে নামে, আর রিপ্লাই কাস্টমার-উপযোগী থাকে।
+ */
+const DIRECT_ANSWER_RULE =
+  'CRITICAL OUTPUT RULE: Answer DIRECTLY with the final reply/JSON only. Do NOT write any analysis, reasoning steps, bullet-point breakdowns, explanations of the request, or thinking aloud. Your entire output = the final answer itself.'
+
+/**
+ * Reasoning-leak detector: Gemma মডেল মাঝে মাঝে রিপ্লাই-এর জায়গায় ভেতরের
+ * বিশ্লেষণ-টেক্সট লিখে দেয় ("* User's message: …", "Constraint 1: …")। এটা
+ * JSON হিসেবে পার্স হয় না — আর কাস্টমারকে কখনোই এই গার্বেজ যেতে পারে না;
+ * ধরা পড়লে ব্যর্থ ধরে static fallback-এ যাওয়া হয়।
+ */
+function looksLikeReasoning(text: string): boolean {
+  const s = text.trimStart()
+  if (s.startsWith('*') || s.startsWith('1.') || s.startsWith('Step')) return true
+  if (/<think[\s>]/i.test(text)) return true
+  return /user'?s? (message|request)|constraint \d|analysis of|let me |the customer (is|wants)|step \d:/i.test(s)
 }
 
 /** মডেল-নিজস্ব এরর (মরা মডেল / ফিল্ড না-মানা) — পরের মডেলে যাওয়ার সংকেত */
@@ -550,7 +573,9 @@ ${opts.formatting !== false ? MESSENGER_FORMAT_RULES + '\n- এটা একট�
   })
   if (!res.ok || !res.text) return { ok: false, text: null, error: res.error }
   const j = extractJson(res.text)
-  const text = str(j?.text) || (res.text.trimStart().startsWith('{') ? '' : res.text.trim())
+  // বিশ্লেষণ-লিক/কাঁচা JSON কখনো কাস্টমারের ব্রডকাস্ট হবে না
+  const rawOk = !res.text.trimStart().startsWith('{') && !looksLikeReasoning(res.text)
+  const text = str(j?.text) || (rawOk ? res.text.trim() : '')
   if (!text) return { ok: false, text: null, error: 'খালি উত্তর (thinking বাজেট শেষ?)' }
   return { ok: true, text, error: null }
 }
@@ -689,7 +714,18 @@ export async function chatWithCustomer(opts: {
   if (!j && res.text.trimStart().startsWith('{')) {
     return { ok: false, reply: null, extracted: empty, error: 'JSON ট্রানকেটেড (thinking বাজেট শেষ)' }
   }
-  const reply = str(j?.reply) || res.text // JSON parse fail → send raw text as reply
+  // JSON ভাঙা/অনুপস্থিত হলে কাঁচা টেক্সট তখনই রিপ্লাই হতে পারে যখন ছোট পরিষ্কার
+  // plain উত্তর — Gemma-র লিক হওয়া বিশ্লেষণ-টেক্সট/কাঁচা JSON কখনো কাস্টমারের
+  // কাছে যাবে না; ধরা পড়লে ব্যর্থ ধরে static fallback-এ (লাইভ KB-ভিত্তিক উত্তর)
+  const replyParsed = str(j?.reply)
+  let reply = replyParsed
+  if (!reply) {
+    const raw = res.text.trim()
+    if (!raw || raw.startsWith('{') || looksLikeReasoning(raw) || raw.length > 600) {
+      return { ok: false, reply: null, extracted: empty, error: 'AI আউটপুট অগ্রাহ্য (বিশ্লেষণ-লিক/ভাঙা JSON)' }
+    }
+    reply = raw
+  }
   const lang = str(j?.language)
   return {
     ok: true,
@@ -808,8 +844,13 @@ JSON ফরম্যাট: {"extractedData":"","reply":"","action":"ASK"}`
   if (!res.ok || !res.text) return { ok: false, extracted: null, reply: null, action: 'ASK', error: res.error }
   const j = extractJson(res.text)
   const action = str(j?.action) === 'CANCEL' ? 'CANCEL' : 'ASK'
-  // gemma মডেলে JSON-মোড নেই — JSON না পার্স হলে পুরো টেক্সটই উত্তর (চেইন ভাঙে না)
-  const reply = str(j?.reply) || (j ? null : res.text.trim() || null)
+  // gemma মডেলে JSON-মোড নেই — JSON না পার্স হলে ছোট পরিষ্কার plain টেক্সটই
+  // উত্তর; তবে বিশ্লেষণ-লিক/কাঁচা JSON কখনো রিপ্লাই নয় (looksLikeReasoning গার্ড)
+  let reply = str(j?.reply)
+  if (!reply && !j) {
+    const raw = res.text.trim()
+    reply = raw && !raw.startsWith('{') && !looksLikeReasoning(raw) && raw.length <= 600 ? raw : null
+  }
   return {
     ok: true,
     extracted: str(j?.extractedData) || null,
