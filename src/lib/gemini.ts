@@ -236,35 +236,54 @@ function retryDelaySeconds(msg: string): number | null {
  */
 const simpleModelBodies = new Set<string>()
 
+  // Gemma-র জন্য কমপ্যাক্ট প্রম্পট বডিল — নিচে bodyForModel দেখুন (ভিজিবল
+  // reasoning মডেলের নেটিভ স্টাইল; ছোট ইনপুট = ছোট narration = দ্রুত উত্তর)
 function bodyForModel(body: Record<string, unknown>, model: string): Record<string, unknown> {
   const isGemma = /^gemma/i.test(model)
   const simplified = simpleModelBodies.has(model)
   if (!isGemma && !simplified) return body
   const b: Record<string, unknown> = { ...body }
   if (isGemma) {
-    // Gemma মডেলগুলো উত্তরের আগে লম্বা “চিন্তা-বিশ্লেষণ” লিখে ফেলে (লাইভ টেস্টে
-    // ধরা পড়েছে) — আউটপুট ৫-১০ গুণ বড় হয়ে টাইমআউট খায়, কখনো কাস্টমারের
-    // রিপ্লাই-ও বিশ্লেষণ-টেক্সট হয়ে যায়। তাই মার্জ করা সিস্টেমের একদম শুরুতেই
-    // কড়া নির্দেশ: শুধু চূড়ান্ত উত্তর/JSON, কোনো বিশ্লেষণ নয়।
+    // Gemma মডেলগুলো ইনপুট-অনুযায়ী "ভিজিবল reasoning" আউটপুট দেয় (লাইভ টেস্ট-প্রমাণ)।
+    // তাই কমপ্যাক্ট প্রম্পট + যথেষ্ট আউটপুট-বাজেট — narration শেষে JSON-ও যেন আঁটে,
+    // extractJson ভেতর থেকে স্ক্যান করে নেয়
     const sysFull = (b.systemInstruction as { parts?: { text?: string }[] } | undefined)?.parts
       ?.map((p) => p.text || '')
       .join('\n\n')
     if (sysFull) {
-      // KB-প্রথম স্লাইস: কাটার সময় persona-র লম্বা অংশ না কেটে KB (মেনু/অফার —
-      // সঠিক উত্তরের উপকরণ) যতটা সম্ভব রাখা হয়; আউটপুট-ফরম্যাট নির্দেশ সবশেষে
-      // আবার জুড়ে দেওয়া হয় যেন কাটা পড়ার ভয় না থাকে
+      // কমপ্যাক্ট Gemma-প্রম্পট: এই মডেলগুলো ইনপুট-সাইজ অনুযায়ী "ভিজিবল
+      // reasoning" লেখে (লাইভ প্রোব-প্রমাণ) — বিশাল flash-স্টাইল প্রম্পট দিলে
+      // narration-ই আউটপুট বাজেট খেয়ে ফেলে। তাই ফ্লো-নির্ভর সংক্ষিপ্ত ভূমিকা +
+      // KB (উত্তরের উপকরণ) + আউটপুট-নির্দেশ — বাকি সব বাদ।
       const kbIdx = sysFull.indexOf('KNOWLEDGE BASE')
-      let sys: string
-      if (kbIdx > 0) {
-        const head = sysFull.slice(0, kbIdx) // persona + ফরম্যাট + বাড়তি নির্দেশ
-        const outIdx = Math.max(sysFull.lastIndexOf('\nআউটপুট'), sysFull.lastIndexOf('\nশেষ নির্দেশ'))
-        // আউটপুট-নির্দেশটা বাদ দিয়ে রাখি (tail-এ ডুপ্লিকেট হবে না), শেষে আবার জোড়া
-        const outRule = outIdx > kbIdx ? '\n\n' + sysFull.slice(outIdx + 1) : ''
-        const tailBase = outIdx > kbIdx ? sysFull.slice(kbIdx, outIdx) : sysFull.slice(kbIdx)
-        sys = `${head.slice(0, 1500)}\n\n${tailBase.slice(0, 2400)}${outRule}`
+      const outIdx = Math.max(sysFull.lastIndexOf('\nআউটপুট'), sysFull.lastIndexOf('\nশেষ নির্দেশ'))
+      const kbBlock = kbIdx >= 0 ? sysFull.slice(kbIdx, outIdx > kbIdx ? outIdx : undefined) : ''
+      const outRule = outIdx > kbIdx ? '\n\n' + sysFull.slice(outIdx + 1) : ''
+      const head = kbIdx > 0 ? sysFull.slice(0, kbIdx) : sysFull
+      const lines = head.split('\n')
+      const langLine = lines.find((l) => l.includes('ভাষায়') && (l.includes('সবসময়') || l.includes('অবশ্যই'))) || ''
+      const isVerify = sysFull.includes('extractedData')
+      const isBlast = /আউটপুট JSON:\s*\{"text"/.test(sysFull)
+      let persona: string
+      if (isVerify) {
+        // verify: ভূমিকা-অনুচ্ছেদেই অফার+askText আছে; সিদ্ধান্ত-নিয়ম (১/২/৩ —
+        // CANCEL সহ) আর typeHint লাইনগুলো ধরে রাখতেই হয়
+        const numbered = lines.filter((l) => /^\s*[123]\.\s/.test(l)).join('\n')
+        const typeHint = lines.filter((l) => l.startsWith('দরকারি তথ্য')).join('\n')
+        persona = [head.split('\n\n')[0].slice(0, 500), langLine, typeHint, numbered].filter(Boolean).join('\n')
+      } else if (isBlast) {
+        persona = [
+          'তুমি একটি রেস্টুরেন্টের সিনিয়র মার্কেটিং প্রো — এক কাস্টমারের জন্য ২-৪ বাক্যের উষ্ণ, ইউনিক, এনগেজিং মেসেজ লেখো। কুপন কোড থাকলে মাত্র ১টা, ব্যাকটিকে।',
+          langLine,
+        ].filter(Boolean).join('\n')
       } else {
-        sys = sysFull.slice(0, 4000)
+        persona = [
+          'তুমি একটি রেস্টুরেন্টের বন্ধুত্বপূর্ণ, অভিজ্ঞ হোস্ট — স্বাভাবিক মানুষের মতো কথা বলো, কখনো রোবট বা কল-সেন্টার নয়।',
+          'কাস্টমার যে ভাষায় লিখবে সেই ভাষায় ২-৫ বাক্যে উত্তর দাও। মেনু/দাম/অফার শুধু নিচের তথ্য থেকে — বাইরের কিছু বানাবে না। সুযোগে জনপ্রিয় আইটেম/চলমান অফার হালকাভাবে রিকমেন্ড করবে। একই কথা দুবার নয়।',
+          langLine,
+        ].filter(Boolean).join('\n')
       }
+      const sys = [persona, kbBlock.slice(0, 2600), outRule].filter(Boolean).join('\n\n')
       const contents = (b.contents as { role: string; parts: { text?: string }[] }[] | undefined) || []
       const merged = contents.map((c, i) =>
         i === 0
@@ -290,8 +309,9 @@ function bodyForModel(body: Record<string, unknown>, model: string): Record<stri
   // Gemma-র JSON-ডিসিপ্লিন কম — নিচু টেম্পারেচারে বিশ্লেষণ-প্রবণতা ও ফরম্যাট-ভাঙা
   // লক্ষণীয়ভাবে কমে (লাইভ টেস্ট-ভিত্তিক)
   gc.temperature = Math.min((gc.temperature as number | undefined) ?? 1, 0.4)
-  // আসল রিপ্লাই ১০০-৪০০ টোকেন — ৭৬৮-তে বিশ্লেষণ দ্রুত কাটা পড়ে → দ্রুত ফলব্যাক
-  gc.maxOutputTokens = Math.min((gc.maxOutputTokens as number | undefined) || 768, 768)
+  // আউটপুট ২০৪৮: narration (মডেলের নেটিভ) + আসল JSON — দুটোই যেন সম্পূর্ণ আঁটে;
+  // এর বেশি হলে MAX_TOKENS কাটা → দ্রুত পরের মডেলে
+  gc.maxOutputTokens = Math.min((gc.maxOutputTokens as number | undefined) || 2048, 2048)
   b.generationConfig = gc
   return b
 }
@@ -397,7 +417,7 @@ async function generateRotating(
         // ডেডলাইন-সচেতন: বাকি সময়ে অর্থবহ উত্তরই আসবে না — এই মডেল এখানেই শেষ
         const tl = timeLeft()
         if (tl < 9000) break
-        const perCall = model === 'gemma-4-31b-it' ? 28_000 : 24_000
+        const perCall = model === 'gemma-4-31b-it' ? 28_000 : 25_000
         if (timeLeft() < 2000) return { ok: false, text: null, error: lastError }
         const key = usable[(rotationCursor + i) % usable.length]
         const nextCursor = () => {
