@@ -393,7 +393,7 @@ function stripLeadLabels(text: string): string {
     //  ২) narration-শব্দ দিয়ে শুরু হওয়া কোলন-শেষ লেবেল (বাংলা-ইংরেজি দুটোই)
     // বৈধ বাংলা বোল্ড-লেবেল ("*অফার:*") বা ইনলাইন কোলন অক্ষত থাকে
     const next = out.replace(
-      /^\s*(?:\*{1,2}(?:final\b|draft\b|polish\b|output\b|answer\b|reply\b|response\b|step\b)[^*\n]{0,40}\*{1,2}|(?:final\b|draft\b|polish\b|output\b|answer\b|reply\b|response\b|উত্তর|রিপ্লাই|রিপ্লে|চূড়ান্ত (?:উত্তর|আউটপুট|খসড়া))[^:\n]{0,40})\s*:\s*(?:\n\s*)?/i,
+      /^\s*(?:\*{1,2}(?:final\b|draft\b|polish\b|output\b|answer\b|reply\b|response\b|step\b)[^*:\n]{0,40}:\s*\*{1,2}|(?:final\b|draft\b|polish\b|output\b|answer\b|reply\b|response\b|উত্তর|রিপ্লাই|রিপ্লে|চূড়ান্ত (?:উত্তর|আউটপুট|খসড়া))[^:\n]{0,40}:)\s*(?:\n\s*)?/i,
       '',
     )
     if (next === out) break
