@@ -431,7 +431,7 @@ async function generateRotating(
         // ডেডলাইন-সচেতন: বাকি সময়ে অর্থবহ উত্তরই আসবে না — এই মডেল এখানেই শেষ
         const tl = timeLeft()
         if (tl < 9000) break
-        const perCall = model === 'gemma-4-31b-it' ? 28_000 : 25_000
+        const perCall = model === 'gemma-4-31b-it' ? 26_000 : 25_000
         if (timeLeft() < 2000) return { ok: false, text: null, error: lastError }
         const key = usable[(rotationCursor + i) % usable.length]
         const nextCursor = () => {
