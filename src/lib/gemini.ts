@@ -332,9 +332,10 @@ function bodyForModel(body: Record<string, unknown>, model: string): Record<stri
   // Gemma-র JSON-ডিসিপ্লিন কম — নিচু টেম্পারেচারে বিশ্লেষণ-প্রবণতা ও ফরম্যাট-ভাঙা
   // লক্ষণীয়ভাবে কমে (লাইভ টেস্ট-ভিত্তিক)
   gc.temperature = Math.min((gc.temperature as number | undefined) ?? 1, 0.4)
-  // আউটপুট ২০৪৮: narration (মডেলের নেটিভ) + আসল JSON — দুটোই যেন সম্পূর্ণ আঁটে;
-  // এর বেশি হলে MAX_TOKENS কাটা → দ্রুত পরের মডেলে
-  gc.maxOutputTokens = Math.min((gc.maxOutputTokens as number | undefined) || 2048, 2048)
+  // আউটপুট ৪০৯৬: narration (মডেলের নেটিভ — মালিকের নির্দেশ: বিশ্লেষণ করুক, সমস্যা
+  // নাই) + আসল উত্তর — দুটোই যেন সম্পূর্ণ আঁটে; আগের ২০৪৮-তে narration-ই বাজেট খেয়ে
+  // উত্তর কাটা পড়ত
+  gc.maxOutputTokens = Math.min((gc.maxOutputTokens as number | undefined) || 4096, 4096)
   b.generationConfig = gc
   return b
 }
@@ -386,10 +387,13 @@ function looksLikePromptEcho(text: string): boolean {
 function stripLeadLabels(text: string): string {
   let out = text.trim()
   for (let i = 0; i < 4; i++) {
-    // "*Final Draft:*", "**Final Output Construction:**", "উত্তর:" — মডেলের লেখা
-    // সব শুরুর হেডিং লেবেল (single/double asterisk-মোড়ানোসহ) সরায়
+    // মডেল প্রতিবার নতুন হেডিং বানায় ("Final Output Construction:", "*Final Draft:*",
+    // "*Final Polish:*"…) — তালিকার বদলে দুটো নিরাপদ প্যাটার্ন:
+    //  ১) bold-মোড়ানো ইংরেজি narration-হেডিং (*Final Polish:* ইত্যাদি)
+    //  ২) narration-শব্দ দিয়ে শুরু হওয়া কোলন-শেষ লেবেল (বাংলা-ইংরেজি দুটোই)
+    // বৈধ বাংলা বোল্ড-লেবেল ("*অফার:*") বা ইনলাইন কোলন অক্ষত থাকে
     const next = out.replace(
-      /^\s*(?:\*{1,2})?\s*(?:final(?:\s+(?:output|answer|reply|draft|response|construction))*|output|answer|reply|response|draft|উত্তর|রিপ্লাই|রিপ্লে|চূড়ান্ত উত্তর|চূড়ান্ত আউটপুট|চূড়ান্ত খসড়া)\s*(?:\*{1,2})?\s*:\s*(?:\n\s*)?/i,
+      /^\s*(?:\*{1,2}(?:final\b|draft\b|polish\b|output\b|answer\b|reply\b|response\b|step\b)[^*\n]{0,40}\*{1,2}|(?:final\b|draft\b|polish\b|output\b|answer\b|reply\b|response\b|উত্তর|রিপ্লাই|রিপ্লে|চূড়ান্ত (?:উত্তর|আউটপুট|খসড়া))[^:\n]{0,40})\s*:\s*(?:\n\s*)?/i,
       '',
     )
     if (next === out) break
@@ -484,6 +488,9 @@ async function generateRotating(
 
   const models = cfg.pinned ? [cfg.model] : [cfg.model, ...GEMINI_MODELS.map((m) => m.id).filter((id) => id !== cfg.model)]
   let lastError = 'কোনো API কি নেই'
+  // narration/echo এলোমেলো — একই কল আরেকবারে পরিষ্কার উত্তর আসতে পারে (মালিকের
+  // নির্দেশ: সময়ের কোনো সীমা নেই, তাই ভালো উত্তর পাওয়া পর্যন্ত চেষ্টা সস্তা)
+  let valRetried = false
 
   modelLoop: for (const model of models) {
     // gemma-তে আলাদা body-শেপ লাগে (system/JSON/thinking ফিল্ড বাদ)
@@ -513,9 +520,13 @@ async function generateRotating(
         try {
           // কোনো পার-কল ক্যাপ নেই — এই কল বাকি পুরো বাজেটই ব্যবহার করতে পারে
           // (৩১B লোডে ২৮s+ নেয় — আগের ২৫s ক্যাপই ভালো উত্তর কেটে টাইমআউট বানাত)
-          const text = await generateWithKey(key, model, mBody, Math.min(300_000, timeLeft() - 1500))
-          // নিয়ম-ভাঙা আউটপুট (বিশ্লেষণ-লিক/JSON নেই) — এই মডেল এই কলে ঠিক হবে
-          // না (key বদলালেও লাগে), তাই বাকি কি নষ্ট না করে সরাসরি পরের মডেলে
+          let text = await generateWithKey(key, model, mBody, Math.min(300_000, timeLeft() - 1500))
+          // নিয়ম-ভাঙা আউটপুট (বিশ্লেষণ-লিক/ইকো) — এলোমেলো আচরণ, তাই একবার একই
+          // key+model-এ পুনরায় চেষ্টা (সময়ের সীমা নেই); তবু ভাঙলে পরের মডেলে
+          if (validate && !validate(text) && !valRetried && timeLeft() > 30_000) {
+            valRetried = true
+            text = await generateWithKey(key, model, mBody, Math.min(300_000, timeLeft() - 1500))
+          }
           if (validate && !validate(text)) {
             lastError = `${model}: আউটপুট নিয়ম-ভাঙা (বিশ্লেষণ/অসম্পূর্ণ)`
             continue modelLoop
