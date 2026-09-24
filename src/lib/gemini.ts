@@ -239,9 +239,12 @@ function bodyForModel(body: Record<string, unknown>, model: string): Record<stri
   if (!isGemma && !simplified) return body
   const b: Record<string, unknown> = { ...body }
   if (isGemma) {
-    const sys = (b.systemInstruction as { parts?: { text?: string }[] } | undefined)?.parts
+    // বড় 31B মডেল লম্বা প্রম্পটে খুব ধীর (টাইমআউট খায়) — সিস্টেম টেক্সট
+    // ছোট করে (persona+KB-র শুরুতেই মেনু/অফার থাকে) দ্রুত উত্তরে আনা হয়
+    const sysFull = (b.systemInstruction as { parts?: { text?: string }[] } | undefined)?.parts
       ?.map((p) => p.text || '')
       .join('\n\n')
+    const sys = sysFull ? sysFull.slice(0, 6000) : ''
     if (sys) {
       const contents = (b.contents as { role: string; parts: { text?: string }[] }[] | undefined) || []
       b.contents = contents.map((c, i) =>
