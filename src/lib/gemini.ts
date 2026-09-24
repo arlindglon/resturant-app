@@ -145,7 +145,12 @@ async function generateWithKey(
     .map((p) => p.text || '')
     .join('')
     .trim()
-  if (!text) throw new Error('Gemini খালি উত্তর দিয়েছে')
+  if (!text) {
+    // নতুন Gemini 3.x মডেলগুলো thinking করে — ছোট maxOutputTokens হলে পুরো
+    // বাজেট thinking-এই শেষ হয়ে দৃশ্যমান উত্তরই থাকে না (finishReason MAX_TOKENS)
+    const reason = j.candidates?.[0]?.finishReason || j.error?.status || 'UNKNOWN'
+    throw new Error(`Gemini খালি উত্তর দিয়েছে (finishReason: ${reason})`)
+  }
   return text
 }
 
@@ -315,7 +320,9 @@ export async function chatWithCustomer(opts: {
     contents,
     generationConfig: {
       temperature: 0.8,
-      maxOutputTokens: 800,
+      // Gemini 3.x thinking মডেল: thinking token-ও এই বাজেট থেকেই কাটে —
+      // তাই 800 নয়, ঢিলেঢালা বাজেট রাখতে হয়
+      maxOutputTokens: 2048,
       responseMimeType: 'application/json',
       responseSchema: CHAT_SCHEMA,
     },
@@ -324,6 +331,11 @@ export async function chatWithCustomer(opts: {
   if (!res.ok || !res.text) return { ok: false, reply: null, extracted: empty, error: res.error }
 
   const j = extractJson(res.text)
+  // truncated-JSON (thinking-এ বাজেট শেষ) কাস্টমারকে কখনো raw আকারে যাবে না —
+  // '{' দিয়ে শুরু হলে সেটা ভাঙা JSON, বরং ব্যর্থ ধরে static fallback-এ যাও
+  if (!j && res.text.trimStart().startsWith('{')) {
+    return { ok: false, reply: null, extracted: empty, error: 'JSON ট্রানকেটেড (thinking বাজেট শেষ)' }
+  }
   const reply = str(j?.reply) || res.text // JSON parse fail → send raw text as reply
   return {
     ok: true,
@@ -385,7 +397,7 @@ JSON ফরম্যাট: {"extractedData": "...", "reply": "..."}
     contents: [{ role: 'user', parts: [{ text: opts.customerMessage }] }],
     generationConfig: {
       temperature: 0.4,
-      maxOutputTokens: 400,
+      maxOutputTokens: 1024,
       responseMimeType: 'application/json',
       responseSchema: EXTRACT_SCHEMA,
     },
@@ -419,7 +431,8 @@ export async function testGeminiKey(key: string): Promise<KeyTestResult> {
       'gemini-3.6-flash', // fixed current model for the ping — works for all keys
       {
         contents: [{ role: 'user', parts: [{ text: 'Reply with exactly: OK' }] }],
-        generationConfig: { maxOutputTokens: 10, temperature: 0 },
+        // Gemini 3.x thinking মডেল — ছোট বাজেট দিলে thinking-এই শেষ, উত্তরই আসে না
+        generationConfig: { maxOutputTokens: 1024, temperature: 0 },
       },
     )
     return { masked: maskKey(key), ok: !!text, ms: Date.now() - t0, error: null }
