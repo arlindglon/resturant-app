@@ -8,10 +8,10 @@ import { requirePerm } from '@/lib/staff-auth'
 import { buildKnowledgeBase } from '@/lib/knowledge'
 import { getGeminiConfig, chatWithCustomer, verificationChat, testGeminiKey, generateWithKey } from '@/lib/gemini'
 
-// পিং + চ্যাট-স্যাম্পল + ভেরিফাই-স্যাম্পল — তিনটার মোট সময় Vercel সীমার ভেতর রাখতে
-// প্রতিটি স্যাম্পলকে ১২০s বাজেট (মোট ~২৫০s < ৩০০s); প্রতি স্যাম্পল তবু ২ মিনিট পর্যন্ত পায়
+// পিং + চ্যাট-স্যাম্পল + ভেরিফাই-স্যাম্পল — দুটো স্যাম্পল সমান্তরালে চলে এবং
+// প্রতিটি ২৬০s বাজেট পায় (মোট ~২৬৫s < ৩০০s); মডেল যত ধীরই হোক সময় পাবে
 export const maxDuration = 300
-const SAMPLE_BUDGET_MS = 120_000
+const SAMPLE_BUDGET_MS = 260_000
 
 export async function POST(req: Request) {
   const denied = await requirePerm('settings')
@@ -110,35 +110,44 @@ export async function POST(req: Request) {
   // gemma) উত্তর দিতে পারে; চেইনের আসল অবস্থা এখানেই দেখা যায়
   {
     const kb = await buildKnowledgeBase()
-    const t0 = Date.now()
-    const ai = await chatWithCustomer({
-      knowledgeBase: kb.text,
-      history: [],
-      customerMessage: 'তোমাদের জনপ্রিয় খাবার কোনটা? দাম কত? আর কোনো অফার আছে?',
-      customerName: '',
-      extraPersona: cfg.persona,
-      cfg: { ...cfg, budgetMs: SAMPLE_BUDGET_MS },
-    })
-    sample = { ok: ai.ok, reply: ai.reply, error: ai.error, ms: Date.now() - t0 }
-
-    // verification-flow sample: an UNMARRIED customer on the anniversary offer —
-    // the bot must cancel gracefully and pivot to something that fits them
-    const tv = Date.now()
-    const vi = await verificationChat({
-      fieldType: 'DATE',
-      offerName: 'বিবাহবার্ষিকী স্পেশাল',
-      askText: 'আপনার বিবাহের তারিখ বলুন (যেমন: 15/03/1995)',
-      lastAskSent: 'আপনার বিবাহের তারিখ বলুন (যেমন: 15/03/1995)',
-      askCount: 0,
-      knowledgeBase: kb.text,
-      history: [
-        { role: 'user', text: 'heo bhai' },
-        { role: 'model', text: 'আপনার বিবাহের তারিখ বলুন (যেমন: 15/03/1995)' },
-      ],
-      customerMessage: 'ami biye korini bhai, amr nam rakib',
-      cfg: { ...cfg, budgetMs: SAMPLE_BUDGET_MS },
-    })
-    verifySample = { ok: vi.ok, reply: vi.reply, action: vi.action, error: vi.error, ms: Date.now() - tv }
+    // দুটো স্যাম্পল স্বাধীন — সমান্তরালে চলে, মোট সময় = ধীরতমটির সময়; প্রতিটি
+    // মডেল তার পুরো ২৬০s বাজেট পায় (পরপর চালালে প্রথমটার সময় দ্বিতীয়টা খেত)
+    const [chatRes, verifyRes] = await Promise.all([
+      (async () => {
+        const t0 = Date.now()
+        const ai = await chatWithCustomer({
+          knowledgeBase: kb.text,
+          history: [],
+          customerMessage: 'তোমাদের জনপ্রিয় খাবার কোনটা? দাম কত? আর কোনো অফার আছে?',
+          customerName: '',
+          extraPersona: cfg.persona,
+          cfg: { ...cfg, budgetMs: SAMPLE_BUDGET_MS },
+        })
+        return { ok: ai.ok, reply: ai.reply, error: ai.error, ms: Date.now() - t0 }
+      })(),
+      // verification-flow sample: an UNMARRIED customer on the anniversary offer —
+      // the bot must cancel gracefully and pivot to something that fits them
+      (async () => {
+        const tv = Date.now()
+        const vi = await verificationChat({
+          fieldType: 'DATE',
+          offerName: 'বিবাহবার্ষিকী স্পেশাল',
+          askText: 'আপনার বিবাহের তারিখ বলুন (যেমন: 15/03/1995)',
+          lastAskSent: 'আপনার বিবাহের তারিখ বলুন (যেমন: 15/03/1995)',
+          askCount: 0,
+          knowledgeBase: kb.text,
+          history: [
+            { role: 'user', text: 'heo bhai' },
+            { role: 'model', text: 'আপনার বিবাহের তারিখ বলুন (যেমন: 15/03/1995)' },
+          ],
+          customerMessage: 'ami biye korini bhai, amr nam rakib',
+          cfg: { ...cfg, budgetMs: SAMPLE_BUDGET_MS },
+        })
+        return { ok: vi.ok, reply: vi.reply, action: vi.action, error: vi.error, ms: Date.now() - tv }
+      })(),
+    ])
+    sample = chatRes
+    verifySample = verifyRes
   }
 
   return ok({
