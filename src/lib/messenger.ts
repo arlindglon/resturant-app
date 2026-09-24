@@ -192,3 +192,85 @@ export async function sendBirthdayGreeting(psid: string, name: string, voucherCo
     `🎂 শুভ জন্মদিন ${name}!\n\nআপনার জন্য বিশেষ উপহার: কুপন "${voucherCode}" — পরবর্তী অর্ডারে ${percent}% ছাড়!\nআজই ভিজিট করুন এবং উপভোগ করুন। 🎉`
   )
 }
+
+/* ═══════════ Meta Recurring Notifications (marketing_message_*) ═══════════
+ * Meta-র নিয়ম: কাস্টমারের শেষ মেসেজের ২৪ ঘণ্টা পার হলে সাধারণ টেক্সট পাঠানো
+ * যায় না। Recurring Notifications (ফ্রি) হলো একমাত্র লিগ্যাল চ্যানেল —
+ * কাস্টমার RN টেমপ্লেটের [Opt-in] বাটনে ক্লিক করলে webhook messaging_optins
+ * ইভেন্টে একটি notification token আসে; সেই টোকেন দিয়ে যেকোনো সময় (টপিকের
+ * ফ্রিকোয়েন্সি অনুযায়ী) মেসেজ পাঠানো যায় — জন্মদিন, উৎসব, সাপ্তাহিক অফার। */
+
+interface GraphSendResult {
+  ok: boolean
+  error?: string
+}
+
+/** POST to the Graph API with the page token (shared by the RN helpers) */
+async function graphPost<T>(path: string, body: unknown): Promise<{ ok: boolean; data?: T; error?: string }> {
+  const token = pageToken()
+  if (!token) return { ok: false, error: 'META_PAGE_TOKEN সেট করা নেই (Vercel env)' }
+  try {
+    const res = await fetch(`${GRAPH}${path}?access_token=${encodeURIComponent(token)}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+      signal: AbortSignal.timeout(15_000),
+    })
+    const j = (await res.json()) as T & { error?: { message?: string } }
+    if (!res.ok || j.error) return { ok: false, error: j.error?.message || `Graph API HTTP ${res.status}` }
+    return { ok: true, data: j }
+  } catch (e) {
+    return { ok: false, error: e instanceof Error ? e.message : 'সংযোগ ব্যর্থ' }
+  }
+}
+
+/** create the recurring-notification creative (template wrapped for the Send API) */
+async function createRnCreative(templateId: string): Promise<{ ok: boolean; creativeId?: string; error?: string }> {
+  const r = await graphPost<{ message_creative_id?: string }>('/me/message_creatives', {
+    message: {
+      template: {
+        type: 'recurring_notification',
+        payload: { template_id: templateId },
+      },
+    },
+  })
+  if (!r.ok || !r.data?.message_creative_id) return { ok: false, error: r.error || 'message_creative তৈরি হয়নি' }
+  return { ok: true, creativeId: r.data.message_creative_id }
+}
+
+/**
+ * Send the RN template to a PSID — this renders the card with the [Opt-in]
+ * button. When the customer taps it, Meta fires the messaging_optins webhook
+ * and we store the token on the CRM customer (rnToken).
+ */
+export async function sendRnOptInTemplate(psid: string, templateId: string): Promise<GraphSendResult> {
+  const creative = await createRnCreative(templateId)
+  if (!creative.ok || !creative.creativeId) return { ok: false, error: creative.error }
+  const r = await graphPost('/me/messages', {
+    recipient: { id: psid },
+    message: { message_creative_id: creative.creativeId },
+  })
+  return { ok: r.ok, error: r.error }
+}
+
+/**
+ * Deliver the RN template to an OPTED-IN customer via their notification
+ * token — works even 24h+ after their last message. The documented recipient
+ * key is notification_message_token; some Graph versions expect
+ * notification_messages_token → we try both before giving up.
+ */
+export async function sendRnToToken(templateId: string, token: string): Promise<GraphSendResult> {
+  const creative = await createRnCreative(templateId)
+  if (!creative.ok || !creative.creativeId) return { ok: false, error: creative.error }
+  let lastError = 'notification token rejected by Graph'
+  for (const key of ['notification_message_token', 'notification_messages_token']) {
+    const r = await graphPost('/me/messages', {
+      recipient: { [key]: token },
+      message: { message_creative_id: creative.creativeId },
+    })
+    if (r.ok) return { ok: true }
+    lastError = r.error || lastError
+    if (!/token/i.test(lastError)) return { ok: false, error: lastError } // not a token-key problem → stop
+  }
+  return { ok: false, error: lastError }
+}

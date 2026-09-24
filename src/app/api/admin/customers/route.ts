@@ -76,6 +76,8 @@ export async function GET() {
       address: c.address ?? null,
       statedName: c.statedName ?? null,
       language: c.language ?? null,
+      rnOptIn: Boolean(c.rnToken),
+      rnTopic: c.rnTopic ?? null,
       discountClaimed: c.discountClaimed,
       claims: claimCount.get(c.psid) || 0,
       noteCount: noteCountMap.get(c.id) || 0,

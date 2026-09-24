@@ -270,6 +270,10 @@ model Customer {
   address         String?        @db.Text // delivery/contact address (AI chatbot natural extraction)
   statedName      String?        // name the customer stated in chat (when different from FB profile)
   language        String?        // preferred chat language code (bn/banglish/en/hi/other) — AI-detected or admin-marked; bot replies in it
+  rnToken         String?        @unique // Meta Recurring Notifications opt-in token — customer tapped [Opt-in] on the RN template; enables legal marketing messages beyond the 24h window
+  rnTopic         String?                // RN topic frequency (daily/weekly/monthly topic id from Meta)
+  rnOptInAt       DateTime?              // when the customer opted in to Recurring Notifications
+  rnAskedAt       DateTime?              // last time we sent an opt-in request card (14-day no-nag cooldown)
   notes           CustomerNote[]
   lastSeenAt      DateTime?
   discountClaimed Boolean        @default(false) // lifetime lock after birthday discount

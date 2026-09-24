@@ -19,7 +19,7 @@ import { NextRequest } from 'next/server'
 import crypto from 'crypto'
 import { db } from '@/lib/db'
 import { fail, ok } from '@/lib/api'
-import { fetchMessengerProfile, askPhoneQuickReply, sendReceipt, sendText } from '@/lib/messenger'
+import { fetchMessengerProfile, askPhoneQuickReply, sendReceipt, sendText, sendRnOptInTemplate } from '@/lib/messenger'
 import { applyBirthdayDiscount } from '@/lib/birthday'
 import { setSettings, getSetting } from '@/lib/settings'
 import { SETTING_KEYS } from '@/lib/constants'
@@ -113,6 +113,14 @@ interface MessagingEvent {
   recipient?: { id: string }
   referral?: { ref?: string; source?: string; type?: string }
   postback?: { payload?: string; referral?: { ref?: string } }
+  // Recurring Notifications opt-in (customer tapped [Opt-in] on the RN card).
+  // Meta delivers the PSID as sender OR recipient depending on the event type.
+  optin?: {
+    type?: string
+    payload?: { token?: string; recurring_notification_topic?: string }
+    user_token_status?: string
+    ref?: string
+  }
   message?: {
     text?: string
     is_echo?: boolean // our own page-sent messages echoed back — never reply to those
@@ -387,9 +395,70 @@ function isPlaceholderName(name?: string | null): boolean {
   return !n || n === 'Customer' || n === 'নাম যাচাই বাকি'
 }
 
+/* ───────────────────── Recurring Notifications (24h-বাইপাস মার্কেটিং) ───────────────────── */
+
+const RN_ASK_COOLDOWN_MS = 14 * 24 * 60 * 60 * 1000 // ask at most every 14 days — never nag
+
+/**
+ * store/refresh the Recurring Notifications opt-in token on the CRM customer.
+ * This is the moment the customer becomes reachable FOREVER (beyond Meta's
+ * 24-hour window) — the birthday cron and admin broadcasts use this token.
+ */
+async function handleRnOptIn(psid: string, optin: NonNullable<MessagingEvent['optin']>): Promise<void> {
+  try {
+    await upsertCustomer(psid) // ensure the CRM row exists (code, name, …)
+    if (optin.user_token_status === 'REVOKED') {
+      await db.customer.updateMany({ where: { psid }, data: { rnToken: null, rnTopic: null, rnOptInAt: null } })
+      console.log('[webhook:rn] opt-in revoked —', psid)
+      return
+    }
+    const token = optin.payload?.token || ''
+    if (!token) return
+    await db.customer.updateMany({
+      where: { psid },
+      data: {
+        rnToken: token,
+        rnTopic: optin.payload?.recurring_notification_topic || null,
+        rnOptInAt: new Date(),
+      },
+    })
+    console.log('[webhook:rn] opt-in stored —', psid)
+  } catch (e) {
+    console.error('[webhook:rn]', e)
+  }
+}
+
+/**
+ * একবারই (১৪ দিন কুলডাউন) RN অপট-ইন কার্ড পাঠাই — কাস্টমার যখন সবচেয়ে
+ * এনগেজড (অফার নিয়েছে / চ্যাট করছে)। কার্ডের [Opt-in] বাটনে ক্লিক করলেই
+ * ২৪ ঘণ্টা পার হলেও সাপ্তাহিক অফার ও জন্মদিনের সারপ্রাইজ পাঠানো যাবে।
+ */
+async function maybeAskRnOptIn(psid: string): Promise<void> {
+  try {
+    const templateId = ((await getSetting(SETTING_KEYS.META_RN_TEMPLATE_ID)) || '').trim()
+    if (!templateId) return // মালিক এখনো Meta-তে RN টেমপ্লেট বানায়নি — কিছু করার নেই
+    const cust = await db.customer.findUnique({ where: { psid }, select: { rnToken: true, rnAskedAt: true } })
+    if (!cust || cust.rnToken) return // ইতোমধ্যে অপট-ইন করা — আর ভদ্রতা দেখানোর দরকার নেই
+    if (cust.rnAskedAt && Date.now() - cust.rnAskedAt.getTime() < RN_ASK_COOLDOWN_MS) return // no-nag guard
+    await db.customer.update({ where: { psid }, data: { rnAskedAt: new Date() } })
+    const r = await sendRnOptInTemplate(psid, templateId)
+    if (!r.ok) console.error('[webhook:rn-ask]', r.error)
+  } catch (e) {
+    console.error('[webhook:rn-ask]', e)
+  }
+}
+
 /* ───────────────────────── event routing ───────────────────────── */
 
 async function handleEvent(event: MessagingEvent) {
+  // Case 0: Recurring Notifications opt-in — the customer tapped [Opt-in] on the
+  // RN template card. The PSID may arrive as sender OR recipient (Meta uses
+  // recipient for marketing-message opt-ins), so check both.
+  if (event.optin && (event.optin.payload?.token || event.optin.user_token_status === 'REVOKED')) {
+    const psidOptin = event.sender?.id || event.recipient?.id
+    if (psidOptin) await handleRnOptIn(psidOptin, event.optin)
+    return
+  }
   const psid = event.sender?.id
   if (!psid) return
   // our own outgoing messages are echoed back as messages — never self-reply
@@ -458,6 +527,8 @@ async function handleEvent(event: MessagingEvent) {
           `${greet(name)}\n\nআমাদের বিশেষ অফার নিতে রেস্তোরাঁর বিল পেজ থেকে "🎉 Claim on Messenger" চাপুন — সেখান থেকে যাচাই করে ছাড় নিতে পারবেন।${await followNudge()}`
         )
       }
+      // সরাসরি পেজে মেসেজ দেওয়া কাস্টমারও RN-এর সুযোগ পাক (একবারই, কুলডাউন গার্ড সহ)
+      await maybeAskRnOptIn(psid)
       return
     }
 
@@ -646,6 +717,11 @@ async function handleEvent(event: MessagingEvent) {
       tableNumber: tokenRow.tableNumber,
       sessionId: tokenRow.sessionId,
     })
+
+    // সবচেয়ে এনগেজড মুহূর্ত — অফার পেয়ে খুশি কাস্টমারকে একবারই (১৪ দিন
+    // কুলডাউন) RN অপট-ইন কার্ড দেখাই: ২৪ ঘণ্টা পার হলেও ভবিষ্যতের সব
+    // অফার/জন্মদিনের শুভেচ্ছা তাকে পৌঁছে দেওয়ার লিগ্যাল চ্যানেল চালু হয়
+    await maybeAskRnOptIn(psid)
   }
 }
 

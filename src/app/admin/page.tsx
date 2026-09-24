@@ -2911,6 +2911,8 @@ interface CustomerRow {
   address: string | null
   statedName: string | null
   language: string | null
+  rnOptIn: boolean
+  rnTopic: string | null
   discountClaimed: boolean
   claims: number
   noteCount: number
@@ -3244,6 +3246,15 @@ function CustomersTab({ onAuthRequired }: TabProps) {
                 {c.language && (
                   <Badge variant="outline" className="border-teal-200 bg-teal-50 text-[10px] text-teal-700" title="কথা বলার ভাষা (AI জেনেছে বা আপনি মার্ক করেছেন)">
                     🗣️ {LANGUAGE_LABELS[c.language] || c.language}
+                  </Badge>
+                )}
+                {c.rnOptIn && (
+                  <Badge
+                    variant="outline"
+                    className="border-emerald-200 bg-emerald-50 text-[10px] text-emerald-700"
+                    title="Recurring Notifications চালু — ২৪ ঘণ্টা পার হলেও এই কাস্টমারকে অফার/জন্মদিনের শুভেচ্ছা পাঠানো যাবে"
+                  >
+                    🔔 আপডেট চালু
                   </Badge>
                 )}
                 {c.messenger && (
@@ -4218,6 +4229,8 @@ function SettingsTab({ onAuthRequired }: TabProps) {
   const [metaTest, setMetaTest] = useState<MessengerTestResult | null>(null)
   const [testingGemini, setTestingGemini] = useState(false)
   const [geminiTest, setGeminiTest] = useState<GeminiTestResult | null>(null)
+  const [rnBusy, setRnBusy] = useState<'ask' | 'broadcast' | null>(null)
+  const [rnResult, setRnResult] = useState<{ total: number; sent: number; failed: number; errors: string[] } | null>(null)
   const logoFileRef = useRef<HTMLInputElement>(null)
 
   const load = useCallback(async () => {
@@ -4300,6 +4313,7 @@ function SettingsTab({ onAuthRequired }: TabProps) {
       [SETTING_KEYS.DEVELOPER_NOTE_LINK]: form[SETTING_KEYS.DEVELOPER_NOTE_LINK] ?? '',
       [SETTING_KEYS.ITEM_SPECIAL_NOTE_ENABLED]: form[SETTING_KEYS.ITEM_SPECIAL_NOTE_ENABLED] ?? 'true',
       [SETTING_KEYS.MESSENGER_AUTO_REPLY_ENABLED]: form[SETTING_KEYS.MESSENGER_AUTO_REPLY_ENABLED] ?? 'true',
+      [SETTING_KEYS.META_RN_TEMPLATE_ID]: form[SETTING_KEYS.META_RN_TEMPLATE_ID] ?? '',
       [SETTING_KEYS.GEMINI_ENABLED]: form[SETTING_KEYS.GEMINI_ENABLED] ?? 'false',
       [SETTING_KEYS.GEMINI_API_KEYS]: form[SETTING_KEYS.GEMINI_API_KEYS] ?? '',
       [SETTING_KEYS.GEMINI_MODEL]: form[SETTING_KEYS.GEMINI_MODEL] ?? 'gemini-3.6-flash',
@@ -4372,6 +4386,17 @@ function SettingsTab({ onAuthRequired }: TabProps) {
     if (res.data.keys.length === 0) toast.warning('আগে অন্তত একটি API কি যোগ করুন')
     else if (res.data.sample.ok) toast.success('AI কাজ করছে ✅')
     else toast.error('AI উত্তর দিচ্ছে না — নিচে বিস্তারিত দেখুন')
+  }
+
+  const runRn = async (action: 'ask' | 'broadcast') => {
+    setRnBusy(action)
+    setRnResult(null)
+    const res = await api.post<{ total: number; sent: number; failed: number; errors: string[] }>('/api/admin/rn', { action })
+    setRnBusy(null)
+    if (!res.ok || !res.data) return toast.error(res.error || 'কাজ হয়নি')
+    setRnResult(res.data)
+    if (res.data.sent > 0) toast.success(`${toBn(String(res.data.sent))} জনকে পাঠানো হয়েছে ✓`)
+    else toast.warning('কারও কাছে পাঠানো যায়নি — নিচে কারণ দেখুন')
   }
 
   if (err) return <LoadError msg={err} onRetry={load} />
@@ -5152,6 +5177,69 @@ function SettingsTab({ onAuthRequired }: TabProps) {
               </li>
             </ol>
           </details>
+        </CardContent>
+      </Card>
+
+      {/* ---- Recurring Notifications (Meta marketing messages) ---- */}
+      <Card className="border-violet-200 bg-gradient-to-br from-violet-50/60 to-white">
+        <CardHeader className="pb-2">
+          <CardTitle className="flex items-center gap-2 text-base">🔔 Recurring Notifications — ২৪ ঘণ্টার পরেও মেসেজ</CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-3">
+          <div className="rounded-lg border border-violet-200 bg-white p-3 text-xs leading-relaxed text-stone-600">
+            Meta-র নিয়ম: কাস্টমারের শেষ মেসেজের <b>২৪ ঘণ্টা পার হলে</b> সাধারণ মেসেজ পাঠানো যায় না। Recurring Notifications (সম্পূর্ণ ফ্রি) — কাস্টমার একবার <b>[Opt-in]</b> বাটনে ক্লিক করলেই সাপ্তাহিক অফার, উৎসবের শুভেচ্ছা ও জন্মদিনের সারপ্রাইজ <b>যেকোনো সময়</b> পাঠানো যাবে, কোনো এরর ছাড়াই।
+          </div>
+
+          <div className="space-y-1">
+            <FieldLabel>Meta RN Template ID</FieldLabel>
+            <Input
+              value={form[SETTING_KEYS.META_RN_TEMPLATE_ID] ?? ''}
+              onChange={(e) => set(SETTING_KEYS.META_RN_TEMPLATE_ID, e.target.value)}
+              placeholder="যেমন: 1234567890123456"
+              className="max-w-xs font-mono text-xs"
+            />
+            <p className="text-[11px] leading-relaxed text-stone-500">
+              কোথায় পাবেন: developers.facebook.com → আপনার App → Messenger → <b>Recurring Notifications</b> → টেমপ্লেট বানান (টাইটেল, লেখা, ছবি, বাটন — যেমন “ভাইয়া, সাপ্তাহিক অফার ও জন্মদিনের সারপ্রাইজ গিফট পেতে চান?”) → টেমপ্লেটের ID কপি করে এখানে বসিয়ে <b>সেটিংস সেভ করুন</b>।
+            </p>
+          </div>
+
+          <div className="flex flex-wrap gap-2">
+            <Button
+              variant="outline"
+              className="border-violet-300 font-black text-violet-700 hover:bg-violet-50"
+              disabled={rnBusy !== null}
+              onClick={() => runRn('ask')}
+            >
+              {rnBusy === 'ask' ? <Loader2 className="h-4 w-4 animate-spin" /> : '📨'} অপট-ইন রিকোয়েস্ট পাঠান (পুরোনো অ্যাকটিভ কাস্টমার)
+            </Button>
+            <Button
+              variant="outline"
+              className="border-emerald-300 font-black text-emerald-700 hover:bg-emerald-50"
+              disabled={rnBusy !== null}
+              onClick={() => runRn('broadcast')}
+            >
+              {rnBusy === 'broadcast' ? <Loader2 className="h-4 w-4 animate-spin" /> : '📢'} অফার ব্রডকাস্ট (🔔 চালু কাস্টমারদের)
+            </Button>
+          </div>
+
+          <p className="text-[11px] leading-relaxed text-stone-500">
+            💡 বট নিজেও স্মার্টলি কাজ করে: কেউ অফার দাবি করলে বা চ্যাট করলে <b>১৪ দিন পর পর</b> (নাগ-কুলডাউন) অপট-ইন কার্ড দেখায়, আর প্রতিদিন সন্ধ্যা ৬টার ক্রন-জবে জন্মদিনের শুভেচ্ছা 🔔-চালু কাস্টমারদের কাছে <b>অবশ্যই</b> পৌঁছে যায় (না পৌঁছালে সাধারণ মেসেজে ফলব্যাক)। CRM কার্ডে কার কার আপডেট চালু — সবুজ 🔔 ব্যাজে দেখবেন।
+          </p>
+
+          {rnResult && (
+            <div className="rounded-lg border border-violet-200 bg-white p-3 text-xs leading-snug">
+              <p className="font-black text-stone-800">
+                ফলাফল: {toBn(String(rnResult.sent))} জন সফল, {toBn(String(rnResult.failed))} জন ব্যর্থ (মোট {toBn(String(rnResult.total))})
+              </p>
+              {rnResult.errors.length > 0 && (
+                <ul className="mt-1 space-y-0.5 text-red-600">
+                  {rnResult.errors.map((e, i) => (
+                    <li key={i}>❌ {e}</li>
+                  ))}
+                </ul>
+              )}
+            </div>
+          )}
         </CardContent>
       </Card>
     </div>

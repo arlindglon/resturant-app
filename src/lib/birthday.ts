@@ -1,8 +1,8 @@
 // Birthday discount core — shared by webhook, cron & admin "Run Now"
 import { db } from '@/lib/db'
-import { getSettingNumber } from '@/lib/settings'
+import { getSetting, getSettingNumber } from '@/lib/settings'
 import { SETTING_KEYS } from '@/lib/constants'
-import { sendText } from '@/lib/messenger'
+import { sendText, sendRnToToken } from '@/lib/messenger'
 import { emitEvent } from '@/lib/emit'
 import { appendLedger, LEDGER_TYPES } from '@/lib/ledger'
 import { deviceMatch } from '@/lib/device'
@@ -33,11 +33,11 @@ export async function antiFraudCheck(p: {
       where: { sessionId: p.sessionId, occasionId: { not: null } },
     })
     if (sessionOffer) {
-      return { ok: false, reason: 'এই বিলে ইতোমধ্যে একটি অফার ব্যবহার করা হয়েছে — প্রতি বিলে একটি অফারই প্রযোজ্য।' }
+      return { ok: false, reason: 'এই বিলে ইতোমধ্যে একটি অফার ব্যবহার করা হয়েছে — প্রতি বিলে একটি অফারই প্রযোজ্য। বিল পরিশোধ করে আবার স্ক্যান করলেই নতুন অফার নিতে পারবেন! 😊' }
     }
     const sessionRow = await db.tableSession.findUnique({ where: { id: p.sessionId } })
     if (sessionRow?.birthdayGranted) {
-      return { ok: false, reason: 'এই বিলে ইতোমধ্যে একটি অফার ব্যবহার করা হয়েছে — প্রতি বিলে একটি অফারই প্রযোজ্য।' }
+      return { ok: false, reason: 'এই বিলে ইতোমধ্যে একটি অফার ব্যবহার করা হয়েছে — প্রতি বিলে একটি অফারই প্রযোজ্য। বিল পরিশোধ করে আবার স্ক্যান করলেই নতুন অফার নিতে পারবেন! 😊' }
     }
 
     // ── 2. THIS offer already claimed earlier by the same customer / phone / device?
@@ -210,7 +210,10 @@ export async function applyBirthdayDiscount(p: {
   return { ok: true, message: `৳${discount} ছাড় প্রয়োগ হয়েছে!` }
 }
 
-/** Daily cron: birthday greetings + voucher */
+/** Daily cron: birthday greetings + voucher.
+ *  🔔 Recurring Notifications অপট-ইন করা কাস্টমার থাকলে আগে RN দিয়ে চেষ্টা
+ *  করি — এটি ২৪ ঘণ্টার উইন্ডোর বাইরেও (যেকোনো সময়) পৌঁছায়; ব্যর্থ হলে
+ *  আগের মতো সাধারণ টেক্সটে ফলব্যাক। */
 export async function runBirthdayCron(): Promise<{ sent: number; skipped: boolean }> {
   if (!process.env.META_PAGE_TOKEN) return { sent: 0, skipped: true }
 
@@ -219,6 +222,8 @@ export async function runBirthdayCron(): Promise<{ sent: number; skipped: boolea
   // today's month/day in restaurant timezone
   const fmt = new Intl.DateTimeFormat('en-US', { timeZone: tz, month: '2-digit', day: '2-digit' })
   const [mm, dd] = fmt.format(now).split('/').map(Number)
+
+  const rnTemplate = ((await getSetting(SETTING_KEYS.META_RN_TEMPLATE_ID)) || '').trim()
 
   const customers = await db.customer.findMany()
   let sent = 0
@@ -229,6 +234,15 @@ export async function runBirthdayCron(): Promise<{ sent: number; skipped: boolea
     if (bm !== mm || bd !== dd) continue
     // never greet with a placeholder word — real name only
     const nm = c.firstName && !/^customer$/i.test(c.firstName) ? c.firstName : ''
+    // 🔔 RN-চালু কাস্টমার → নোটিফিকেশন টোকেন দিয়ে পাঠাই (24h window-নির্ভর নয়)
+    if (c.rnToken && rnTemplate) {
+      const rn = await sendRnToToken(rnTemplate, c.rnToken)
+      if (rn.ok) {
+        sent++
+        continue
+      }
+      console.error('[cron:rn-birthday]', c.psid, rn.error) // fall through to text
+    }
     const ok = await sendText(
       c.psid,
       `🎂 শুভ জন্মদিন${nm ? ` ${nm}` : ''}!\n\nআপনার বিশেষ দিনে আমাদের পক্ষ থেকে ছোট্ট উপহার — কুপন "BDAY${mm}${dd}" ব্যবহার করে আজকের অর্ডারে ১৫% ছাড় নিন! 🎉\nআমরা অপেক্ষায় আছি।`
