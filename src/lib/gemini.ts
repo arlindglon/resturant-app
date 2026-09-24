@@ -385,8 +385,13 @@ function looksLikePromptEcho(text: string): boolean {
  */
 function stripLeadLabels(text: string): string {
   let out = text.trim()
-  for (let i = 0; i < 3; i++) {
-    const next = out.replace(/^\s*(?:\*\*)?\s*(?:final (?:output|answer|reply)(?: construction)?|output|answer|reply|response|উত্তর|রিপ্লাই|রিপ্লে|চূড়ান্ত উত্তর|চূড়ান্ত আউটপুট)\s*:\s*(?:\n\s*)?/i, '')
+  for (let i = 0; i < 4; i++) {
+    // "*Final Draft:*", "**Final Output Construction:**", "উত্তর:" — মডেলের লেখা
+    // সব শুরুর হেডিং লেবেল (single/double asterisk-মোড়ানোসহ) সরায়
+    const next = out.replace(
+      /^\s*(?:\*{1,2})?\s*(?:final(?:\s+(?:output|answer|reply|draft|response|construction))*|output|answer|reply|response|draft|উত্তর|রিপ্লাই|রিপ্লে|চূড়ান্ত উত্তর|চূড়ান্ত আউটপুট|চূড়ান্ত খসড়া)\s*(?:\*{1,2})?\s*:\s*(?:\n\s*)?/i,
+      '',
+    )
     if (next === out) break
     out = next.trim()
   }
