@@ -4,6 +4,8 @@
 // ফ্রন্টএন্ড লুপ করে; Vercel timeout + Gemini rate-limit নিরাপদ থাকে)।
 // কাস্টমার আগে যেসব ভাউচার ব্যবহার করেছে সেগুলো নলেজ বেস থেকে বাদ — AI আর
 // ব্যবহৃত অফার প্রস্তাব করে না।
+// মালিকের নির্দেশ: কোনো টাইমআউট নয় — AI যত সময় লাগে লিখবে; retry-সহ মোট
+// সময় Vercel সীমার ভেতর রাখতে প্রতি compose-এ ১২০s বাজেট (২×১২০+overhead < ৩০০s)।
 import { NextRequest } from 'next/server'
 import { db } from '@/lib/db'
 import { ok, fail } from '@/lib/api'
@@ -13,6 +15,9 @@ import { getGeminiConfig, composePersonalBlast, loadChatHistory, saveChatTurn } 
 import { buildKnowledgeBase } from '@/lib/knowledge'
 import { aiLanguageFor } from '@/lib/bot-text'
 import { usedVoucherIdsForPsid } from '@/lib/vouchers'
+
+export const maxDuration = 300
+const COMPOSE_BUDGET_MS = 120_000
 
 export async function POST(req: NextRequest) {
   const denied = await requirePerm('tables')
@@ -62,11 +67,12 @@ export async function POST(req: NextRequest) {
     formatting: await markdownEnabled(),
     cfg,
   }
-  // একটা retry — Gemini মাঝে মাঝে rate-limit/খালি উত্তর দেয়
-  let ai = await composePersonalBlast(blastOpts)
+  // একটা retry — Gemini মাঝে মাঝে rate-limit/খালি উত্তর দেয় (কোনো টাইমআউট নয় —
+  // AI যত সময় লাগে লিখবে, প্রতি চেষ্টায় ১২০s বাজেট)
+  let ai = await composePersonalBlast({ ...blastOpts, cfg: { ...cfg, budgetMs: COMPOSE_BUDGET_MS } })
   if (!ai.ok) {
     await new Promise((r) => setTimeout(r, 1200))
-    ai = await composePersonalBlast(blastOpts)
+    ai = await composePersonalBlast({ ...blastOpts, cfg: { ...cfg, budgetMs: COMPOSE_BUDGET_MS } })
   }
   if (!ai.ok || !ai.text) return fail(ai.error || 'মেসেজ লেখা যায়নি', 502, 'AI_FAIL')
 

@@ -9,6 +9,9 @@ export interface ApiResponse<T> {
 /** দুর্বল/থ্রটল করা ইন্টারনেটে রিকোয়েস্ট অনন্তকাল ঝুলে থাকা ঠেকায় (12s) */
 const TIMEOUT_MS = 12_000
 
+/** AI-জাতীয় লম্বা কলের জন্য — মালিকের নির্দেশ: AI যত সময় লাগে নেবে, কোনো কৃত্রিম টাইমআউট নয় */
+export const NO_TIMEOUT_MS = 300_000
+
 function timeoutSignal(ms: number): AbortSignal | undefined {
   try {
     return typeof AbortSignal !== 'undefined' && 'timeout' in AbortSignal ? AbortSignal.timeout(ms) : undefined
@@ -25,11 +28,11 @@ interface Attempt<T> {
   transient: boolean
 }
 
-async function attempt<T>(url: string, options?: RequestInit): Promise<Attempt<T>> {
+async function attempt<T>(url: string, options?: RequestInit, timeoutMs = TIMEOUT_MS): Promise<Attempt<T>> {
   try {
     const res = await fetch(url, {
       ...options,
-      signal: timeoutSignal(TIMEOUT_MS),
+      signal: timeoutSignal(timeoutMs),
       headers: { 'Content-Type': 'application/json', ...(options?.headers || {}) },
     })
     const json = await res.json().catch(() => ({ ok: false, error: 'সার্ভার রেসপন্স পার্স করা যায়নি' }))
@@ -39,9 +42,9 @@ async function attempt<T>(url: string, options?: RequestInit): Promise<Attempt<T
   }
 }
 
-async function request<T>(url: string, options?: RequestInit): Promise<ApiResponse<T>> {
+async function request<T>(url: string, options?: RequestInit, timeoutMs?: number): Promise<ApiResponse<T>> {
   const method = (options?.method || 'GET').toUpperCase()
-  const first = await attempt<T>(url, options)
+  const first = await attempt<T>(url, options, timeoutMs)
   // GET হলে স্বয়ংক্রিয় রিট্রাই: দুর্বল নেটওয়ার্কে প্যাকেট-ঝরা বা টাইমআউট হলে
   // এক-দুইবারের রিট্রাইতেই লোড হয়ে যায় — "সাইট খুলছে না" অনুভূতি কমে।
   // লেখা-জাতীয় (POST/PUT/PATCH/DELETE) রিকোয়েস্ট কখনো অটো-রিট্রাই হয় না
@@ -50,7 +53,7 @@ async function request<T>(url: string, options?: RequestInit): Promise<ApiRespon
     const waits = [700, 1800]
     for (const w of waits) {
       await sleep(w)
-      const again = await attempt<T>(url, options)
+      const again = await attempt<T>(url, options, timeoutMs)
       if (!again.transient || again.res.ok) return again.res
     }
   }
@@ -58,14 +61,14 @@ async function request<T>(url: string, options?: RequestInit): Promise<ApiRespon
 }
 
 export const api = {
-  get: <T>(url: string) => request<T>(url),
-  post: <T>(url: string, body?: unknown) =>
-    request<T>(url, { method: 'POST', body: JSON.stringify(body || {}) }),
-  patch: <T>(url: string, body?: unknown) =>
-    request<T>(url, { method: 'PATCH', body: JSON.stringify(body || {}) }),
-  put: <T>(url: string, body?: unknown) =>
-    request<T>(url, { method: 'PUT', body: JSON.stringify(body || {}) }),
-  del: <T>(url: string) => request<T>(url, { method: 'DELETE' }),
+  get: <T>(url: string, timeoutMs?: number) => request<T>(url, undefined, timeoutMs),
+  post: <T>(url: string, body?: unknown, timeoutMs?: number) =>
+    request<T>(url, { method: 'POST', body: JSON.stringify(body || {}) }, timeoutMs),
+  patch: <T>(url: string, body?: unknown, timeoutMs?: number) =>
+    request<T>(url, { method: 'PATCH', body: JSON.stringify(body || {}) }, timeoutMs),
+  put: <T>(url: string, body?: unknown, timeoutMs?: number) =>
+    request<T>(url, { method: 'PUT', body: JSON.stringify(body || {}) }, timeoutMs),
+  del: <T>(url: string, timeoutMs?: number) => request<T>(url, { method: 'DELETE' }, timeoutMs),
 }
 
 // ============================================================

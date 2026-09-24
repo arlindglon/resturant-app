@@ -11,7 +11,7 @@
 import { create } from 'zustand'
 import { toast } from 'sonner'
 
-import { api, type ApiResponse } from '@/lib/client'
+import { api, NO_TIMEOUT_MS, type ApiResponse } from '@/lib/client'
 
 export interface BlastTarget {
   id: string
@@ -64,10 +64,12 @@ export const useBlastStore = create<BlastState>()((set, get) => ({
       const rows: BlastResult[] = []
       for (const c of targets) {
         if (get().stopRequested) break
-        const res = await api.post<{ sent: boolean; via: string }>('/api/admin/customers/personal-blast', {
-          customerId: c.id,
-          info: get().info,
-        })
+        // মালিকের নির্দেশ: কোনো টাইমআউট নয় — AI যত সময় লাগে লিখবে (৫ মিনিট পর্যন্ত)
+        const res = await api.post<{ sent: boolean; via: string }>(
+          '/api/admin/customers/personal-blast',
+          { customerId: c.id, info: get().info },
+          NO_TIMEOUT_MS,
+        )
         if (authFailed(res)) {
           rows.push({ name: c.name, status: 'fail', error: 'লগইন শেষ — আবার ঢুকুন' })
           set({ results: [...rows] })

@@ -140,7 +140,9 @@ interface MessagingEvent {
 
 // AI + Messenger কল webhook-এর after()-ফেজে চলে — Meta সাথে সাথেই 200 পায়,
 // তাই টাইমআউট-জনিত একই মেসেজের বারবার re-delivery (একই fallback ৪ বার!) আর হয় না
-export const maxDuration = 60
+// মালিকের নির্দেশ: কৃত্রিম টাইমআউট নেই — AI যত ইচ্ছা সময় নিয়ে বিশ্লেষণ করুক।
+// ৩০০s = Vercel ফাংশনের সর্বোচ্চ (Fluid compute, Hobby)।
+export const maxDuration = 300
 
 export async function POST(req: NextRequest) {
   try {

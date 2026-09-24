@@ -8,7 +8,7 @@
 // ============================================================
 
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { api, type ApiResponse } from '@/lib/client'
+import { api, NO_TIMEOUT_MS, type ApiResponse } from '@/lib/client'
 import { useBlastStore } from '@/lib/blast-store'
 import { SETTING_KEYS, SUB_ADMIN_PERMISSIONS, LANGUAGE_LABELS } from '@/lib/constants'
 import { bnDateTime, bnDateOnly, bnDays, bnTaka, parseJsonSafe, toBn } from '@/lib/bn'
@@ -4662,7 +4662,9 @@ function SettingsTab({ onAuthRequired }: TabProps) {
 
   const runGeminiTest = async () => {
     setTestingGemini(true)
-    const res = await api.post<GeminiTestResult>('/api/admin/gemini-test')
+    // মালিকের নির্দেশ: কোনো টাইমআউট নয় — AI যত ইচ্ছা সময় নিয়ে বিশ্লেষণ করুক;
+    // ব্রাউজারও ৫ মিনিট পর্যন্ত অপেক্ষা করবে (আগে ১২s-এই কেটে টাইমআউট দেখাত)
+    const res = await api.post<GeminiTestResult>('/api/admin/gemini-test', undefined, NO_TIMEOUT_MS)
     setTestingGemini(false)
     if (!res.ok || !res.data) return toast.error(res.error || 'টেস্ট চালানো যায়নি')
     setGeminiTest(res.data)
@@ -5460,6 +5462,11 @@ function SettingsTab({ onAuthRequired }: TabProps) {
             >
               {testingGemini ? <Loader2 className="h-4 w-4 animate-spin" /> : '🧪'} AI কি ও উত্তর টেস্ট করুন
             </Button>
+            {testingGemini && (
+              <p className="rounded-lg bg-amber-50 px-3 py-2 text-xs font-bold text-amber-800">
+                ⏳ AI চিন্তা করছে — কোনো টাইমআউট নেই, যত সময় দরকার নেবে। উত্তর না আসা পর্যন্ত এই পেজ ছেড়ে যাবেন না (ধীর মডেলে ২-৩ মিনিটও লাগতে পারে)।
+              </p>
+            )}
             {geminiTest && (
               <div className="rounded-lg border border-sky-200 bg-white p-3 text-xs leading-snug">
                 <p className="font-black text-stone-800">কি স্ট্যাটাস:</p>
@@ -5518,7 +5525,7 @@ function SettingsTab({ onAuthRequired }: TabProps) {
                 <b>আনলিমিটেড টিপস:</b> একই কি দিয়ে প্রতি মিনিটে কিছু সংখ্যক ফ্রি রিকোয়েস্ট লিমিট আছে। আরও কি নিয়ে (একই অ্যাকাউন্টে একাধিক প্রজেক্ট বা ভিন্ন Google অ্যাকাউন্ট) আলাদা লাইনে পেস্ট করুন — একটা ব্যস্ত থাকলে সিস্টেম সাথে সাথেই পরেরটা ব্যবহার করবে।
               </li>
               <li>
-                <b>টেস্ট:</b> "🧪 AI কি ও উত্তর টেস্ট করুন" চাপুন — সব কি সবুজ ও নমুনা উত্তর এলেই সব ঠিক। এরপর কাস্টমার মেসেঞ্জারে মেসেজ করলেই AI উত্তর দেবে।
+                <b>টেস্ট:</b> "🧪 AI কি ও উত্তর টেস্ট করুন" চাপুন — সব কি সবুজ ও নমুনা উত্তর এলেই সব ঠিক। কোনো টাইমআউট নেই — AI ধীর হলে একটু বেশি সময় নেবে, তবে উত্তর আসবেই। এরপর কাস্টমার মেসেঞ্জারে মেসেজ করলেই AI উত্তর দেবে।
               </li>
             </ol>
           </details>

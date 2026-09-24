@@ -2,10 +2,16 @@
 // (tiny ping per key) + a real sample chat reply built from the knowledge
 // base + a verification-flow sample (a customer who says the occasion
 // doesn't apply), so the admin sees exactly what their customers will experience.
+// মালিকের নির্দেশ: কোনো টাইমআউট নয় — মডেল ধীর হলে টেস্টও ধীর, তবে শেষ হয়।
 import { ok } from '@/lib/api'
 import { requirePerm } from '@/lib/staff-auth'
 import { buildKnowledgeBase } from '@/lib/knowledge'
 import { getGeminiConfig, chatWithCustomer, verificationChat, testGeminiKey, generateWithKey } from '@/lib/gemini'
+
+// পিং + চ্যাট-স্যাম্পল + ভেরিফাই-স্যাম্পল — তিনটার মোট সময় Vercel সীমার ভেতর রাখতে
+// প্রতিটি স্যাম্পলকে ১২০s বাজেট (মোট ~২৫০s < ৩০০s); প্রতি স্যাম্পল তবু ২ মিনিট পর্যন্ত পায়
+export const maxDuration = 300
+const SAMPLE_BUDGET_MS = 120_000
 
 export async function POST(req: Request) {
   const denied = await requirePerm('settings')
@@ -49,7 +55,7 @@ export async function POST(req: Request) {
         customerMessage: 'তোমাদের জনপ্রিয় খাবার কোনটা? দাম কত? আর কোনো অফার আছে?',
         customerName: '',
         extraPersona: cfg.persona,
-        cfg: { ...cfg, model: probeModel, pinned: true },
+        cfg: { ...cfg, model: probeModel, pinned: true, budgetMs: SAMPLE_BUDGET_MS },
       })
       return ok({
         probe: {
@@ -70,7 +76,7 @@ export async function POST(req: Request) {
         rawPrompt
           ? { contents: [{ role: 'user', parts: [{ text: rawPrompt }] }] }
           : { contents: [{ role: 'user', parts: [{ text: 'Reply with exactly: OK' }] }] },
-        30_000,
+        240_000,
       )
       return ok({
         probe: { model: probeModel, ok: !!text, ms: Date.now() - t0, sample: text.slice(0, 800), error: null },
@@ -111,7 +117,7 @@ export async function POST(req: Request) {
       customerMessage: 'তোমাদের জনপ্রিয় খাবার কোনটা? দাম কত? আর কোনো অফার আছে?',
       customerName: '',
       extraPersona: cfg.persona,
-      cfg,
+      cfg: { ...cfg, budgetMs: SAMPLE_BUDGET_MS },
     })
     sample = { ok: ai.ok, reply: ai.reply, error: ai.error, ms: Date.now() - t0 }
 
@@ -130,7 +136,7 @@ export async function POST(req: Request) {
         { role: 'model', text: 'আপনার বিবাহের তারিখ বলুন (যেমন: 15/03/1995)' },
       ],
       customerMessage: 'ami biye korini bhai, amr nam rakib',
-      cfg,
+      cfg: { ...cfg, budgetMs: SAMPLE_BUDGET_MS },
     })
     verifySample = { ok: vi.ok, reply: vi.reply, action: vi.action, error: vi.error, ms: Date.now() - tv }
   }

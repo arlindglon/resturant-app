@@ -43,6 +43,13 @@ export interface GeminiConfig {
   persona: string
   /** টেস্ট/প্রোব: শুধু এই এক মডেলেই চলবে — ফলব্যাক চেইন নয় */
   pinned?: boolean
+  /**
+   * মোট সময়-বাজেট (ms) — মালিকের নির্দেশ (২০২৬): "বিশ্লেষণ করুক, সমস্যা নাই, যত ইচ্ছা
+   * সময় নিয়ে বিশ্লেষণ করুক; টাইমআউট বাদ দাও"। ডিফল্ট ২৮৫ সেকেন্ড (Vercel ৩০০s সীমার
+   * ভেতর static fallback পাঠানোর ১৫s হাতে রেখে)। অ্যাডমিন টেস্ট/ব্লাস্ট রুট ছোট
+   * বাজেট দেয় যেন এক রিকোয়েস্টে একাধিক স্যাম্পলও শেষ হয়।
+   */
+  budgetMs?: number
 }
 
 /** masked key for logs / admin display: AIzaSy…abcd → AIza…abcd */
@@ -156,13 +163,15 @@ export async function generateWithKey(
   key: string,
   model: string,
   body: Record<string, unknown>,
-  timeoutMs = 24_000,
+  // মালিকের নির্দেশ: কৃত্রিম টাইমআউট নেই — AI যত সময় লাগে নেবে। ৩০০s শুধু
+  // এক্সট্রিম hang-গার্ড (আটকে-যাওয়া socket কখনো চেইন পুরো আটকে রাখতে পারে না);
+  // বাস্তবে Gemma-র উত্তর ৫-৬০s-এই আসে, এই সীমা কখনোই ছোঁয় না।
+  timeoutMs = 300_000,
 ): Promise<string> {
   const res = await fetch(`${API_BASE}/${encodeURIComponent(model)}:generateContent?key=${encodeURIComponent(key)}`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
-    // কলার বাজেট-সচেতন টাইমআউট দেয় — ৩১B ধীর, তবে বাজেটের বাইরে গর্ত খোঁদে না
     signal: AbortSignal.timeout(timeoutMs),
   })
   const j = (await res.json().catch(() => ({}))) as GeminiResponse
@@ -346,9 +355,35 @@ const DIRECT_ANSWER_RULE =
  */
 function looksLikeReasoning(text: string): boolean {
   const s = text.trimStart()
-  if (s.startsWith('*') || s.startsWith('1.') || s.startsWith('Step')) return true
+  // নোট: "*লেখা*" (Messenger bold) দিয়ে শুরু হওয়া বৈধ উত্তর আছে — শুধু
+  // "* লেবেল:" স্টাইলের reasoning-বুলেট ধরা হয় (asterisk + স্পেস)
+  if (s.startsWith('* ') || s.startsWith('1.') || s.startsWith('Step')) return true
   if (/<think[\s>]/i.test(text)) return true
   return /user'?s? (message|request)|constraint \d|analysis of|let me |the customer (is|wants)|step \d:/i.test(s)
+}
+
+/**
+ * মালিকের নির্দেশ: মডেল চাইলে বিশ্লেষণ লিখুক — সমস্যা নেই। Gemma প্রায়ই
+ * বিশ্লেষণের শেষে আসল কাস্টমার-উত্তরটা লেখে; আগে সেটা পুরো আউটপুট বাতিল হতো,
+ * এখন শেষ প্যারাগ্রাফগুলো থেকে পরিষ্কার কাস্টমার-উত্তর বের করে নেওয়া হয়।
+ * কিছুই পাওয়া না গেলে null — তখনই কেবল static fallback।
+ */
+function salvageFinalAnswer(text: string): string | null {
+  const raw = text.trim()
+  if (!raw || raw.startsWith('{') || raw.startsWith('```')) return null
+  const paras = raw
+    .split(/\n{2,}/)
+    .map((p) => p.trim())
+    .filter(Boolean)
+  for (let i = paras.length - 1; i >= 0; i--) {
+    const p = paras[i]
+    if (looksLikeReasoning(p)) continue
+    // প্রোটোকল লাইন (INFO:/DATA:|ACTION:) caller নিজে পার্স করে — উত্তর নয়
+    if (/^(?:[*-]\s*)?(?:INFO|DATA|ACTION)\s*:/i.test(p) && p.length < 300) continue
+    if (p.length < 3 || p.length > 900) continue
+    return p
+  }
+  return null
 }
 
 /** মডেল-নিজস্ব এরর (মরা মডেল / ফিল্ড না-মানা) — পরের মডেলে যাওয়ার সংকেত */
@@ -394,9 +429,11 @@ async function generateRotating(
   validate?: (text: string) => boolean,
 ): Promise<{ ok: boolean; text: string | null; error: string | null }> {
   const started = Date.now()
-  // webhook after()-ফেজের maxDuration ৬০ সে — দুই Gemma-র ধীর উত্তরেও যেন ফলব্যাক
-  // (static reply) যাওয়ার সময় থাকে, তাই বাজেট ৫৫ সে
-  const BUDGET_MS = 55_000
+  // মালিকের নির্দেশ: কৃত্রিম টাইমআউট নেই — মডেল যত ইচ্ছা সময় নিয়ে বিশ্লেষণ করুক।
+  // ডিফল্ট বাজেট ২৮৫s = Vercel maxDuration ৩০০s-এর ভেতর static fallback পাঠানোর
+  // ১৫s হাতে রেখে। ব্যতিক্রম: অ্যাডমিন টেস্ট/ব্লাস্ট রুট এক রিকোয়েস্টে একাধিক কল
+  // চালায় — সেগুলো cfg.budgetMs দিয়ে ছোট বাজেট দেয় (তবু ২+ মিনিট)।
+  const BUDGET_MS = cfg.budgetMs && cfg.budgetMs >= 10_000 ? cfg.budgetMs : 285_000
   const WAIT_CAP_S = 12
   const timeLeft = () => BUDGET_MS - (Date.now() - started)
 
@@ -428,17 +465,18 @@ async function generateRotating(
       if (!usable.length) break
 
       for (let i = 0; i < usable.length; i++) {
-        // ডেডলাইন-সচেতন: বাকি সময়ে অর্থবহ উত্তরই আসবে না — এই মডেল এখানেই শেষ
+        // ডেডলাইন-সচেতন: বাকি সময়ে অর্থবহ উত্তর + fallback পাঠানো দুটোই যেন সম্ভব
         const tl = timeLeft()
         if (tl < 9000) break
-        const perCall = model === 'gemma-4-31b-it' ? 26_000 : 25_000
         if (timeLeft() < 2000) return { ok: false, text: null, error: lastError }
         const key = usable[(rotationCursor + i) % usable.length]
         const nextCursor = () => {
           rotationCursor = (rotationCursor + i + 1) % Math.max(usable.length, 1)
         }
         try {
-          const text = await generateWithKey(key, model, mBody, Math.min(perCall, timeLeft() - 1500))
+          // কোনো পার-কল ক্যাপ নেই — এই কল বাকি পুরো বাজেটই ব্যবহার করতে পারে
+          // (৩১B লোডে ২৮s+ নেয় — আগের ২৫s ক্যাপই ভালো উত্তর কেটে টাইমআউট বানাত)
+          const text = await generateWithKey(key, model, mBody, Math.min(300_000, timeLeft() - 1500))
           // নিয়ম-ভাঙা আউটপুট (বিশ্লেষণ-লিক/JSON নেই) — এই মডেল এই কলে ঠিক হবে
           // না (key বদলালেও লাগে), তাই বাকি কি নষ্ট না করে সরাসরি পরের মডেলে
           if (validate && !validate(text)) {
@@ -648,13 +686,14 @@ ${opts.formatting !== false ? MESSENGER_FORMAT_RULES + '\n- এটা একট�
     },
   }, (t) => {
     // নিয়ম-ভাঙা আউটপুট (বিশ্লেষণ/ভাঙা JSON) → ইঞ্জিন এই মডেল স্কিপ করে পরেরটায়
+    // (বিশ্লেষণের শেষে পরিষ্কার উত্তর থাকলে সেটাই গ্রহণযোগ্য — মালিকের নির্দেশ)
     const j2 = extractJson(t)
-    return !!(j2 && str(j2.text)) || cleanPlainReply(t, 800)
+    return !!(j2 && str(j2.text)) || cleanPlainReply(t, 800) || !!salvageFinalAnswer(t)
   })
   if (!res.ok || !res.text) return { ok: false, text: null, error: res.error }
   const j = extractJson(res.text)
-  // বিশ্লেষণ-লিক/কাঁচা JSON কখনো কাস্টমারের ব্রডকাস্ট হবে না
-  const text = str(j?.text) || (cleanPlainReply(res.text, 800) ? res.text.trim() : '')
+  // বিশ্লেষণ-লিক হলেও শেষ প্যারাগ্রাফে আসল মেসেজ থাকলে সেটাই যাবে (salvage)
+  const text = str(j?.text) || (cleanPlainReply(res.text, 800) ? res.text.trim() : salvageFinalAnswer(res.text) || '')
   if (!text) return { ok: false, text: null, error: 'খালি উত্তর (thinking বাজেট শেষ?)' }
   return { ok: true, text, error: null }
 }
@@ -791,9 +830,9 @@ export async function chatWithCustomer(opts: {
     },
   }, (t) => {
     // নিয়ম-ভাঙা আউটপুট → ইঞ্জিন এই মডেল স্কিপ করে পরেরটায় (রোটেশনের ভেতরেই);
-    // প্লেইন উত্তর + INFO লাইনও গ্রহণযোগ্য)
+    // প্লেইন উত্তর + INFO লাইনও গ্রহণযোগ্য, বিশ্লেষণের শেষের পরিষ্কার উত্তরও (salvage)
     const j2 = extractJson(t)
-    return !!(j2 && str(j2.reply)) || cleanPlainReply(t, 900)
+    return !!(j2 && str(j2.reply)) || cleanPlainReply(t, 900) || !!salvageFinalAnswer(t)
   })
 
   if (!res.ok || !res.text) return { ok: false, reply: null, extracted: empty, error: res.error }
@@ -834,9 +873,15 @@ export async function chatWithCustomer(opts: {
       }
     }
     if (!cleanPlainReply(bodyText, 900)) {
-      return { ok: false, reply: null, extracted: empty, error: 'AI আউটপুট অগ্রাহ্য (বিশ্লেষণ-লিক/ভাঙা JSON)' }
+      // মালিকের নির্দেশ: বিশ্লেষণ সমস্যা নয় — শেষ প্যারাগ্রাফে আসল উত্তর থাকলে সেটাই রিপ্লাই
+      const salvaged = salvageFinalAnswer(bodyText)
+      if (!salvaged) {
+        return { ok: false, reply: null, extracted: empty, error: 'AI আউটপুট অগ্রাহ্য (বিশ্লেষণ-লিক/ভাঙা JSON)' }
+      }
+      reply = salvaged
+    } else {
+      reply = bodyText
     }
-    reply = bodyText
     const pick = (...keys: string[]): string | null => {
       for (const k of keys) if (info[k]) return info[k]
       return null
@@ -958,9 +1003,9 @@ ${opts.knowledgeBase.slice(0, 4000)}
     },
   }, (t) => {
     // ভাঙা JSON/বিশ্লেষণ-লিক → ইঞ্জিন পরের মডেলে চেষ্টা করবে; gemma প্লেইন মোডের
-    // DATA/ACTION শেষ-লাইনও গ্রহণযোগ্য
+    // DATA/ACTION শেষ-লাইনও গ্রহণযোগ্য; বিশ্লেষণের শেষের পরিষ্কার উত্তরও (salvage)
     const j2 = extractJson(t)
-    return !!(j2 && (str(j2.reply) || str(j2.extractedData))) || /\bACTION\s*:\s*(ASK|CANCEL)\b/i.test(t) || cleanPlainReply(t, 900)
+    return !!(j2 && (str(j2.reply) || str(j2.extractedData))) || /\bACTION\s*:\s*(ASK|CANCEL)\b/i.test(t) || cleanPlainReply(t, 900) || !!salvageFinalAnswer(t)
   })
 
   if (!res.ok || !res.text) return { ok: false, extracted: null, reply: null, action: 'ASK', error: res.error }
@@ -980,7 +1025,14 @@ ${opts.knowledgeBase.slice(0, 4000)}
         if (!extracted) extracted = m[1].trim() || null
         if (m[2]) action = m[2].toUpperCase() as 'ASK' | 'CANCEL'
         const bodyText = lines.slice(0, i).join('\n').trim()
-        if (bodyText && cleanPlainReply(bodyText, 900)) reply = bodyText
+        if (bodyText) {
+          if (cleanPlainReply(bodyText, 900)) reply = bodyText
+          else {
+            // বিশ্লেষণের শেষে পরিষ্কার উত্তর থাকলে সেটাই (মালিকের নির্দেশ)
+            const salvaged = salvageFinalAnswer(bodyText)
+            if (salvaged) reply = salvaged
+          }
+        }
         break
       }
     }
