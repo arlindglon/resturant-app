@@ -1,4 +1,7 @@
 // Meta Messenger Graph API helpers (CRM)
+import { getSetting } from '@/lib/settings'
+import { SETTING_KEYS } from '@/lib/constants'
+
 const GRAPH = 'https://graph.facebook.com/v21.0'
 
 function pageToken(): string {
@@ -133,21 +136,42 @@ export async function fetchProfilePhoto(psid: string): Promise<string | null> {
 }
 
 /** Send a plain text message to a PSID — returns REAL success (Graph errors count as failure) */
-export async function sendText(psid: string, text: string): Promise<boolean> {
+export async function sendText(psid: string, text: string, opts?: { markdown?: boolean }): Promise<boolean> {
   const token = pageToken()
   if (!token) return false
+
+  const post = async (body: Record<string, unknown>): Promise<boolean> => {
+    try {
+      const res = await fetch(`${GRAPH}/me/messages?access_token=${token}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+        signal: AbortSignal.timeout(10_000),
+      })
+      if (!res.ok) return false
+      const j = (await res.json().catch(() => ({}))) as { error?: { message?: string } }
+      return !j.error
+    } catch {
+      return false
+    }
+  }
+
+  // Messenger markdown (*bold*, _italic_, ~strike~, `code`): admin বন্ধ না করলে
+  // text_format:markdown দিয়ে যায় — Graph কোনো কারণে রিজেক্ট করলে (নতুন ফিল্ড
+  // না-মানা / ২৪ঘ উইন্ডো / যা-ই হোক) প্লেইন টেক্সট দিয়ে আরেকবার — মেসেজ কখনো হারায় না।
+  const wantMd = opts?.markdown !== false && (await markdownEnabled())
+  if (wantMd && (await post({ recipient: { id: psid }, message: { text, text_format: 'markdown' } }))) {
+    return true
+  }
+  return post({ recipient: { id: psid }, message: { text } })
+}
+
+/** Messenger markdown চালু আছে কি না (admin সেটিং; ৩০ সেকেন্ড ক্যাশ) */
+export async function markdownEnabled(): Promise<boolean> {
   try {
-    const res = await fetch(`${GRAPH}/me/messages?access_token=${token}`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ recipient: { id: psid }, message: { text } }),
-      signal: AbortSignal.timeout(10_000),
-    })
-    if (!res.ok) return false
-    const j = (await res.json().catch(() => ({}))) as { error?: { message?: string } }
-    return !j.error
+    return (await getSetting(SETTING_KEYS.MESSENGER_MARKDOWN)) !== 'false'
   } catch {
-    return false
+    return true
   }
 }
 
@@ -187,11 +211,11 @@ export async function sendReceipt(
   return sendText(psid, text)
 }
 
-/** Birthday greeting + voucher */
+/** Birthday greeting + voucher (কুপন কোড বক্সে + ছাড় মোটা) */
 export async function sendBirthdayGreeting(psid: string, name: string, voucherCode: string, percent: number) {
   return sendText(
     psid,
-    `🎂 শুভ জন্মদিন ${name}!\n\nআপনার জন্য বিশেষ উপহার: কুপন "${voucherCode}" — পরবর্তী অর্ডারে ${percent}% ছাড়!\nআজই ভিজিট করুন এবং উপভোগ করুন। 🎉`
+    `🎂 শুভ জন্মদিন *${name}*!\n\nআপনার জন্য বিশেষ উপহার — কুপন \`${voucherCode}\` : *${percent}% ছাড়*!\nআজই ভিজিট করুন এবং উপভোগ করুন। 🎉`
   )
 }
 

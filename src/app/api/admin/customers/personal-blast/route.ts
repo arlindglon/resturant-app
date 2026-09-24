@@ -8,7 +8,7 @@ import { NextRequest } from 'next/server'
 import { db } from '@/lib/db'
 import { ok, fail } from '@/lib/api'
 import { requirePerm } from '@/lib/staff-auth'
-import { sendText, sendRnToToken } from '@/lib/messenger'
+import { sendText, sendRnToToken, markdownEnabled } from '@/lib/messenger'
 import { getGeminiConfig, composePersonalBlast, loadChatHistory, saveChatTurn } from '@/lib/gemini'
 import { buildKnowledgeBase } from '@/lib/knowledge'
 import { aiLanguageFor } from '@/lib/bot-text'
@@ -59,6 +59,7 @@ export async function POST(req: NextRequest) {
     lastBotMessage: lastBot,
     recentHistory: history.slice(-4),
     extraPersona: cfg.persona,
+    formatting: await markdownEnabled(),
     cfg,
   }
   // একটা retry — Gemini মাঝে মাঝে rate-limit/খালি উত্তর দেয়

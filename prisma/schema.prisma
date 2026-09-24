@@ -168,6 +168,7 @@ model Voucher {
   createdAt      DateTime     @default(now())
   uses           VoucherUse[]
 
+  @@index([active, createdAt])
   @@map("vouchers")
 }
 
@@ -184,6 +185,7 @@ model VoucherUse {
 
   @@index([voucherId])
   @@index([deviceId])
+  @@index([sessionId])
   @@map("voucher_uses")
 }
 
@@ -215,8 +217,10 @@ model Order {
   items             OrderItem[]
 
   @@index([status])
+  @@index([status, placedAt]) // KDS + live queue: status IN(...) ORDER BY placedAt
   @@index([tableId])
   @@index([sessionId])
+  @@index([billPaid, placedAt]) // bill page / pending bills lookups
   @@map("orders")
 }
 
@@ -252,7 +256,7 @@ model WaiterCall {
   createdAt   DateTime  @default(now())
   resolvedAt  DateTime?
 
-  @@index([status])
+  @@index([status, createdAt])
   @@map("waiter_calls")
 }
 
@@ -281,6 +285,7 @@ model Customer {
   createdAt       DateTime       @default(now())
   claims          BirthdayClaim[]
 
+  @@index([createdAt])
   @@map("customers")
 }
 
@@ -420,6 +425,8 @@ model Receipt {
   paidAt        DateTime
   createdAt     DateTime @default(now())
 
+  @@index([paidAt])
+  @@index([sessionId])
   @@map("receipts")
 }
 

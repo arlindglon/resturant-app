@@ -148,7 +148,7 @@ async function generateWithKey(
   if (!text) {
     // নতুন Gemini 3.x মডেলগুলো thinking করে — ছোট maxOutputTokens হলে পুরো
     // বাজেট thinking-এই শেষ হয়ে দৃশ্যমান উত্তরই থাকে না (finishReason MAX_TOKENS)
-    const reason = j.candidates?.[0]?.finishReason || j.error?.status || 'UNKNOWN'
+    const reason = j.candidates?.[0]?.finishReason || (j.error as { status?: string } | undefined)?.status || 'UNKNOWN'
     throw new Error(`Gemini খালি উত্তর দিয়েছে (finishReason: ${reason})`)
   }
   return text
@@ -173,6 +173,15 @@ async function generateRotating(
   let lastError = 'কোনো API কি নেই'
   const usable = cfg.keys.filter((k) => !isKeyBad(k))
   const list = usable.length ? usable : cfg.keys // all cooling down → try anyway once
+
+  // thinkingConfig জাতীয় নতুন ফিল্ড পুরনো মডেল/শেপ মানে না — বাদ দিয়ে চেষ্টা করার জন্য
+  const stripThinking = (): Record<string, unknown> => {
+    const gc = body.generationConfig as Record<string, unknown> | undefined
+    if (!gc || typeof gc !== 'object' || !gc.thinkingConfig) return body
+    const { thinkingConfig: _drop, ...rest } = gc
+    return { ...body, generationConfig: rest }
+  }
+
   for (let i = 0; i < list.length; i++) {
     const key = list[(rotationCursor + i) % list.length]
     try {
@@ -182,6 +191,18 @@ async function generateRotating(
       return { ok: true, text, error: null }
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e)
+      // মডেল thinkingConfig মানে না (INVALID_ARGUMENT/unknown field) → ফিল্ডটা
+      // বাদ দিয়ে একই কি-তে আরেকবার — বট কখনো পুরোপুরি বন্ধ হয়ে যায় না
+      if (body.generationConfig && (body.generationConfig as Record<string, unknown>).thinkingConfig) {
+        try {
+          const text = await generateWithKey(key, cfg.model, stripThinking())
+          markKeyGood(key)
+          rotationCursor = (rotationCursor + i + 1) % Math.max(list.length, 1)
+          return { ok: true, text, error: null }
+        } catch {
+          /* still failing → normal error handling below */
+        }
+      }
       lastError = msg
       if (e instanceof Error && /API key not valid|API_KEY_INVALID|PERMISSION_DENIED/i.test(msg)) {
         markKeyBad(key, msg) // dead key — skip it for 10 min
@@ -262,6 +283,8 @@ export async function composePersonalBlast(opts: {
   lastBotMessage?: string | null
   recentHistory?: { role: 'user' | 'model'; text: string }[]
   extraPersona?: string
+  /** Messenger মার্কডাউন ফরম্যাটিং নিয়ম প্রম্পটে যাবে কি না */
+  formatting?: boolean
   cfg: GeminiConfig
 }): Promise<{ ok: boolean; text: string | null; error: string | null }> {
   const system = [
@@ -275,7 +298,9 @@ export async function composePersonalBlast(opts: {
 - আগের শেষ বট-মেসেজের সাথে মিল থাকতে পারবে না — একেক জনের মেসেজ একেক রকম।
 - মেসেজের শেষে চাপ দিয়ে কিছু চাইবে না — হালকা আমন্ত্রণ যথেষ্ট।
 - ভাষা: মালিকের নির্দেশ থাকলে সেই ভাষায়; নাহলে বাংলায়।
-- শুধু মেসেজটাই লিখো — কোনো ভূমিকা/ব্যাখ্যা নয়।`,
+- শুধু মেসেজটাই লিখো — কোনো ভূমিকা/ব্যাখ্যা নয়।
+
+${opts.formatting !== false ? MESSENGER_FORMAT_RULES + '\n- এটা একটা সেলস/এনগেজমেন্ট মেসেজ — এখানে ফরম্যাট ফুটিয়ে লিখো: সবচেয়ে আকর্ষণীয় জিনিস *মোটা*, কুপন কোড থাকলে ব্যাকটিক বক্সে, দাম-তুলনা হলে ~পুরনো দাম~ কাটা। তবে ৩-৪টার বেশি ফরম্যাট নয়।' : ''}`,
     opts.extraPersona ? `রেস্টুরেন্ট মালিকের বাড়তি নির্দেশনা:\n${opts.extraPersona}` : '',
     opts.customerLanguage
       ? `এই কাস্টমারকে অবশ্যই ${LANGUAGE_LABELS[opts.customerLanguage] || opts.customerLanguage} ভাষায় লিখতে হবে।`
@@ -298,8 +323,8 @@ export async function composePersonalBlast(opts: {
     contents: [{ role: 'user', parts: [{ text: 'এই কাস্টমারের জন্য মেসেজটা লিখো।' }] }],
     generationConfig: {
       temperature: 1.0,
-      // Gemini 3.x thinking মডেল: thinking টোকেনও এই বাজেট থেকেই কাটে —
-      // ছোট বাজেটে পুরোটাই thinking-এ শেষ, দৃশ্যমান মেসেজই থাকে না
+      // Gemini 3.x thinking বন্ধ — ব্রডকাস্ট দ্রুত লেখা শেষ হয় (প্রতি কাস্টমারে ২-৫ সে সময় বাঁচে)
+      thinkingConfig: { thinkingBudget: 0 },
       maxOutputTokens: 2048,
       responseMimeType: 'application/json',
       responseSchema: BLAST_SCHEMA,
@@ -330,6 +355,23 @@ function extractJson(text: string): Record<string, unknown> | null {
 }
 
 const str = (v: unknown): string => (typeof v === 'string' ? v.trim() : '')
+
+/* ─────────────── Messenger মার্কডাউন ফরম্যাটিং (professional usage) ─────────────── */
+
+/**
+ * Messenger ডেস্কটপ/মোবাইলে রেন্ডার হওয়া মার্কডাউন: *bold*, _italic_, ~strike~,
+ * `inline code`। AI-কে কখন কোনটা ব্যবহার করতে হবে — প্রফেশনাল সিদ্ধান্ত এখানেই
+ * বেঁধে দেওয়া: কথাবার্তায় সংযত, সেলস/ব্রডকাস্টে উজ্জ্বল, কুপন কোড সবসময় বক্সে।
+ * admin মার্কডাউন বন্ধ করলে (messenger_markdown='false') এই ব্লক প্রম্পটেই যায় না।
+ */
+export const MESSENGER_FORMAT_RULES = `Messenger-এ তোমার লেখা মেসেজে সীমিত মার্কডাউন ফরম্যাট রেন্ডার হয় — একজন প্রফেশনাল মার্কেটারের মতো সংযতভাবে ব্যবহার করবে:
+- *লেখা* → মোটা (bold): খাবারের নাম, দাম, বিশেষ সংখ্যা বা সবচেয়ে গুরুত্বপূর্ণ ১-২টা শব্দ হাইলাইট করতে। এক মেসেজে সর্বোচ্চ ২-৩ জায়গায় — বেশি হলে দেখতে সস্তা লাগে।
+- একক ব্যাকটিক \`কোড\` → ছোট বক্স (monospace): কুপন/ভাউচার কোড সবসময় এভাবে লিখবে (যেমন \`WELCOME10\`) — কাস্টমার কপি করতে পারবে।
+- ~লেখা~ → কাটা দাগ (strikethrough): অফার/সেলস মেসেজে পুরনো দাম কাটতে (যেমন: ~৳৫০০~ নয়, এখন মাত্র *৳৩৯৯*) — মাঝে মাঝেই যথেষ্ট।
+- _লেখা_ → বাঁকা (italic): খুব বিরল — নরম/আবেগি শব্দে চাইলে।
+- সাধারণ কথাবার্তায় (প্রশ্নের উত্তর, খোঁজখবর) ফরম্যাট ছাড়া প্লেইন লেখাই ভালো — প্রতি মেসেজে জোর করে ফরম্যাট নয়।
+- তিন-ব্যাকটিকের বড় ব্লক কখনো ব্যবহার করবে না — মোবাইলে খারাপ দেখায়।
+- ফরম্যাট শুধু reply-র টেক্সটের ভেতরেই থাকবে — নাম/ফোন/ঠিকানা/note-জাতীয় অন্য ফিল্ডে কোনো * _ ~ চিহ্ন ঢুকবে না।`
 
 /* ─────────────────────────── general customer chat ─────────────────────────── */
 
@@ -378,11 +420,14 @@ export async function chatWithCustomer(opts: {
   /** admin-marked language (bn/banglish/en/hi/other) — when set, ALWAYS reply in it */
   customerLanguage?: string | null
   extraPersona?: string
+  /** Messenger মার্কডাউন ফরম্যাটিং নিয়ম প্রম্পটে যাবে কি না (messenger_markdown সেটিং) */
+  formatting?: boolean
   cfg: GeminiConfig
 }): Promise<AiChatResult> {
   const empty = { name: null, phone: null, address: null, specialDay: null, specialDayLabel: null, note: null, language: null }
   const system = [
     BASE_PERSONA,
+    opts.formatting !== false ? MESSENGER_FORMAT_RULES : '',
     opts.extraPersona ? `রেস্টুরেন্ট মালিকের বাড়তি নির্দেশনা:\n${opts.extraPersona}` : '',
     opts.customerLanguage
       ? `মালিকের বিশেষ নির্দেশ: এই কাস্টমারকে সবসময় ${LANGUAGE_LABELS[opts.customerLanguage] || opts.customerLanguage} ভাষায় উত্তর দাও — কাস্টমার অন্য ভাষায় লিখলেও এই ভাষাতেই উত্তর দিতে হবে।`
@@ -407,8 +452,9 @@ export async function chatWithCustomer(opts: {
     contents,
     generationConfig: {
       temperature: 0.8,
-      // Gemini 3.x thinking মডেল: thinking token-ও এই বাজেট থেকেই কাটে —
-      // তাই 800 নয়, ঢিলেঢালা বাজেট রাখতে হয়
+      // thinking বন্ধ → পুরো টোকেন বাজেট উত্তরে, রিপ্লাই ২-৫ সেকেন্ড দ্রুত;
+      // মডেল ফিল্ডটা না মানলে generateRotating নিজেই বাদ দিয়ে আবার চেষ্টা করে
+      thinkingConfig: { thinkingBudget: 0 },
       maxOutputTokens: 2048,
       responseMimeType: 'application/json',
       responseSchema: CHAT_SCHEMA,
@@ -483,6 +529,8 @@ export async function verificationChat(opts: {
   customerMessage: string
   /** admin-marked language (bn/banglish/en/hi/other) — when set, ALWAYS reply in it */
   customerLanguage?: string | null
+  /** Messenger মার্কডাউন ফরম্যাটিং নিয়ম প্রম্পটে যাবে কি না */
+  formatting?: boolean
   cfg: GeminiConfig
 }): Promise<AiVerifyResult> {
   const typeHint =
@@ -504,6 +552,8 @@ export async function verificationChat(opts: {
 - আগে কাস্টমারের কথাটার স্বাভাবিক উত্তর দাও (খোঁজখবর, জোক, আসার কথা, নাম বলা — সব মেনে নাও), তারপর প্রয়োজনে ব্যবসা।
 - ১-৩ বাক্যে উত্তর; একই বাক্য দুবার কখনো নয় — বিশেষ করে এই মেসেজটা আগেই পাঠানো হয়েছে, হুবহু আর লিখবে না: "${(opts.lastAskSent || '').slice(0, 200)}"
 - জোর-জবরদস্তি বা একঘেয়ে দাবি কখনো নয় — বন্ধুর মতো মনে করিয়ে দেওয়া মাত্র।
+
+${opts.formatting !== false ? MESSENGER_FORMAT_RULES + '\n- তবে যাচাই-কথোপকথন সংযত রাখো — ফরম্যাট শুধু অফারের নাম/গুরুত্বপূর্ণ জিনিসে, ১ জায়গায়ই যথেষ্ট।' : ''}
 
 ${typeHint}
 
@@ -528,6 +578,7 @@ JSON ফরম্যাট: {"extractedData":"","reply":"","action":"ASK"}`
     contents,
     generationConfig: {
       temperature: 0.7,
+      thinkingConfig: { thinkingBudget: 0 },
       maxOutputTokens: 1024,
       responseMimeType: 'application/json',
       responseSchema: VERIFY_SCHEMA,

@@ -19,7 +19,7 @@ import { NextRequest } from 'next/server'
 import crypto from 'crypto'
 import { db } from '@/lib/db'
 import { fail, ok } from '@/lib/api'
-import { fetchMessengerProfile, askPhoneQuickReply, sendReceipt, sendText, sendRnOptInRequest } from '@/lib/messenger'
+import { fetchMessengerProfile, askPhoneQuickReply, sendReceipt, sendText, sendRnOptInRequest, markdownEnabled } from '@/lib/messenger'
 import { applyBirthdayDiscount } from '@/lib/birthday'
 import { setSettings, getSetting } from '@/lib/settings'
 import { SETTING_KEYS } from '@/lib/constants'
@@ -352,6 +352,7 @@ async function aiGeneralReply(psid: string, profileName: string, customerMessage
     customerNotes,
     customerLanguage,
     extraPersona: cfg.persona,
+    formatting: await markdownEnabled(), // বন্ধ থাকলে AI মার্কডাউন চিহ্নই লিখবে না
     cfg,
   }
   // একটা retry — মাঝে মাঝে Gemini rate-limit/খালি উত্তর দেয়; retry-তেই বেশিরভাগ ঠিক হয়ে যায়
@@ -636,6 +637,7 @@ async function handleEvent(event: MessagingEvent) {
         history,
         customerMessage: dataText,
         customerLanguage: await aiLanguageFor(markedLang?.language),
+        formatting: await markdownEnabled(),
         cfg,
       })
 

@@ -9,6 +9,7 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { api, type ApiResponse } from '@/lib/client'
+import { useBlastStore } from '@/lib/blast-store'
 import { SETTING_KEYS, SUB_ADMIN_PERMISSIONS, LANGUAGE_LABELS } from '@/lib/constants'
 import { bnDateTime, bnDateOnly, bnDays, bnTaka, parseJsonSafe, toBn } from '@/lib/bn'
 import {
@@ -3542,6 +3543,9 @@ function SendMessageDialog({
  * AI ব্রডকাস্ট — মালিক কাঁচা তথ্য লেখেন (আবহাওয়া/ছুটি/খবর/ইভেন্ট), AI প্রতিটা
  * Messenger কাস্টমারের জন্য আলাদা ইউনিক প্রফেশনাল মেসেজ লিখে একে একে পাঠায়।
  * ব্যবহৃত ভাউচার AI আর প্রস্তাব করে না (নলেজ বেস থেকে বাদ)।
+ *
+ * পাঠানো হয় ব্যাকগ্রাউন্ডে (useBlastStore) — "সবাইকে পাঠান" চাপলেই ডায়ালগ বন্ধ
+ * করা যায়, অন্য ট্যাবে কাজ করা যায়; নিচের ভাসমান পিলে লাইভ প্রগ্রেস চলে।
  */
 function PersonalBlastDialog({
   open,
@@ -3554,51 +3558,33 @@ function PersonalBlastDialog({
   customers: CustomerRow[]
   onAuthRequired: () => void
 }) {
-  const [info, setInfo] = useState('')
-  const [running, setRunning] = useState(false)
-  const [results, setResults] = useState<{ name: string; status: 'ok' | 'fail'; via?: string; error?: string }[]>([])
+  const [info, setInfo] = useState(() => useBlastStore.getState().info) // চলমান ব্রডকাস্ট থাকলে সেটার লেখা দেখাও
+  const running = useBlastStore((s) => s.running)
+  const results = useBlastStore((s) => s.results)
+  const targets = useBlastStore((s) => s.targets)
+  const startBlast = useBlastStore((s) => s.start)
+  const stopBlast = useBlastStore((s) => s.stop)
 
-  const targets = customers.filter((c) => c.messenger)
   const total = targets.length
   const doneCount = results.length
-  const staleCount = targets.filter(
-    (c) => c.lastSeenAt && Date.now() - new Date(c.lastSeenAt).getTime() > 86_400_000
+  const staleCount = customers.filter(
+    (c) => c.messenger && c.lastSeenAt && Date.now() - new Date(c.lastSeenAt).getTime() > 86_400_000
   ).length
 
-  const send = async () => {
+  const send = () => {
     const body = info.trim()
-    if (!body || running || !total) return
-    setRunning(true)
-    setResults([])
-    const rows: { name: string; status: 'ok' | 'fail'; via?: string; error?: string }[] = []
-    for (const c of targets) {
-      const res = await api.post<{ sent: boolean; via: string }>('/api/admin/customers/personal-blast', {
-        customerId: c.id,
-        info: body,
-      })
-      if (isAuthError(res)) {
-        rows.push({ name: customerName(c), status: 'fail', error: 'লগইন শেষ — আবার ঢুকুন' })
-        setResults([...rows])
-        onAuthRequired()
-        break
-      }
-      rows.push({
-        name: customerName(c),
-        status: res.ok ? 'ok' : 'fail',
-        via: res.data?.via,
-        error: res.ok ? undefined : res.error,
-      })
-      setResults([...rows])
-      // Gemini/Messenger rate limit — প্রতি পাঠানোর মাঝে ছোট বিরতি
-      await new Promise((r) => setTimeout(r, 900))
-    }
-    setRunning(false)
-    const okN = rows.filter((r) => r.status === 'ok').length
-    toast.success(`সম্পন্ন — ${toBn(String(okN))}/${toBn(String(rows.length))} জনকে ইউনিক মেসেজ গেছে`)
+    if (!body || running) return
+    const list = customers
+      .filter((c) => c.messenger)
+      .map((c) => ({ id: c.id, name: customerName(c) }))
+    const started = startBlast(list, body, { onAuthRequired })
+    if (!started) return
+    onOpenChange(false) // ব্যাকগ্রাউন্ডে চলছে — মালিক মুক্ত, পিলে প্রগ্রেস দেখা যাবে
+    toast.info('ব্যাকগ্রাউন্ডে পাঠানো শুরু হয়েছে — নিচের 📣 পিলে লাইভ প্রগ্রেস দেখুন, অন্য কাজ করতে পারেন')
   }
 
   return (
-    <Dialog open={open} onOpenChange={(v) => !running && onOpenChange(v)}>
+    <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="max-h-[85vh] overflow-y-auto sm:max-w-lg">
         <DialogHeader>
           <DialogTitle>📣 AI ব্রডকাস্ট — প্রত্যেকে পাবে ইউনিক মেসেজ</DialogTitle>
@@ -3616,7 +3602,7 @@ function PersonalBlastDialog({
         />
 
         <div className="rounded-lg bg-stone-50 p-2.5 text-[11px] leading-relaxed text-stone-600">
-          🎯 প্রাপক: <b>{toBn(String(total))}</b> জন Messenger কাস্টমার — একে একে পাঠানো হবে।
+          🎯 প্রাপক: <b>{toBn(String(total))}</b> জন Messenger কাস্টমার — একে একে, ব্যাকগ্রাউন্ডে পাঠানো হবে।
           {staleCount > 0 && (
             <>
               {' '}⚠️ {toBn(String(staleCount))} জন ২৪ ঘণ্টার নিয়মের বাইরে — তাদের RN আপডেট চালু থাকলে সেটা দিয়েই যাবে, নাহলে skip হবে।
@@ -3624,7 +3610,7 @@ function PersonalBlastDialog({
           )}
         </div>
 
-        {results.length > 0 && (
+        {(running || results.length > 0) && (
           <div className="thin-scroll max-h-56 space-y-1 overflow-y-auto rounded-lg border border-stone-200 p-2">
             {results.map((r, i) => (
               <p key={i} className={cn('truncate text-[11px]', r.status === 'ok' ? 'text-emerald-700' : 'text-red-600')}>
@@ -3633,26 +3619,138 @@ function PersonalBlastDialog({
                 {r.status === 'fail' && r.error ? ` — ${r.error}` : ''}
               </p>
             ))}
+            {running && results.length === 0 && (
+              <p className="flex items-center gap-2 text-[11px] text-stone-500">
+                <Loader2 className="h-3.5 w-3.5 animate-spin" /> AI প্রথম ইউনিক মেসেজ লিখছে…
+              </p>
+            )}
           </div>
         )}
 
         <DialogFooter>
-          <Button variant="outline" onClick={() => onOpenChange(false)} disabled={running}>
-            বন্ধ করুন
-          </Button>
-          <Button
-            onClick={send}
-            disabled={running || !info.trim() || total === 0}
-            className="bg-teal-600 font-black text-white hover:bg-teal-700"
-          >
-            {running ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
-            {running
-              ? `পাঠানো হচ্ছে… ${toBn(String(doneCount))}/${toBn(String(total))}`
-              : `সবাইকে পাঠান (${toBn(String(total))})`}
-          </Button>
+          {running ? (
+            <>
+              <Button variant="outline" onClick={() => onOpenChange(false)}>
+                লুকিয়ে রাখুন (ব্যাকগ্রাউন্ডে চলছে)
+              </Button>
+              <Button
+                onClick={stopBlast}
+                className="bg-red-600 font-black text-white hover:bg-red-700"
+              >
+                ⏹ থামান ({toBn(String(doneCount))}/{toBn(String(total))})
+              </Button>
+            </>
+          ) : (
+            <>
+              <Button variant="outline" onClick={() => onOpenChange(false)}>
+                বন্ধ করুন
+              </Button>
+              <Button
+                onClick={send}
+                disabled={!info.trim() || total === 0}
+                className="bg-teal-600 font-black text-white hover:bg-teal-700"
+              >
+                <Send className="h-4 w-4" />
+                সবাইকে পাঠান ({toBn(String(total))})
+              </Button>
+            </>
+          )}
         </DialogFooter>
       </DialogContent>
     </Dialog>
+  )
+}
+
+/**
+ * ভাসমান প্রগ্রেস পিল — ব্রডকাস্ট ব্যাকগ্রাউন্ডে চলাকালীন সব ট্যাবের নিচে-ডানে
+ * লাইভ অবস্থা দেখায়; ট্যাপ করলে ফলাফল তালিকা খোলে/বন্ধ হয়, ✕ দিয়ে থামানো যায়।
+ */
+function BlastProgressPill() {
+  const running = useBlastStore((s) => s.running)
+  const results = useBlastStore((s) => s.results)
+  const targets = useBlastStore((s) => s.targets)
+  const stopRequested = useBlastStore((s) => s.stopRequested)
+  const stopBlast = useBlastStore((s) => s.stop)
+  const clearBlast = useBlastStore((s) => s.clear)
+  const [expanded, setExpanded] = useState(false)
+
+  // পাঠানো শেষ হলে ফলাফল কিছুক্ষণ দেখায় — পিলে ✕ চাপলেই মুছে যায়
+  const finished = !running && results.length > 0
+  const visible = running || finished
+  const doneCount = results.length
+  const okCount = results.filter((r) => r.status === 'ok').length
+  const total = Math.max(targets.length, doneCount)
+  const pct = total ? Math.round((doneCount / total) * 100) : 0
+
+  if (!visible) return null
+
+  return (
+    <div className="fixed bottom-4 right-4 z-50 w-[calc(100vw-2rem)] max-w-xs sm:bottom-6 sm:right-6" role="status" aria-live="polite">
+      <div className="overflow-hidden rounded-2xl border border-teal-200 bg-white shadow-xl shadow-teal-900/10">
+        <div className="flex items-center gap-1 px-2 py-2">
+          <button
+            onClick={() => setExpanded((v) => !v)}
+            className="flex min-w-0 flex-1 items-center gap-2.5 rounded-xl px-1.5 py-0.5 text-left hover:bg-stone-50"
+            aria-expanded={expanded}
+            aria-label="ব্রডকাস্ট প্রগ্রেস — ট্যাপ করে বিস্তারিত দেখুন"
+          >
+            {running ? (
+              <Loader2 className="h-4 w-4 shrink-0 animate-spin text-teal-600" />
+            ) : (
+              <CheckCircle2 className="h-4 w-4 shrink-0 text-emerald-600" />
+            )}
+            <span className="min-w-0 flex-1">
+              <span className="block truncate text-xs font-black text-stone-800">
+                {running
+                  ? `📣 ইউনিক মেসেজ যাচ্ছে… ${toBn(String(doneCount))}/${toBn(String(total))}`
+                  : `📣 সম্পন্ন — ${toBn(String(okCount))}/${toBn(String(results.length))} জনে গেছে`}
+              </span>
+              {running && (
+                <span className="mt-1 block h-1.5 w-full overflow-hidden rounded-full bg-stone-100">
+                  <span
+                    className="block h-full rounded-full bg-gradient-to-r from-teal-500 to-emerald-500 transition-all duration-500"
+                    style={{ width: `${pct}%` }}
+                  />
+                </span>
+              )}
+            </span>
+          </button>
+          {running && !stopRequested && (
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={stopBlast}
+              className="h-8 shrink-0 border-red-200 px-2 text-xs font-bold text-red-600 hover:bg-red-50"
+              title="মাঝপথে থামান"
+            >
+              <X className="h-3.5 w-3.5" /> থামান
+            </Button>
+          )}
+        </div>
+        {expanded && (
+          <div className="thin-scroll max-h-48 space-y-1 overflow-y-auto border-t border-stone-100 px-3 py-2">
+            {results.map((r, i) => (
+              <p key={i} className={cn('truncate text-[11px]', r.status === 'ok' ? 'text-emerald-700' : 'text-red-600')}>
+                {r.status === 'ok' ? '✅' : '⚠️'} {r.name}
+                {r.status === 'ok' && r.via === 'rn' ? ' (RN আপডেট)' : ''}
+                {r.status === 'fail' && r.error ? ` — ${r.error}` : ''}
+              </p>
+            ))}
+            {running && results.length === 0 && (
+              <p className="text-[11px] text-stone-500">AI প্রথম মেসেজ লিখছে…</p>
+            )}
+          </div>
+        )}
+        {finished && (
+          <button
+            onClick={clearBlast}
+            className="w-full border-t border-stone-100 px-3 py-1.5 text-[11px] font-bold text-stone-400 hover:bg-stone-50 hover:text-stone-600"
+          >
+            পিল বন্ধ করুন
+          </button>
+        )}
+      </div>
+    </div>
   )
 }
 
@@ -5245,6 +5343,20 @@ function SettingsTab({ onAuthRequired }: TabProps) {
             </div>
           )}
 
+          {/* Messenger markdown formatting (bold / italic / strike / code-box) */}
+          <div className="flex items-center justify-between rounded-lg border border-teal-200 bg-white p-3">
+            <div className="min-w-0 pr-3">
+              <p className="text-sm font-black text-stone-800">✨ মেসেঞ্জার মার্কডাউন — মোটা/কাটা লেখা</p>
+              <p className="text-xs leading-snug text-stone-500">
+                বটের মেসেজে <b>*মোটা*</b> নাম-দাম, <b>`বক্সে`</b> কুপন কোড, <b>~কাটা~</b> পুরনো দাম দেখাবে — প্রফেশনাল লুক। কাস্টমারের কাছে লেখাটা ঠিকমতো না দেখালে (যেমন কাঁচা * চিহ্ন দেখা গেলে) এটা বন্ধ করে দিন।
+              </p>
+            </div>
+            <Switch
+              checked={form[SETTING_KEYS.MESSENGER_MARKDOWN] !== 'false'}
+              onCheckedChange={(v) => set(SETTING_KEYS.MESSENGER_MARKDOWN, v ? 'true' : 'false')}
+            />
+          </div>
+
           <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
             <div className="space-y-1">
               <FieldLabel>AI মডেল</FieldLabel>
@@ -6420,6 +6532,9 @@ export default function AdminPage() {
           </Tabs>
         )}
       </main>
+
+      {/* AI ব্রডকাস্ট ব্যাকগ্রাউন্ডে চলাকালীন ভাসমান প্রগ্রেস পিল (সব ট্যাবে) */}
+      <BlastProgressPill />
     </div>
   )
 }
