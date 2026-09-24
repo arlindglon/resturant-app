@@ -130,7 +130,7 @@ async function generateWithKey(
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
-    signal: AbortSignal.timeout(25_000),
+    signal: AbortSignal.timeout(20_000),
   })
   const j = (await res.json().catch(() => ({}))) as GeminiResponse
   if (!res.ok || j.error) {
@@ -162,17 +162,38 @@ function isRetryable(e: unknown): boolean {
   return !(err instanceof Error && /API key not valid|API_KEY_INVALID/i.test(err.message))
 }
 
+const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms))
+
 /**
- * Round-robin Gemini call across ALL configured keys.
- * Returns null reply when every key failed (caller falls back to static text).
+ * Gemini-এর 429 (quota) উত্তরের message-এ প্রায়ই "Please retry in 23.4s" থাকে —
+ * সেই সেকেন্ডটা বের করে (সেকেন্ড হিসেবে), না থাকলে null।
+ */
+function retryDelaySeconds(msg: string): number | null {
+  const m = msg.match(/retry (?:in|after)\s+([\d.]+)s/i)
+  return m ? Math.ceil(parseFloat(m[1])) : null
+}
+
+/**
+ * Round-robin Gemini call across ALL configured keys — WITH RETRY ROUNDS.
+ *
+ * আগে একবার সব কি চেষ্টা করে হাল ছেড়ে দিত — ফ্রি টিয়ারের মাঝে মাঝে 503/নেটওয়ার্ক
+ * ঝামেলা বা মিনিট-কোটা শেষ হলেই কাস্টমার "একটু পরে লিখুন" fallback খেত। এখন:
+ *   • ৩ রাউন্ড পর্যন্ত — রাউন্ডের মাঝে ছোট অপেক্ষা (1.2s / 3.5s), ট্রানজিয়েন্ট
+ *     ভুলগুলো সেরে ওঠে
+ *   • 429-এ Gemini যদি বলে "retry in Ns" (N ≤ 18s) আর বাজেট থাকে → অপেক্ষা
+ *     করে একই কি-তে আবার — কাস্টমার fallback-এর বদলে সঠিক উত্তরই পায়
+ *   • মোট ২৮ সেকেন্ড বাজেট — Meta webhook-এর ধৈর্যের মধ্যেই শেষ
+ * Returns null reply when EVERY key in EVERY round failed (caller falls back).
  */
 async function generateRotating(
   cfg: GeminiConfig,
   body: Record<string, unknown>,
 ): Promise<{ ok: boolean; text: string | null; error: string | null }> {
   let lastError = 'কোনো API কি নেই'
-  const usable = cfg.keys.filter((k) => !isKeyBad(k))
-  const list = usable.length ? usable : cfg.keys // all cooling down → try anyway once
+  const started = Date.now()
+  const BUDGET_MS = 28_000
+  const ROUND_WAITS = [0, 1200, 3500]
+  const timeLeft = () => BUDGET_MS - (Date.now() - started)
 
   // thinkingConfig জাতীয় নতুন ফিল্ড পুরনো মডেল/শেপ মানে না — বাদ দিয়ে চেষ্টা করার জন্য
   const stripThinking = (): Record<string, unknown> => {
@@ -182,34 +203,60 @@ async function generateRotating(
     return { ...body, generationConfig: rest }
   }
 
-  for (let i = 0; i < list.length; i++) {
-    const key = list[(rotationCursor + i) % list.length]
-    try {
-      const text = await generateWithKey(key, cfg.model, body)
-      markKeyGood(key)
-      rotationCursor = (rotationCursor + i + 1) % Math.max(list.length, 1)
-      return { ok: true, text, error: null }
-    } catch (e) {
-      const msg = e instanceof Error ? e.message : String(e)
-      // মডেল thinkingConfig মানে না (INVALID_ARGUMENT/unknown field) → ফিল্ডটা
-      // বাদ দিয়ে একই কি-তে আরেকবার — বট কখনো পুরোপুরি বন্ধ হয়ে যায় না
-      if (body.generationConfig && (body.generationConfig as Record<string, unknown>).thinkingConfig) {
-        try {
-          const text = await generateWithKey(key, cfg.model, stripThinking())
-          markKeyGood(key)
-          rotationCursor = (rotationCursor + i + 1) % Math.max(list.length, 1)
-          return { ok: true, text, error: null }
-        } catch {
-          /* still failing → normal error handling below */
+  for (let round = 0; round < ROUND_WAITS.length; round++) {
+    if (ROUND_WAITS[round]) {
+      if (timeLeft() < 2000) break
+      await sleep(ROUND_WAITS[round])
+      if (timeLeft() < 1500) break
+    }
+    const usable = cfg.keys.filter((k) => !isKeyBad(k))
+    const list = usable.length ? usable : cfg.keys // all cooling down → try anyway once
+
+    for (let i = 0; i < list.length; i++) {
+      if (timeLeft() < 1500) return { ok: false, text: null, error: lastError }
+      const key = list[(rotationCursor + i) % list.length]
+      try {
+        const text = await generateWithKey(key, cfg.model, body)
+        markKeyGood(key)
+        rotationCursor = (rotationCursor + i + 1) % Math.max(list.length, 1)
+        return { ok: true, text, error: null }
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : String(e)
+        // মডেল thinkingConfig মানে না (INVALID_ARGUMENT/unknown field) → ফিল্ডটা
+        // বাদ দিয়ে একই কি-তে আরেকবার — বট কখনো পুরোপুরি বন্ধ হয়ে যায় না
+        if (body.generationConfig && (body.generationConfig as Record<string, unknown>).thinkingConfig) {
+          try {
+            const text = await generateWithKey(key, cfg.model, stripThinking())
+            markKeyGood(key)
+            rotationCursor = (rotationCursor + i + 1) % Math.max(list.length, 1)
+            return { ok: true, text, error: null }
+          } catch {
+            /* still failing → normal error handling below */
+          }
         }
+        lastError = msg
+        if (e instanceof Error && /API key not valid|API_KEY_INVALID|PERMISSION_DENIED/i.test(msg)) {
+          markKeyBad(key, msg) // dead key — skip it for 10 min
+          continue
+        }
+        // 429 কিন্তু কোটা কয়েক সেকেন্ডেই রিসেট হবে? অপেক্ষা করে এই কি-তেই আরেকবার
+        const waitS = e instanceof Error ? retryDelaySeconds(msg) : null
+        if (waitS && waitS > 0 && waitS <= 18 && timeLeft() > (waitS + 4) * 1000) {
+          await sleep(waitS * 1000 + 250)
+          try {
+            const text = await generateWithKey(key, cfg.model, body)
+            markKeyGood(key)
+            rotationCursor = (rotationCursor + i + 1) % Math.max(list.length, 1)
+            return { ok: true, text, error: null }
+          } catch (e2) {
+            lastError = e2 instanceof Error ? e2.message : String(e2)
+            if (isRetryable(e2)) continue
+            return { ok: false, text: null, error: lastError }
+          }
+        }
+        if (isRetryable(e)) continue // busy/quota → next key (পরে পরের রাউন্ডও আছে)
+        return { ok: false, text: null, error: msg } // non-retryable (bad request etc.)
       }
-      lastError = msg
-      if (e instanceof Error && /API key not valid|API_KEY_INVALID|PERMISSION_DENIED/i.test(msg)) {
-        markKeyBad(key, msg) // dead key — skip it for 10 min
-        continue
-      }
-      if (isRetryable(e)) continue // busy/quota → next key
-      return { ok: false, text: null, error: msg } // non-retryable (bad request etc.)
     }
   }
   return { ok: false, text: null, error: lastError }

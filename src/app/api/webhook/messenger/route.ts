@@ -200,6 +200,21 @@ async function hasPriorBotTurn(psid: string): Promise<boolean> {
   }
 }
 
+/** last N bot messages (newest first) — fallback-duplicate guard reads it */
+async function recentBotTurns(psid: string, n = 3): Promise<string[]> {
+  try {
+    const rows = await db.chatMessage.findMany({
+      where: { psid, role: 'bot' },
+      orderBy: { createdAt: 'desc' },
+      take: n,
+      select: { text: true },
+    })
+    return rows.map((r) => r.text)
+  } catch {
+    return []
+  }
+}
+
 /** default ask-text per field type (when the admin left askText empty) */
 function defaultAsk(fieldType: string, lang: BotLang): string {
   if (fieldType === 'PHONE') return t(lang, 'askPhone')
@@ -567,7 +582,9 @@ async function handleEvent(event: MessagingEvent) {
       if (!aiHandled && dataTextIn) {
         // একই অফার-বিজ্ঞাপন বারবার যেতে পারে না (কাস্টমার বিরক্ত):
         // • প্রথম যোগাযোগে একবারই স্বাগতম + অফার তথ্য (lifetime একবার)
-        // • এরপর AI fail/disabled হলে ছোট্ট "একটু পরে আবার লিখুন" মেসেজ
+        // • এরপর AI fail/disabled হলে ছোট্ট "একটু পরে আবার লিখুন" মেসেজ —
+        //   তবে সেটাই সম্প্রতি গেলে আর পাঠানো হয় না: একের পর এক একই
+        //   "পরে লিখুন" আরও বিরক্তিকর — নীরবতা ভালো (রিট্রাই-রাউন্ডও আছে)
         if (!(await hasPriorBotTurn(psid))) {
           await sendText(
             psid,
@@ -575,7 +592,10 @@ async function handleEvent(event: MessagingEvent) {
           )
           await saveChatTurn(psid, 'bot', t(lang, 'generalFallback'))
         } else {
-          await sendText(psid, t(lang, 'aiFailRetry'))
+          const retryText = t(lang, 'aiFailRetry')
+          if (!(await recentBotTurns(psid, 3)).includes(retryText)) {
+            await sendText(psid, retryText)
+          }
         }
       }
       // সরাসরি পেজে মেসেজ দেওয়া কাস্টমারও RN-এর সুযোগ পাক (একবারই, কুলডাউন গার্ড সহ)

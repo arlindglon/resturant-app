@@ -52,6 +52,12 @@ export default function RootLayout({
 }>) {
   return (
     <html lang="bn" suppressHydrationWarning>
+      <head>
+        {/* লোগো/খাবারের ছবি ImgBB (i.ibb.co) থেকে আসে — DNS+TLS আগেই গরম করে
+            রাখে, প্রথম ছবিটা দেরিতে আসার অনুভূতি কমে (দুর্বল নেটওয়ার্কে বড় লাভ) */}
+        <link rel="preconnect" href="https://i.ibb.co" crossOrigin="anonymous" />
+        <link rel="dns-prefetch" href="https://i.ibb.co" />
+      </head>
       <body
         className={`${geistSans.variable} ${geistMono.variable} antialiased bg-background text-foreground`}
       >

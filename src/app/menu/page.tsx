@@ -106,6 +106,25 @@ interface MenuData {
   happyHourBanner: string | null
 }
 
+// দুর্বল নেটওয়ার্কেও মেনু সাথে সাথে দেখানোর জন্য শেষ সফল মেনু localStorage-এ থাকে
+// (stale-while-revalidate)। ৩০ মিনিটের বেশি পুরনো হলে সেটা আর বিশ্বাস করা হয় না —
+// হ্যাপি আওয়ার / আইটেম availability / দাম বদলে থাকতে পারে।
+const MENU_LS_KEY = 'qr_menu_v1'
+const MENU_LS_MAX_AGE_MS = 30 * 60 * 1000
+
+function loadCachedMenu(): MenuData | null {
+  try {
+    const raw = localStorage.getItem(MENU_LS_KEY)
+    if (!raw) return null
+    const parsed = JSON.parse(raw) as { ts: number; data: MenuData }
+    if (!parsed?.data?.categories?.length) return null
+    if (Date.now() - parsed.ts > MENU_LS_MAX_AGE_MS) return null
+    return parsed.data
+  } catch {
+    return null
+  }
+}
+
 interface SessionInfo {
   valid: boolean
   tableNumber: number | null
@@ -691,15 +710,28 @@ export default function MenuPage() {
   }, [])
 
   const fetchMenu = useCallback(async () => {
-    setMenuLoading(true)
+    // localStorage-এ সেভ করা শেষ মেনু থাকলে সাথে সাথেই দেখাই (stale-while-revalidate):
+    // দুর্বল ইন্টারনেটেও মেনু সাথে সাথে আসে, নেটওয়ার্ক আসলে ব্যাকগ্রাউন্ডে টাটকা হয়ে যায়।
+    // ৩০ মিনিটের পুরনো ক্যাশ আর দেখানো হয় না (হ্যাপি আওয়ার/এভেইলেবিলিটি বদলাতে পারে)।
+    const cachedMenu = loadCachedMenu()
+    if (cachedMenu) setMenu(cachedMenu)
+    if (!cachedMenu) setMenuLoading(true)
     setMenuError(null)
     const res = await api.get<MenuData>('/api/menu')
     if (res.ok && res.data) {
       setMenu(res.data)
-    } else {
+      try {
+        localStorage.setItem(MENU_LS_KEY, JSON.stringify({ ts: Date.now(), data: res.data }))
+      } catch {
+        /* storage unavailable */
+      }
+    } else if (!cachedMenu) {
       setMenuError(res.error || 'মেনু লোড করা যায়নি')
+    } else {
+      // নেটওয়ার্ক ফেল করেছে, কিন্তু সেভ করা মেনু দেখাচ্ছি — নরম নোটিশ যথেষ্ট
+      toast(res.error || 'নেটওয়ার্ক সমস্যা — সেভ করা মেনু দেখানো হচ্ছে')
     }
-    setMenuLoading(false)
+    if (!cachedMenu) setMenuLoading(false)
   }, [])
 
   const fetchOrders = useCallback(async () => {

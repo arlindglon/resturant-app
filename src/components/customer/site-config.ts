@@ -23,14 +23,62 @@ export interface SiteConfig {
 let cached: SiteConfig | null = null
 let inflight: Promise<SiteConfig | null> | null = null
 
+const CFG_LS_KEY = 'qr_site_cfg_v1'
+
+/** last successfully loaded config from localStorage (instant paint on revisit) */
+function loadLocalConfig(): SiteConfig | null {
+  if (cached) return cached
+  try {
+    const raw = localStorage.getItem(CFG_LS_KEY)
+    if (raw) {
+      const parsed = JSON.parse(raw) as SiteConfig
+      if (parsed && parsed.restaurantName) cached = parsed
+    }
+  } catch {
+    /* storage unavailable / corrupted */
+  }
+  return cached
+}
+
+function saveLocalConfig(cfg: SiteConfig) {
+  try {
+    localStorage.setItem(CFG_LS_KEY, JSON.stringify(cfg))
+  } catch {
+    /* storage unavailable */
+  }
+}
+
 export function fetchSiteConfig(): Promise<SiteConfig | null> {
-  if (cached) return Promise.resolve(cached)
+  const local = loadLocalConfig()
+  if (local) {
+    // localStorage থেকে সাথে সাথে পেইন্ট — নেটওয়ার্ক দুর্বল হলেও নাম/লোগো সাথে সাথে আসে;
+    // সাথে ব্যাকগ্রাউন্ডে রিফ্রেশ চলে (admin-এর বদলানো সেটিং পরের ভিজিটেই আপডেট হয়)
+    if (!inflight) {
+      inflight = api
+        .get<SiteConfig>('/api/site-config')
+        .then((res) => {
+          if (res.ok && res.data) {
+            cached = res.data
+            saveLocalConfig(res.data)
+            return cached
+          }
+          inflight = null
+          return local
+        })
+        .catch(() => {
+          inflight = null
+          return local
+        })
+    }
+    return Promise.resolve(local)
+  }
   if (!inflight) {
     inflight = api
       .get<SiteConfig>('/api/site-config')
       .then((res) => {
         if (res.ok && res.data) {
           cached = res.data
+          saveLocalConfig(res.data)
           return cached
         }
         inflight = null

@@ -6,17 +6,55 @@ export interface ApiResponse<T> {
   code?: string
 }
 
-async function request<T>(url: string, options?: RequestInit): Promise<ApiResponse<T>> {
+/** দুর্বল/থ্রটল করা ইন্টারনেটে রিকোয়েস্ট অনন্তকাল ঝুলে থাকা ঠেকায় (12s) */
+const TIMEOUT_MS = 12_000
+
+function timeoutSignal(ms: number): AbortSignal | undefined {
+  try {
+    return typeof AbortSignal !== 'undefined' && 'timeout' in AbortSignal ? AbortSignal.timeout(ms) : undefined
+  } catch {
+    return undefined
+  }
+}
+
+const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms))
+
+interface Attempt<T> {
+  res: ApiResponse<T>
+  /** network failure / timeout / bad-gateway → worth an automatic retry */
+  transient: boolean
+}
+
+async function attempt<T>(url: string, options?: RequestInit): Promise<Attempt<T>> {
   try {
     const res = await fetch(url, {
       ...options,
+      signal: timeoutSignal(TIMEOUT_MS),
       headers: { 'Content-Type': 'application/json', ...(options?.headers || {}) },
     })
     const json = await res.json().catch(() => ({ ok: false, error: 'সার্ভার রেসপন্স পার্স করা যায়নি' }))
-    return json as ApiResponse<T>
+    return { res: json as ApiResponse<T>, transient: !res.ok && res.status >= 502 }
   } catch {
-    return { ok: false, error: 'নেটওয়ার্ক সমস্যা — আবার চেষ্টা করুন' }
+    return { res: { ok: false, error: 'নেটওয়ার্ক সমস্যা — আবার চেষ্টা করুন' }, transient: true }
   }
+}
+
+async function request<T>(url: string, options?: RequestInit): Promise<ApiResponse<T>> {
+  const method = (options?.method || 'GET').toUpperCase()
+  const first = await attempt<T>(url, options)
+  // GET হলে স্বয়ংক্রিয় রিট্রাই: দুর্বল নেটওয়ার্কে প্যাকেট-ঝরা বা টাইমআউট হলে
+  // এক-দুইবারের রিট্রাইতেই লোড হয়ে যায় — "সাইট খুলছে না" অনুভূতি কমে।
+  // লেখা-জাতীয় (POST/PUT/PATCH/DELETE) রিকোয়েস্ট কখনো অটো-রিট্রাই হয় না
+  // (ডাবল অর্ডার/ডাবল পেমেন্টের ঝুঁকি) — শুধু টাইমআউট আছে।
+  if (method === 'GET' && first.transient) {
+    const waits = [700, 1800]
+    for (const w of waits) {
+      await sleep(w)
+      const again = await attempt<T>(url, options)
+      if (!again.transient || again.res.ok) return again.res
+    }
+  }
+  return first.res
 }
 
 export const api = {
