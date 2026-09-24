@@ -4064,7 +4064,7 @@ function SettingsTab({ onAuthRequired }: TabProps) {
       [SETTING_KEYS.MESSENGER_AUTO_REPLY_ENABLED]: form[SETTING_KEYS.MESSENGER_AUTO_REPLY_ENABLED] ?? 'true',
       [SETTING_KEYS.GEMINI_ENABLED]: form[SETTING_KEYS.GEMINI_ENABLED] ?? 'false',
       [SETTING_KEYS.GEMINI_API_KEYS]: form[SETTING_KEYS.GEMINI_API_KEYS] ?? '',
-      [SETTING_KEYS.GEMINI_MODEL]: form[SETTING_KEYS.GEMINI_MODEL] ?? 'gemini-2.0-flash',
+      [SETTING_KEYS.GEMINI_MODEL]: form[SETTING_KEYS.GEMINI_MODEL] ?? 'gemini-3.6-flash',
       [SETTING_KEYS.GEMINI_PERSONA]: form[SETTING_KEYS.GEMINI_PERSONA] ?? '',
       [SETTING_KEYS.AI_DELIVERY_RULES]: form[SETTING_KEYS.AI_DELIVERY_RULES] ?? '',
       [SETTING_KEYS.AI_EXTRA_INFO]: form[SETTING_KEYS.AI_EXTRA_INFO] ?? '',
@@ -4775,17 +4775,17 @@ function SettingsTab({ onAuthRequired }: TabProps) {
             <div className="space-y-1">
               <FieldLabel>AI মডেল</FieldLabel>
               <Select
-                value={form[SETTING_KEYS.GEMINI_MODEL] ?? 'gemini-2.0-flash'}
+                value={form[SETTING_KEYS.GEMINI_MODEL] ?? 'gemini-3.6-flash'}
                 onValueChange={(v) => set(SETTING_KEYS.GEMINI_MODEL, v)}
               >
                 <SelectTrigger className="w-full">
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="gemini-2.0-flash">Gemini 2.0 Flash (সুপারিশকৃত)</SelectItem>
-                  <SelectItem value="gemini-2.5-flash">Gemini 2.5 Flash (নতুন)</SelectItem>
-                  <SelectItem value="gemini-2.0-flash-lite">Gemini 2.0 Flash-Lite (হালকা)</SelectItem>
-                  <SelectItem value="gemini-1.5-flash">Gemini 1.5 Flash (পুরনো)</SelectItem>
+                  <SelectItem value="gemini-3.6-flash">Gemini 3.6 Flash (সুপারিশকৃত)</SelectItem>
+                  <SelectItem value="gemini-3.5-flash">Gemini 3.5 Flash</SelectItem>
+                  <SelectItem value="gemini-3.5-flash-lite">Gemini 3.5 Flash-Lite (হালকা)</SelectItem>
+                  <SelectItem value="gemini-2.5-flash">Gemini 2.5 Flash (পুরনো)</SelectItem>
                 </SelectContent>
               </Select>
             </div>

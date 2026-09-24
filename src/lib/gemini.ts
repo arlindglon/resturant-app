@@ -22,11 +22,13 @@ import { SETTING_KEYS } from '@/lib/constants'
 
 const API_BASE = 'https://generativelanguage.googleapis.com/v1beta/models'
 
+// শুধু এখন চালু থাকা মডেল (Google পুরনোগুলো — 1.5/2.0 — বন্ধ করে দিয়েছে):
+// কি বৈধ কিন্তু মডেল মরা হলে API দেয় 404 NOT_FOUND — তখন পালানোর মডেল বদলাতে হয়
 export const GEMINI_MODELS = [
-  { id: 'gemini-2.0-flash', label: 'Gemini 2.0 Flash (সুপারিশকৃত — দ্রুত ও স্মার্ট)' },
-  { id: 'gemini-2.5-flash', label: 'Gemini 2.5 Flash (নতুন প্রজন্ম)' },
-  { id: 'gemini-2.0-flash-lite', label: 'Gemini 2.0 Flash-Lite (সবচেয়ে হালকা)' },
-  { id: 'gemini-1.5-flash', label: 'Gemini 1.5 Flash (পুরনো কিন্তু স্থিতিশীল)' },
+  { id: 'gemini-3.6-flash', label: 'Gemini 3.6 Flash (সুপারিশকৃত — দ্রুত ও স্মার্ট)' },
+  { id: 'gemini-3.5-flash', label: 'Gemini 3.5 Flash' },
+  { id: 'gemini-3.5-flash-lite', label: 'Gemini 3.5 Flash-Lite (হালকা)' },
+  { id: 'gemini-2.5-flash', label: 'Gemini 2.5 Flash (পুরনো কিন্তু স্থিতিশীল)' },
 ]
 
 export interface GeminiConfig {
@@ -74,7 +76,7 @@ export async function getGeminiConfig(): Promise<GeminiConfig> {
   return {
     enabled: enabledRaw === 'true',
     keys,
-    model: model || 'gemini-2.0-flash',
+    model: model || 'gemini-3.6-flash',
     persona: (persona || '').trim(),
   }
 }
@@ -414,7 +416,7 @@ export async function testGeminiKey(key: string): Promise<KeyTestResult> {
   try {
     const text = await generateWithKey(
       key,
-      'gemini-2.0-flash', // fixed light model for the ping — works for all keys
+      'gemini-3.6-flash', // fixed current model for the ping — works for all keys
       {
         contents: [{ role: 'user', parts: [{ text: 'Reply with exactly: OK' }] }],
         generationConfig: { maxOutputTokens: 10, temperature: 0 },
