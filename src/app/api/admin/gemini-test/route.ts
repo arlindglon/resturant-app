@@ -73,6 +73,7 @@ export async function POST(req: Request) {
   // gemma) উত্তর দিতে পারে; চেইনের আসল অবস্থা এখানেই দেখা যায়
   {
     const kb = await buildKnowledgeBase()
+    const t0 = Date.now()
     const ai = await chatWithCustomer({
       knowledgeBase: kb.text,
       history: [],
@@ -81,10 +82,11 @@ export async function POST(req: Request) {
       extraPersona: cfg.persona,
       cfg,
     })
-    sample = { ok: ai.ok, reply: ai.reply, error: ai.error }
+    sample = { ok: ai.ok, reply: ai.reply, error: ai.error, ms: Date.now() - t0 }
 
     // verification-flow sample: an UNMARRIED customer on the anniversary offer —
     // the bot must cancel gracefully and pivot to something that fits them
+    const tv = Date.now()
     const vi = await verificationChat({
       fieldType: 'DATE',
       offerName: 'বিবাহবার্ষিকী স্পেশাল',
@@ -99,7 +101,7 @@ export async function POST(req: Request) {
       customerMessage: 'ami biye korini bhai, amr nam rakib',
       cfg,
     })
-    verifySample = { ok: vi.ok, reply: vi.reply, action: vi.action, error: vi.error }
+    verifySample = { ok: vi.ok, reply: vi.reply, action: vi.action, error: vi.error, ms: Date.now() - tv }
   }
 
   return ok({

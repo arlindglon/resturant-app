@@ -822,7 +822,7 @@ ${typeHint}
 KNOWLEDGE BASE:
 ${opts.knowledgeBase.slice(0, 4000)}
 
-JSON ফরম্যাট: {"extractedData":"","reply":"","action":"ASK"}`
+শেষ নির্দেশ (সবচেয়ে গুরুত্বপূর্ণ): তোমার পুরো আউটপুট হবে কেবল একটি JSON — {"extractedData":"","reply":"","action":"ASK"}। এর আগে/পরে একটি শব্দও নয় — কোনো বিশ্লেষণ, বুলেট, নোট, ব্যাখ্যা বা চিন্তা-প্রক্রিয়া লিখবে না। (উপরের সিদ্ধান্ত-নিয়মগুলো শুধু বুঝে নেওয়ার জন্য — আউটপুটে কখনো লিখবে না।)`
 
   const contents = [
     ...opts.history.slice(-6).map((h) => ({ role: h.role, parts: [{ text: h.text }] })),
