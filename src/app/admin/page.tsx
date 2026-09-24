@@ -76,6 +76,7 @@ import {
   QrCode,
   Receipt,
   RefreshCw,
+  Search,
   Send,
   ShieldCheck,
   ShoppingBag,
@@ -2898,6 +2899,7 @@ function OccasionsTab({ onAuthRequired }: TabProps) {
 interface CustomerRow {
   id: string
   psid: string
+  code: string | null
   messenger: boolean
   photo: string | null
   firstName: string
@@ -3032,12 +3034,17 @@ function CustomerNotesDialog({
   )
 }
 
-/** real first+last name, or a friendly placeholder — never the raw word "Customer" */
-function customerName(c: { firstName: string; lastName: string | null }): string {
+/** placeholder names the webhook stores when the Facebook lookup fails */
+const PLACEHOLDER_NAMES = ['Customer', 'নাম যাচাই বাকি']
+
+/** real first+last name, falling back to the AI-learned chat name — never a raw placeholder */
+function customerName(c: { firstName: string; lastName: string | null; statedName?: string | null }): string {
   const f = (c.firstName || '').trim()
   const l = (c.lastName || '').trim()
-  const full = [f === 'Customer' ? '' : f, l === 'Customer' ? '' : l].filter(Boolean).join(' ')
-  return full || 'নাম যাচাই বাকি'
+  const full = [PLACEHOLDER_NAMES.includes(f) ? '' : f, PLACEHOLDER_NAMES.includes(l) ? '' : l]
+    .filter(Boolean)
+    .join(' ')
+  return full || (c.statedName || '').trim() || 'নাম যাচাই বাকি'
 }
 
 function CustomersTab({ onAuthRequired }: TabProps) {
@@ -3046,6 +3053,7 @@ function CustomersTab({ onAuthRequired }: TabProps) {
   const [editing, setEditing] = useState<CustomerRow | null>(null)
   const [msgTarget, setMsgTarget] = useState<CustomerRow | null>(null)
   const [notesTarget, setNotesTarget] = useState<CustomerRow | null>(null)
+  const [query, setQuery] = useState('')
 
   const load = useCallback(async () => {
     const res = await api.get<{ customers: CustomerRow[]; upcoming: CustomerRow[] }>('/api/admin/customers')
@@ -3067,6 +3075,26 @@ function CustomersTab({ onAuthRequired }: TabProps) {
   if (!data) return <Loading />
 
   const customers = data.customers
+
+  // quick lookup: code (C-0007), phone, name or AI-learned name — case/digit-insensitive
+  const q = query.trim().toLowerCase()
+  const filtered = q
+    ? customers.filter((c) =>
+        [c.code, c.phone, c.statedName, customerName(c), c.firstName, c.lastName]
+          .filter(Boolean)
+          .some((v) => String(v).toLowerCase().includes(q))
+      )
+    : customers
+
+  /** copy a customer code to the clipboard so it can be pasted anywhere */
+  const copyCode = async (code: string) => {
+    try {
+      await navigator.clipboard.writeText(code)
+      toast.success(`কোড ${code} কপি হয়েছে`)
+    } catch {
+      toast.error('কপি করা যায়নি')
+    }
+  }
 
   return (
     <div className="space-y-4">
@@ -3111,6 +3139,7 @@ function CustomersTab({ onAuthRequired }: TabProps) {
                     <p className="truncate text-[11px] font-semibold text-stone-500">
                       {c.eventLabel || 'জন্মদিন'} • {bnDateOnly(c.birthday)}
                       {c.phone ? ` • 📱 ${c.phone}` : ''}
+                      {c.code ? ` • ${c.code}` : ''}
                     </p>
                   </div>
                   <Badge
@@ -3139,22 +3168,35 @@ function CustomersTab({ onAuthRequired }: TabProps) {
       </Card>
 
       {/* all customers */}
-      <div className="flex items-center justify-between">
+      <div className="flex flex-wrap items-center justify-between gap-2">
         <h3 className="text-sm font-black uppercase tracking-wide text-stone-500">
-          সব কাস্টমার ({toBn(String(customers.length))})
+          {q ? `খোঁজার ফলাফল (${toBn(String(filtered.length))})` : `সব কাস্টমার (${toBn(String(customers.length))})`}
         </h3>
-        <Button size="sm" variant="outline" onClick={load} className="border-stone-300 font-bold">
-          <RefreshCw className="h-4 w-4" /> রিফ্রেশ
-        </Button>
+        <div className="flex items-center gap-2">
+          <div className="relative">
+            <Search className="pointer-events-none absolute left-2.5 top-1/2 h-4 w-4 -translate-y-1/2 text-stone-400" />
+            <Input
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              placeholder="কোড / নাম / ফোন দিয়ে খুঁজুন…"
+              className="h-9 w-52 border-stone-300 pl-8 text-sm sm:w-64"
+            />
+          </div>
+          <Button size="sm" variant="outline" onClick={load} className="border-stone-300 font-bold">
+            <RefreshCw className="h-4 w-4" /> রিফ্রেশ
+          </Button>
+        </div>
       </div>
 
-      {customers.length === 0 ? (
+      {filtered.length === 0 ? (
         <p className="py-10 text-center text-sm text-stone-400">
-          এখনো কোনো কাস্টমার নেই — কেউ অফার দাবি করলে বা মেসেঞ্জারে চ্যাট করলে এখানে তালিকা ভরবে
+          {q
+            ? `“${query}” দিয়ে কোনো কাস্টমার মেলেনি — নাম, ফোন বা কোড (যেমন C-0001) দিয়ে চেষ্টা করুন`
+            : 'এখনো কোনো কাস্টমার নেই — কেউ অফার দাবি করলে বা মেসেঞ্জারে চ্যাট করলে এখানে তালিকা ভরবে'}
         </p>
       ) : (
         <div className="thin-scroll max-h-[60vh] space-y-2 overflow-y-auto rounded-xl border border-stone-200 bg-white p-3">
-          {customers.map((c) => (
+          {filtered.map((c) => (
             <div key={c.id} className="rounded-lg border border-stone-100 bg-stone-50/60 p-3">
               <div className="flex flex-wrap items-center gap-2">
                 {c.photo ? (
@@ -3166,11 +3208,22 @@ function CustomersTab({ onAuthRequired }: TabProps) {
                   />
                 ) : (
                   <span className="flex size-9 shrink-0 items-center justify-center rounded-full bg-amber-100 font-black text-amber-700">
-                    {(c.firstName || '?').slice(0, 1).toUpperCase()}
+                    {PLACEHOLDER_NAMES.includes(customerName(c)) ? '?' : customerName(c).slice(0, 1)}
                   </span>
                 )}
                 <div className="min-w-0 flex-1">
-                  <p className="truncate text-sm font-black text-stone-900">{customerName(c)}</p>
+                  <p className="flex items-center gap-2 truncate text-sm font-black text-stone-900">
+                    {customerName(c)}
+                    {c.code && (
+                      <button
+                        onClick={() => copyCode(c.code!)}
+                        title="কোড কপি করুন"
+                        className="shrink-0 rounded border border-amber-200 bg-amber-50 px-1.5 py-0.5 font-mono text-[10px] font-black tracking-wide text-amber-700 transition-colors hover:bg-amber-100"
+                      >
+                        {c.code}
+                      </button>
+                    )}
+                  </p>
                   <p className="truncate text-[11px] text-stone-500">
                     {c.eventLabel ? `${c.eventLabel}: ${bnDateOnly(c.birthday)}` : bnDateOnly(c.birthday)}
                     {c.phone ? ` • 📱 ${c.phone}` : ''}
@@ -3250,7 +3303,7 @@ function CustomersTab({ onAuthRequired }: TabProps) {
   )
 }
 
-/** edit event label / phone / event date of a CRM customer */
+/** edit name / event label / phone / event date of a CRM customer */
 function EditCustomerDialog({
   customer,
   onOpenChange,
@@ -3260,6 +3313,11 @@ function EditCustomerDialog({
   onOpenChange: () => void
   onSaved: () => void
 }) {
+  const [name, setName] = useState(() => {
+    if (!customer) return ''
+    const current = customerName(customer)
+    return PLACEHOLDER_NAMES.includes(current) ? '' : current
+  })
   const [eventLabel, setEventLabel] = useState(customer?.eventLabel ?? '')
   const [phone, setPhone] = useState(customer?.phone ?? '')
   const [birthday, setBirthday] = useState(customer?.birthday ? customer.birthday.slice(0, 10) : '')
@@ -3269,6 +3327,7 @@ function EditCustomerDialog({
     if (!customer) return
     setSaving(true)
     const res = await api.patch(`/api/admin/customers/${customer.id}`, {
+      ...(name.trim() ? { firstName: name } : {}),
       eventLabel,
       phone,
       birthday: birthday || null,
@@ -3287,10 +3346,28 @@ function EditCustomerDialog({
         <DialogHeader>
           <DialogTitle>কাস্টমারের তথ্য এডিট</DialogTitle>
           <DialogDescription>
-            {customer ? customerName(customer) : ''}
+            {customer ? (
+              <span className="flex items-center gap-2">
+                {customerName(customer)}
+                {customer.code && (
+                  <span className="rounded border border-amber-200 bg-amber-50 px-1.5 py-0.5 font-mono text-[10px] font-black text-amber-700">
+                    {customer.code}
+                  </span>
+                )}
+              </span>
+            ) : (
+              ''
+            )}
           </DialogDescription>
         </DialogHeader>
         <div className="space-y-3">
+          <div className="space-y-1">
+            <FieldLabel>কাস্টমারের নাম</FieldLabel>
+            <Input value={name} onChange={(e) => setName(e.target.value)} placeholder="যেমন: রাকিব ইসলাম" />
+            <p className="text-[10px] text-stone-400">
+              Facebook/AI নাম জানতে না পারলে এখানে “নাম যাচাই বাকি” দেখায় — নিজে লিখে দিন, CRM ও মেসেজে এই নামই ব্যবহৃত হবে।
+            </p>
+          </div>
           <div className="space-y-1">
             <FieldLabel>ইভেন্টের নাম</FieldLabel>
             <Input value={eventLabel} onChange={(e) => setEventLabel(e.target.value)} placeholder="জন্মদিন / বিয়ের বার্ষিকী / অন্য কিছু" />

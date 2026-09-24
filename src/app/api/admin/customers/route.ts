@@ -64,6 +64,7 @@ export async function GET() {
     return {
       id: c.id,
       psid: c.psid,
+      code: c.code ?? null,
       messenger: !c.psid.startsWith('direct:'),
       photo: photoMap.get(c.psid) || null,
       firstName: c.firstName,

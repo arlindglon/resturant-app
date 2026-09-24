@@ -24,6 +24,7 @@ import { applyBirthdayDiscount } from '@/lib/birthday'
 import { setSettings, getSetting } from '@/lib/settings'
 import { SETTING_KEYS } from '@/lib/constants'
 import { parseDateLoose, parsePhoneLoose } from '@/lib/verify'
+import { nextCustomerCode } from '@/lib/customer-code'
 import { buildKnowledgeBase } from '@/lib/knowledge'
 import {
   aiChatEnabled,
@@ -216,10 +217,22 @@ async function upsertCustomer(psid: string): Promise<{ name: string; firstName: 
   const profile = await fetchMessengerProfile(psid)
   const firstName = profile.firstName
   const lastName = profile.lastName
+  // only overwrite the stored name when Facebook actually returned one — a failed
+  // Graph lookup must never wipe a real name the AI learned earlier (নাম যাচাই বাকি loop)
   await db.customer.upsert({
     where: { psid },
-    update: { firstName: firstName || 'নাম যাচাই বাকি', lastName: lastName || '', lastSeenAt: new Date() },
-    create: { psid, firstName: firstName || 'নাম যাচাই বাকি', lastName: lastName || '', lastSeenAt: new Date() },
+    update: {
+      ...(firstName ? { firstName } : {}),
+      ...(lastName ? { lastName } : {}),
+      lastSeenAt: new Date(),
+    },
+    create: {
+      psid,
+      code: await nextCustomerCode(), // unique CRM code (C-0001…) for quick lookup
+      firstName: firstName || 'নাম যাচাই বাকি',
+      lastName: lastName || '',
+      lastSeenAt: new Date(),
+    },
   })
   return { name: politeName({ firstName, lastName }), firstName, lastName }
 }
@@ -323,10 +336,17 @@ async function saveAiCrmData(
     // a stated phone only counts when it parses; a special day only when it parses as a date
     const phone = extracted.phone ? parsePhoneLoose(extracted.phone) : null
     const day = extracted.specialDay ? parseDateLoose(extracted.specialDay) : null
+    // a learned name also fills a placeholder profile name ("নাম যাচাই বাকি" / "Customer")
+    // so the admin sees the real name on the CRM card right away
+    const current = extracted.name
+      ? await db.customer.findUnique({ where: { psid }, select: { firstName: true } })
+      : null
+    const fillsName = !!extracted.name && isPlaceholderName(current?.firstName)
     await db.customer.updateMany({
       where: { psid },
       data: {
         ...(extracted.name ? { statedName: extracted.name.slice(0, 120) } : {}),
+        ...(fillsName ? { firstName: extracted.name!.slice(0, 60), lastName: '' } : {}),
         ...(phone ? { phone } : {}),
         ...(extracted.address ? { address: extracted.address.slice(0, 500) } : {}),
         ...(day ? { birthday: day.date } : {}),
@@ -348,6 +368,12 @@ async function saveAiCrmData(
   } catch {
     /* pre-migration DB or phone unique-collision — never block the chat */
   }
+}
+
+/** FB profile lookup can fail silently → placeholder names the webhook stores */
+function isPlaceholderName(name?: string | null): boolean {
+  const n = (name || '').trim()
+  return !n || n === 'Customer' || n === 'নাম যাচাই বাকি'
 }
 
 /* ───────────────────────── event routing ───────────────────────── */

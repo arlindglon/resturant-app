@@ -259,6 +259,7 @@ model WaiterCall {
 // ---------------- CRM: Customers (Messenger) ----------------
 model Customer {
   id              String         @id @default(cuid())
+  code            String?        @unique // short unique customer code (e.g. "C-0001") — quick lookup in CRM
   psid            String         @unique // Facebook Page-Scoped ID ("direct:<deviceId>" for bill-page claims)
   firstName       String
   lastName        String?

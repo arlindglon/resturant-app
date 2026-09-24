@@ -6,6 +6,7 @@ import { sendText } from '@/lib/messenger'
 import { emitEvent } from '@/lib/emit'
 import { appendLedger, LEDGER_TYPES } from '@/lib/ledger'
 import { deviceMatch } from '@/lib/device'
+import { nextCustomerCode } from '@/lib/customer-code'
 
 export interface AntiFraudResult {
   ok: boolean
@@ -162,6 +163,7 @@ export async function applyBirthdayDiscount(p: {
       update: { phone: p.phone || undefined, discountClaimed: true, claimedAt: new Date(), birthday: p.birthday || undefined, dataText: p.dataText || undefined },
       create: {
         psid: p.psid,
+        code: await nextCustomerCode(), // unique CRM code (C-0001…) for quick lookup
         firstName: p.firstName,
         lastName: p.lastName || '',
         phone: p.phone || null,
