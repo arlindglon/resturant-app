@@ -94,12 +94,12 @@ export async function POST(req: Request) {
   // 2) sample chat with the first working key path (uses rotation internally)
   const anyKeyOk = keys.some((k) => k.ok) // প্রাইমারি পিং ফল হলেও ফলব্যাক চেইন উত্তর দিতে পারে
   void anyKeyOk
-  let sample: { ok: boolean; reply: string | null; error: string | null } = {
+  let sample: { ok: boolean; reply: string | null; error: string | null; ms?: number } = {
     ok: false,
     reply: null,
     error: 'সব কি ব্যর্থ',
   }
-  let verifySample: { ok: boolean; reply: string | null; action: string; error: string | null } | null = null
+  let verifySample: { ok: boolean; reply: string | null; action: string; error: string | null; ms?: number } | null = null
   // স্যাম্পল সবসময় চলে — প্রাইমারি মডেলের পিং ব্যর্থ হলেও ফলব্যাক চেইন (৩.১ লাইট →
   // gemma) উত্তর দিতে পারে; চেইনের আসল অবস্থা এখানেই দেখা যায়
   {

@@ -236,8 +236,23 @@ function retryDelaySeconds(msg: string): number | null {
  */
 const simpleModelBodies = new Set<string>()
 
-  // Gemma-র জন্য কমপ্যাক্ট প্রম্পট বডিল — নিচে bodyForModel দেখুন (ভিজিবল
-  // reasoning মডেলের নেটিভ স্টাইল; ছোট ইনপুট = ছোট narration = দ্রুত উত্তর)
+/**
+ * Gemma মডেলের জন্য ফ্লো-নির্ভর প্লেইন-আউটপুট নির্দেশ। JSON-এর বদলে
+ * স্বাভাবিক উত্তর + মেশিন-পার্সেবল শেষ-লাইন (INFO:/DATA:|ACTION:) — এই মডেলের
+ * নেটিভ narration-এর মাঝেও ডিটারমিনিস্টিকভাবে পার্স হয় (লাইভ টেস্ট-প্রমাণ)।
+ */
+function gemmaOutputRule(sysFull: string): string {
+  if (sysFull.includes('extractedData')) {
+    // verify ফ্লো — দরকারি তথ্য + ASK/CANCEL সিদ্ধান্ত শেষ লাইনে
+    return 'রিপ্লি: কাস্টমারকে পাঠানোর মতো ১-৩ বাক্যের কথা — কোনো ব্যাখ্যা/বিশ্লেষণ নয়। তারপর একদম শেষ লাইনে ঠিক এই ফরম্যাট লিখবে (কাস্টমারের মেসেজে দরকারি তারিখ/নম্বর/তথ্য থাকলে DATA-তে, অফারটি তার প্রযোজ্য নয় স্পষ্ট বললে CANCEL, অন্যথায় ASK):\nDATA: <তারিখ/নম্বর/তথ্য বা ফাঁকা> | ACTION: ASK'
+  }
+  if (/আউটপুট JSON:\s*\{"text"/.test(sysFull)) {
+    return 'শুধু মেসেজটাই লিখো — কোনো ভূমিকা/ব্যাখ্যা/বিশ্লেষণ নয়।'
+  }
+  // চ্যাট ফ্লো — CRM তথ্য ঐচ্ছিক INFO লাইনে (থাকলে পার্স হবে, না থাকলে বাদ)
+  return 'উত্তর: কেবল কাস্টমারকে পাঠানোর মতো কথাটাই লিখো (কাস্টমারের ভাষায়) — কোনো ব্যাখ্যা/বিশ্লেষণ/বুলেট নয়। তবে কাস্টমার এই মেসেজে নিজের নাম/ফোন/ঠিকানা/ভাষা বললে উত্তরের পরের লাইনে লিখবে:\nINFO: নাম=<নাম> | ফোন=<নম্বর> | ভাষা=<bn|banglish|en|hi|other>\n(যেগুলো বলেনি বাদ দেবে; কিছুই না বললে INFO লাইন থাকবে না।)'
+}
+
 function bodyForModel(body: Record<string, unknown>, model: string): Record<string, unknown> {
   const isGemma = /^gemma/i.test(model)
   const simplified = simpleModelBodies.has(model)
@@ -258,7 +273,6 @@ function bodyForModel(body: Record<string, unknown>, model: string): Record<stri
       const kbIdx = sysFull.indexOf('KNOWLEDGE BASE')
       const outIdx = Math.max(sysFull.lastIndexOf('\nআউটপুট'), sysFull.lastIndexOf('\nশেষ নির্দেশ'))
       const kbBlock = kbIdx >= 0 ? sysFull.slice(kbIdx, outIdx > kbIdx ? outIdx : undefined) : ''
-      const outRule = outIdx > kbIdx ? '\n\n' + sysFull.slice(outIdx + 1) : ''
       const head = kbIdx > 0 ? sysFull.slice(0, kbIdx) : sysFull
       const lines = head.split('\n')
       const langLine = lines.find((l) => l.includes('ভাষায়') && (l.includes('সবসময়') || l.includes('অবশ্যই'))) || ''
@@ -283,7 +297,7 @@ function bodyForModel(body: Record<string, unknown>, model: string): Record<stri
           langLine,
         ].filter(Boolean).join('\n')
       }
-      const sys = [persona, kbBlock.slice(0, 2600), outRule].filter(Boolean).join('\n\n')
+      const sys = [persona, kbBlock.slice(0, 2600), gemmaOutputRule(sysFull)].filter(Boolean).join('\n\n')
       const contents = (b.contents as { role: string; parts: { text?: string }[] }[] | undefined) || []
       const merged = contents.map((c, i) =>
         i === 0
@@ -457,7 +471,7 @@ async function generateRotating(
               markKeyGood(key)
               simpleModelBodies.add(model)
               nextCursor()
-              return { ok: true, text }
+              return { ok: true, text, error: null }
             } catch {
               /* সরল করেও ব্যর্থ → মডেল নিজেই ভাঙা, পরের মডেলে */
               continue modelLoop
@@ -776,9 +790,10 @@ export async function chatWithCustomer(opts: {
       responseSchema: CHAT_SCHEMA,
     },
   }, (t) => {
-    // নিয়ম-ভাঙা আউটপুট → ইঞ্জিন এই মডেল স্কিপ করে পরেরটায় (রোটেশনের ভেতরেই)
+    // নিয়ম-ভাঙা আউটপুট → ইঞ্জিন এই মডেল স্কিপ করে পরেরটায় (রোটেশনের ভেতরেই);
+    // প্লেইন উত্তর + INFO লাইনও গ্রহণযোগ্য)
     const j2 = extractJson(t)
-    return !!(j2 && str(j2.reply)) || cleanPlainReply(t)
+    return !!(j2 && str(j2.reply)) || cleanPlainReply(t, 900)
   })
 
   if (!res.ok || !res.text) return { ok: false, reply: null, extracted: empty, error: res.error }
@@ -789,31 +804,58 @@ export async function chatWithCustomer(opts: {
   if (!j && res.text.trimStart().startsWith('{')) {
     return { ok: false, reply: null, extracted: empty, error: 'JSON ট্রানকেটেড (thinking বাজেট শেষ)' }
   }
-  // JSON ভাঙা/অনুপস্থিত হলে কাঁচা টেক্সট তখনই রিপ্লাই হতে পারে যখন ছোট পরিষ্কার
-  // plain উত্তর — Gemma-র লিক হওয়া বিশ্লেষণ-টেক্সট/কাঁচা JSON কখনো কাস্টমারের
-  // কাছে যাবে না; ধরা পড়লে ব্যর্থ ধরে static fallback-এ (লাইভ KB-ভিত্তিক উত্তর)
+  // JSON ভাঙা/অনুপস্থিত (gemma প্লেইন মোড) — INFO লাইন থাকলে পার্স করে CRM-এ যাবে,
+  // বাকিটা ছোট পরিষ্কার plain উত্তর হলে রিপ্লাই; নাহলে static fallback-এ (লাইভ KB)
   const replyParsed = str(j?.reply)
   let reply = replyParsed
+  let extractedData = {
+    name: str(j?.customerName) || null,
+    phone: str(j?.phone) || null,
+    address: str(j?.address) || null,
+    specialDay: str(j?.specialDay) || null,
+    specialDayLabel: str(j?.specialDayLabel) || null,
+    note: str(j?.note) || null,
+    language: ['bn', 'banglish', 'en', 'hi', 'other'].includes(str(j?.language)) ? str(j?.language) : null,
+  }
   if (!reply) {
     const raw = res.text.trim()
-    if (!cleanPlainReply(raw)) {
+    let bodyText = raw
+    const info: Record<string, string> = {}
+    const lines = raw.split('\n')
+    for (let i = lines.length - 1; i >= 0; i--) {
+      const m = lines[i].match(/^\s*(?:[*-]\s*)?INFO\s*:\s*(.+)$/i)
+      if (m) {
+        for (const pair of m[1].split('|')) {
+          const kv = pair.split('=')
+          if (kv.length === 2) info[kv[0].trim().toLowerCase()] = kv[1].trim()
+        }
+        bodyText = lines.slice(0, i).join('\n').trim()
+        break
+      }
+    }
+    if (!cleanPlainReply(bodyText, 900)) {
       return { ok: false, reply: null, extracted: empty, error: 'AI আউটপুট অগ্রাহ্য (বিশ্লেষণ-লিক/ভাঙা JSON)' }
     }
-    reply = raw
+    reply = bodyText
+    const pick = (...keys: string[]): string | null => {
+      for (const k of keys) if (info[k]) return info[k]
+      return null
+    }
+    const langRaw = (pick('language', 'ভাষা') || '').toLowerCase()
+    extractedData = {
+      name: pick('name', 'নাম'),
+      phone: pick('phone', 'ফোন', 'মোবাইল'),
+      address: pick('address', 'ঠিকানা'),
+      specialDay: pick('day', 'date', 'দিন', 'তারিখ'),
+      specialDayLabel: pick('daylabel', 'label', 'লেবেল'),
+      note: pick('note', 'নোট'),
+      language: ['bn', 'banglish', 'en', 'hi', 'other'].includes(langRaw) ? langRaw : null,
+    }
   }
-  const lang = str(j?.language)
   return {
     ok: true,
     reply,
-    extracted: {
-      name: str(j?.customerName) || null,
-      phone: str(j?.phone) || null,
-      address: str(j?.address) || null,
-      specialDay: str(j?.specialDay) || null,
-      specialDayLabel: str(j?.specialDayLabel) || null,
-      note: str(j?.note) || null,
-      language: ['bn', 'banglish', 'en', 'hi', 'other'].includes(lang) ? lang : null,
-    },
+    extracted: extractedData,
     error: null,
   }
 }
@@ -915,24 +957,38 @@ ${opts.knowledgeBase.slice(0, 4000)}
       responseSchema: VERIFY_SCHEMA,
     },
   }, (t) => {
-    // ভাঙা JSON/বিশ্লেষণ-লিক → ইঞ্জিন পরের মডেলে চেষ্টা করবে
+    // ভাঙা JSON/বিশ্লেষণ-লিক → ইঞ্জিন পরের মডেলে চেষ্টা করবে; gemma প্লেইন মোডের
+    // DATA/ACTION শেষ-লাইনও গ্রহণযোগ্য
     const j2 = extractJson(t)
-    return !!(j2 && (str(j2.reply) || str(j2.extractedData))) || cleanPlainReply(t)
+    return !!(j2 && (str(j2.reply) || str(j2.extractedData))) || /\bACTION\s*:\s*(ASK|CANCEL)\b/i.test(t) || cleanPlainReply(t, 900)
   })
 
   if (!res.ok || !res.text) return { ok: false, extracted: null, reply: null, action: 'ASK', error: res.error }
   const j = extractJson(res.text)
-  const action = str(j?.action) === 'CANCEL' ? 'CANCEL' : 'ASK'
-  // gemma মডেলে JSON-মোড নেই — JSON না পার্স হলে ছোট পরিষ্কার plain টেক্সটই
-  // উত্তর; তবে বিশ্লেষণ-লিক/কাঁচা JSON কখনো রিপ্লাই নয় (looksLikeReasoning গার্ড)
+  // gemma প্লেইন মোড: উত্তরের শেষ লাইন "DATA: <তথ্য> | ACTION: ASK|CANCEL" —
+  // narration-এর মাঝেও ডিটারমিনিস্টিকভাবে পার্স হয়; না পেলে ছোট পরিষ্কার plain
+  // টেক্সটই রিপ্লি (ASK), বিশ্লেষণ-লিক হলে রিপ্লি null (deterministic ফ্লো সামলায়)
+  let extracted = str(j?.extractedData) || null
+  let action: 'ASK' | 'CANCEL' = str(j?.action) === 'CANCEL' ? 'CANCEL' : 'ASK'
   let reply = str(j?.reply)
-  if (!reply && !j) {
+  if (!j || (!reply && !extracted)) {
     const raw = res.text.trim()
-    reply = cleanPlainReply(raw) ? raw : null
+    const lines = raw.split('\n')
+    for (let i = lines.length - 1; i >= 0; i--) {
+      const m = lines[i].match(/^\s*(?:[*-]\s*)?DATA\s*:\s*(.*?)\s*(?:\|\s*ACTION\s*:\s*(ASK|CANCEL))?\s*$/i)
+      if (m) {
+        if (!extracted) extracted = m[1].trim() || null
+        if (m[2]) action = m[2].toUpperCase() as 'ASK' | 'CANCEL'
+        const bodyText = lines.slice(0, i).join('\n').trim()
+        if (bodyText && cleanPlainReply(bodyText, 900)) reply = bodyText
+        break
+      }
+    }
+    if (!reply && !j && !extracted && cleanPlainReply(raw, 900)) reply = raw
   }
   return {
     ok: true,
-    extracted: str(j?.extractedData) || null,
+    extracted,
     reply,
     action,
     error: null,
