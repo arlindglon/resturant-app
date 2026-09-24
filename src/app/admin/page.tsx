@@ -5380,7 +5380,6 @@ function SettingsTab({ onAuthRequired }: TabProps) {
                 <SelectContent>
                   <SelectItem value="gemini-3.5-flash-lite">Gemini 3.5 Flash-Lite (প্রাইমারি)</SelectItem>
                   <SelectItem value="gemini-3.1-flash-lite">Gemini 3.1 Flash-Lite (ব্যাকআপ)</SelectItem>
-                  <SelectItem value="gemma-4-26b">Gemma 4 26B (হাই-ভলিউম)</SelectItem>
                   <SelectItem value="gemma-4-31b">Gemma 4 31B (হাই-ভলিউম)</SelectItem>
                 </SelectContent>
               </Select>
