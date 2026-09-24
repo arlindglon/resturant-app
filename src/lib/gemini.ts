@@ -234,6 +234,7 @@ const CHAT_SCHEMA = {
     address: { type: 'STRING' },
     specialDay: { type: 'STRING' },
     specialDayLabel: { type: 'STRING' },
+    note: { type: 'STRING' },
   },
   required: ['reply'],
 } as const
@@ -268,44 +269,50 @@ export interface AiChatResult {
     address: string | null
     specialDay: string | null // raw date text found in the conversation
     specialDayLabel: string | null // জন্মদিন / বিবাহবার্ষিকী / custom
+    note: string | null // notable customer fact worth remembering in the CRM
   }
   error: string | null
 }
 
-const BASE_PERSONA = `তুমি একটি রেস্টুরেন্টের প্রাণবন্ত, বন্ধুত্বপূর্ণ Messenger সহকারী। একজন আন্তরিক মানুষের মতো কথা বলো — রোবট বা কল-সেন্টার নও।
+const BASE_PERSONA = `তুমি একটি রেস্টুরেন্টের অভিজ্ঞ হোস্ট + সেলস/মার্কেটিং প্রো — একজন আন্তরিক মানুষের মতো কথা বলো, কখনো রোবট বা কল-সেন্টার স্ক্রিপ্টের মতো নয়।
 
 ভাষার নিয়ম:
-- কাস্টমার যে ভাষায়/স্টাইলে লিখবে, ঠিক সেভাবেই উত্তর দাও — বাংলা হলে বাংলায়, বাংলিশ (Banglish) হলে বাংলিশে, English হলে English-এ, Hindi হলে Hindi-তে।
-- ছোট, উষ্ণ, কথোপকথনের মতো উত্তর দাও (২-৫ বাক্য)। দীর্ঘ প্র্যাচার নয়। মাঝে মাঝে উপযুক্ত emoji ব্যবহার করো।
+- কাস্টমার যে ভাষায়/স্টাইলে লিখবে, ঠিক সেভাবেই উত্তর দাও — বাংলা হলে বাংলায়, বাংলিশ হলে বাংলিশে, English হলে English-এ, Hindi হলে Hindi-তে।
+- ছোট, উষ্ণ, কথোপকথনের মতো উত্তর (২-৫ বাক্য)। মাঝে মাঝে মানানসই emoji।
+- কাস্টমার আগের মেসেজে কিছু জিজ্ঞেস/বলেছিল হলে সেটার স্বাভাবিক উত্তর দাও (খোঁজখবর, জোক, আসার কথা — সব আগে মেনে নাও, তারপর ব্যবসা)।
+- একই বাক্য/একই কথা দুবার কখনো বলবে না — প্রতি উত্তর একেক রকম, টাটকা।
 
-তথ্যের নিয়ম:
-- মেনু, দাম, অফার, ডেলিভারি রুলস — সব উত্তর শুধু নিচের KNOWLEDGE BASE থেকে দাও।
-- যা KNOWLEDGE BASE-এ নেই সে দাম/অফার/ওয়াডা বানিয়ে বলবে না — বলবে সঠিক তথ্য জানতে ফোন করতে বা রেস্তোরাঁয় আসতে।
-- কেউ অর্ডার করতে চাইলে বলো: QR স্ক্যান করে টেবিল থেকেই অর্ডার করতে হয়, অথবা রেস্তোরাঁয় আসতে বলো।
+বিক্রয় ও আতিথেয়তার নিয়ম (pro):
+- মেনু, দাম, অফার, ডেলিভারি রুলস — সব উত্তর শুধু নিচের KNOWLEDGE BASE থেকে দাও; বাইরের কিছু বানিয়ে বলবে না।
+- সুযোগ বুঝে হালকাভাবে আগ্রহ তৈরি করো: জনপ্রিয় আইটেম, চলমান অফার/কুপন উল্লেখ করো — তবে জোর-জবরদস্তি নয়, বন্ধুর মতো রিকমেন্ড।
+- কেউ আসার কথা বললে উষ্ণ স্বাগতম জানাও; প্রযোজ্য হলে কাছাকাছি সময়/কী খেতে চান জানতে চাও।
+- কেউ অর্ডার করতে চাইলে বলো: QR স্ক্যান করে টেবিল থেকেই অর্ডার হয়, অথবা রেস্তোরাঁয় আসতে বলো।
 - অফার (জন্মদিন/বার্ষিকী ছাড়) নিয়ে জিজ্ঞেস করলে KNOWLEDGE BASE-এর অফার লিস্ট থেকে বলো: বিল পেজে "Claim on Messenger" বাটনে চাপলে যাচাই করে ছাড় পাওয়া যায়।
 
 কাস্টমারের তথ্য সংগ্রহ (স্বাভাবিকভাবে, জোর করে নয়):
-- কথার মধ্যে কাস্টমার তার নাম, ফোন নম্বর, ঠিকানা, বা বিশেষ দিন (জন্মদিন / বিবাহবার্ষিকী) বললে সেগুলো ধরে রাখো এবং ফিল্ডে পূরণ করো।
-- এক মেসেজে কিছু না থাকলে সেই ফিল্ড ফাঁকা রাখো; জোর করে জিজ্ঞেস করবে না।
-- reply কখনো ইংরেজি টেকনিক্যাল বক্তব্যে ভরবে না — সবসময় কাস্টমারের ভাষায় পরিষ্কার উত্তর।`
+- কথার মধ্যে নাম, ফোন, ঠিকানা, বিশেষ দিন (জন্মদিন/বিবাহবার্ষিকী) বললে ফিল্ডে পূরণ করো; না থাকলে ফাঁকা।
+- কাস্টমার সম্পর্কে ভবিষ্যতে কাজে লাগার মতো উল্লেখযোগ্য তথ্য (যেমন: আজ রাতে ৬ জনের দল নিয়ে আসবে, ঝাল খেতে ভালোবাসে, বাচ্চা সহ আসবে, ক্যাটারিং জানতে চায়) থাকলে note ফিল্ডে ১ লাইনে লিখো — না থাকলে ফাঁকা।
+- reply সবসময় কাস্টমারের ভাষায় পরিষ্কার উত্তর — ইংরেজি টেকনিক্যাল বক্তব্য নয়।`
 
 export async function chatWithCustomer(opts: {
   knowledgeBase: string
   history: { role: 'user' | 'model'; text: string }[]
   customerMessage: string
   customerName: string
+  customerNotes?: string
   extraPersona?: string
   cfg: GeminiConfig
 }): Promise<AiChatResult> {
-  const empty = { name: null, phone: null, address: null, specialDay: null, specialDayLabel: null }
+  const empty = { name: null, phone: null, address: null, specialDay: null, specialDayLabel: null, note: null }
   const system = [
     BASE_PERSONA,
     opts.extraPersona ? `রেস্টুরেন্ট মালিকের বাড়তি নির্দেশনা:\n${opts.extraPersona}` : '',
     `KNOWLEDGE BASE (একমাত্র সত্যের উৎস):\n${opts.knowledgeBase}`,
+    opts.customerNotes ? `এই কাস্টমার সম্পর্কে আগে জমানো নোট/ট্যাগ (ব্যক্তিগত মনে রেখে কথা বলো, খুশি করো):\n${opts.customerNotes}` : '',
     opts.customerName
       ? `কাস্টমারের Facebook প্রোফাইল নাম: ${opts.customerName} (তাকে নাম ধরে ডাকতে পারো)`
       : '',
-    `আউটপুট অবশ্যই এই JSON ফরম্যাটে: {"reply": "...", "customerName": "", "phone": "", "address": "", "specialDay": "", "specialDayLabel": ""} — যে তথ্য নেই সেটি ফাঁকা স্ট্রিং ""।`,
+    `আউটপুট অবশ্যই এই JSON ফরম্যাটে: {"reply": "...", "customerName": "", "phone": "", "address": "", "specialDay": "", "specialDayLabel": "", "note": ""} — যে তথ্য নেই সেটি ফাঁকা স্ট্রিং ""।`,
   ]
     .filter(Boolean)
     .join('\n\n')
@@ -346,69 +353,111 @@ export async function chatWithCustomer(opts: {
       address: str(j?.address) || null,
       specialDay: str(j?.specialDay) || null,
       specialDayLabel: str(j?.specialDayLabel) || null,
+      note: str(j?.note) || null,
     },
     error: null,
   }
 }
 
-/* ───────────────────── offer-verification data extraction ───────────────────── */
+/* ───────────── offer-verification conversation (human, sales-pro, never nagging) ───────────── */
 
-export interface AiExtractResult {
+export interface AiVerifyResult {
   ok: boolean
   /** normalized candidate datum (still re-validated by deterministic parsers) */
   extracted: string | null
-  /** friendly re-ask written in the customer's own language (when nothing found) */
+  /** warm reply in the customer's own language (answer first, then a soft nudge) */
   reply: string | null
+  /**
+   * ASK     → still guiding the customer toward the datum
+   * CANCEL  → the customer clearly said the occasion doesn't apply to them
+   *           (not married / not my birthday / someone else's) — close the claim
+   *           gracefully and pivot to what DOES fit them (other offers from the KB)
+   */
+  action: 'ASK' | 'CANCEL'
   error: string | null
 }
 
-const EXTRACT_SCHEMA = {
+const VERIFY_SCHEMA = {
   type: 'OBJECT',
   properties: {
     extractedData: { type: 'STRING' },
     reply: { type: 'STRING' },
+    action: { type: 'STRING', enum: ['ASK', 'CANCEL'] },
   },
-  required: ['extractedData', 'reply'],
+  required: ['extractedData', 'reply', 'action'],
 } as const
 
-export async function extractVerificationData(opts: {
+export async function verificationChat(opts: {
   fieldType: 'DATE' | 'PHONE' | 'TEXT'
   offerName: string
   askText: string
+  /** the exact text the bot last sent asking for the datum — the AI must never repeat it */
+  lastAskSent: string | null
+  /** how many times the bot already asked (0 = first re-ask) */
+  askCount: number
+  /** live knowledge base — used to pivot to other offers when cancelling */
+  knowledgeBase: string
+  history: { role: 'user' | 'model'; text: string }[]
   customerMessage: string
   cfg: GeminiConfig
-}): Promise<AiExtractResult> {
+}): Promise<AiVerifyResult> {
   const typeHint =
     opts.fieldType === 'PHONE'
-      ? 'উত্তরে যে ১১ ডিজিটের ফোন নম্বর আছে সেটি বের করো (যেমন 01712345678)।'
+      ? 'দরকারি তথ্য: ১১ ডিজিটের ফোন নম্বর (যেমন 01712345678)। উত্তরে নম্বরটি থাকলে সেটিই extractedData (শুধু ডিজিট)।'
       : opts.fieldType === 'DATE'
-        ? 'উত্তরে যে তারিখ আছে সেটি বের করো এবং DD/MM/YYYY ফরম্যাটে লিখো (যেমন 15/03/1995)। তারিখ বাংলা বানানে বা কথায় দেওয়া থাকলেও বুঝবে।'
-        : 'উত্তরে যে তথ্যটি চাওয়া হচ্ছে সেটি যথাসম্ভব পরিষ্কার করে বের করো।'
-  const system = `তুমি একটি রেস্টুরেন্টের অফার-যাচাই সহকারী। কাস্টমার "${opts.offerName}" অফারটি নিতে চায়। বট চেয়েছে: "${opts.askText}"
+        ? 'দরকারি তথ্য: একটি তারিখ। উত্তরে তারিখ থাকলে DD/MM/YYYY ফরম্যাটে extractedData-তে লিখো (যেমন 15/03/1995)। তারিখ বাংলা বানানে, কথায় বা বছর-মাস আলাদা হলেও বুঝবে।'
+        : 'দরকারি তথ্য: একটি উত্তর/বর্ণনা। কাস্টমার সেটি দিলে যথাসম্ভব পরিষ্কার করে extractedData-তে লিখো।'
 
-কাস্টমারের মেসেজ যেকোনো ভাষায়/স্টাইলে আসতে পারে (বাংলা, বাংলিশ, English, Hindi)। ${typeHint}
+  const askPressure =
+    opts.askCount <= 0
+      ? 'এই প্রথমবার হালকাভাবে মনে করিয়ে দিচ্ছ — বন্ধুর মতো।'
+      : 'তুমি ইতিমধ্যে ২ বার জেনে নেওয়ার চেষ্টা করেছ — এখন আর চাওয়া যাবে না। কাস্টমারের কথার উত্তর দিয়ে স্বাভাবিক বন্ধুত্বপূর্ণ কথায় ফিরে যাও (চাইলে অন্য অফার/খাবারের কথা বলো) — তারিখ/তথ্যের কথা টুকুও নয়।'
 
-JSON ফরম্যাট: {"extractedData": "...", "reply": "..."}
-- তারিখ/নম্বর/তথ্য পাওয়া গেলে: extractedData-তে শুধু সেটি (extra কথা ছাড়া), reply ফাঁকা ""।
-- পাওয়া না গেলে: extractedData "", reply-তে ১-২ বাক্যে কাস্টমারের ভাষায় বন্ধুত্বপূর্ণভাবে আবার চেয়ে নাও (কী লিখতে হবে উদাহরণসহ)। কাস্টমার অন্য কিছু জিজ্ঞেস করলে তার উত্তর দিয়ে আবার তথ্যটি চাও।`
+  const system = `তুমি একটি রেস্টুরেন্টের অভিজ্ঞ হোস্ট + সেলস প্রো — উষ্ণ, পেশাদার, মানুষের মতো। কাস্টমার "${opts.offerName}" অফার নিতে চেয়েছিল; যাচাইয়ে বট চেয়েছে: "${opts.askText}"
+
+চরিত্রের নিয়ম:
+- কাস্টমার যে ভাষায়/স্টাইলে লিখবে ঠিক সেভাবেই উত্তর (বাংলা/বাংলিশ/English/Hindi)।
+- আগে কাস্টমারের কথাটার স্বাভাবিক উত্তর দাও (খোঁজখবর, জোক, আসার কথা, নাম বলা — সব মেনে নাও), তারপর প্রয়োজনে ব্যবসা।
+- ১-৩ বাক্যে উত্তর; একই বাক্য দুবার কখনো নয় — বিশেষ করে এই মেসেজটা আগেই পাঠানো হয়েছে, হুবহু আর লিখবে না: "${(opts.lastAskSent || '').slice(0, 200)}"
+- জোর-জবরদস্তি বা একঘেয়ে দাবি কখনো নয় — বন্ধুর মতো মনে করিয়ে দেওয়া মাত্র।
+
+${typeHint}
+
+সিদ্ধান্ত (action):
+1. কাস্টমারের মেসেজে দরকারি তারিখ/নম্বর/তথ্য থাকলে → extractedData পূরণ, reply ফাঁকা "", action "ASK"।
+2. কাস্টমার স্পষ্ট বললে অফারটি তার প্রযোজ্য নয় (বিবাহ করেনি / জন্মদিন এখন না / অন্যের অকেশন / ভুল বুঝ) → action "CANCEL"; reply-তে ২-৩ বাক্যে: একেবারে স্বাভাবিকভাবে "কোনো সমস্যা নেই" + KNOWLEDGE BASE থেকে তার জন্য প্রযোজ্য ১-২টা অফার/জনপ্রিয় খাবার উল্লেখ করে আগ্রহ তৈরি + রেস্তোরাঁয় আসার উষ্ণ আমন্ত্রণ। extractedData ফাঁকা।
+3. অন্য কথা (খোঁজখবর, জোক, আসবে বলা, প্রশ্ন) → action "ASK" ${askPressure}
+   reply-তে তার কথার উত্তর দিয়ে হালকাভাবে এগোও; extractedData ফাঁকা।
+
+KNOWLEDGE BASE:
+${opts.knowledgeBase.slice(0, 4000)}
+
+JSON ফরম্যাট: {"extractedData":"","reply":"","action":"ASK"}`
+
+  const contents = [
+    ...opts.history.slice(-6).map((h) => ({ role: h.role, parts: [{ text: h.text }] })),
+    { role: 'user' as const, parts: [{ text: opts.customerMessage }] },
+  ]
 
   const res = await generateRotating(opts.cfg, {
     systemInstruction: { parts: [{ text: system }] },
-    contents: [{ role: 'user', parts: [{ text: opts.customerMessage }] }],
+    contents,
     generationConfig: {
-      temperature: 0.4,
+      temperature: 0.7,
       maxOutputTokens: 1024,
       responseMimeType: 'application/json',
-      responseSchema: EXTRACT_SCHEMA,
+      responseSchema: VERIFY_SCHEMA,
     },
   })
 
-  if (!res.ok || !res.text) return { ok: false, extracted: null, reply: null, error: res.error }
+  if (!res.ok || !res.text) return { ok: false, extracted: null, reply: null, action: 'ASK', error: res.error }
   const j = extractJson(res.text)
+  const action = str(j?.action) === 'CANCEL' ? 'CANCEL' : 'ASK'
   return {
     ok: true,
     extracted: str(j?.extractedData) || null,
     reply: str(j?.reply) || null,
+    action,
     error: null,
   }
 }

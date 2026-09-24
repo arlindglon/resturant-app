@@ -268,6 +268,7 @@ model Customer {
   dataText        String?        @db.Text // last verification data the customer sent in messenger
   address         String?        @db.Text // delivery/contact address (AI chatbot natural extraction)
   statedName      String?        // name the customer stated in chat (when different from FB profile)
+  notes           CustomerNote[]
   lastSeenAt      DateTime?
   discountClaimed Boolean        @default(false) // lifetime lock after birthday discount
   claimedAt       DateTime?
@@ -310,7 +311,8 @@ model ReferralToken {
   tableNumber Int
   deviceId   String
   deviceFp   String?
-  status     String    @default("PENDING") // PENDING | CLAIMED | EXPIRED
+  status     String    @default("PENDING") // PENDING | CLAIMED | EXPIRED | CANCELLED (customer said the occasion doesn't apply — bot pivoted gracefully)
+  askCount   Int       @default(0) // how many times the bot asked for verification data (soft-takeover after 2)
   dataText   String?   @db.Text // verification data collected in the messenger chat
   askedText  String?   @db.Text // what the bot asked the customer to send
   createdAt  DateTime  @default(now())
@@ -331,6 +333,24 @@ model ChatMessage {
 
   @@index([psid, createdAt])
   @@map("chat_messages")
+}
+
+// ---------------- CRM: per-customer notes & tags (admin + AI both write) ----------------
+// Admin writes observations/strategy notes ("VIP — always tips", "wants catering quote");
+// the AI chatbot saves notable facts it learns naturally ("coming tonight with 6 friends").
+// The bot reads these back to personalize every conversation — admins use them to
+// craft targeted offers.
+model CustomerNote {
+  id         String   @id @default(cuid())
+  customerId String
+  customer   Customer @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  kind       String   @default("NOTE") // NOTE | TAG | AI
+  text       String   @db.Text
+  createdBy  String   @default("ai") // "ai" | admin key name / "admin"
+  createdAt  DateTime @default(now())
+
+  @@index([customerId, createdAt])
+  @@map("customer_notes")
 }
 
 // ---------------- ImgBB Multi-Key Management ----------------

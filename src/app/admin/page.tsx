@@ -2910,10 +2910,126 @@ interface CustomerRow {
   statedName: string | null
   discountClaimed: boolean
   claims: number
+  noteCount: number
   lastClaimAt: string | null
   lastSeenAt: string | null
   createdAt: string
   daysUntilEvent: number | null
+}
+
+interface CustomerNoteRow {
+  id: string
+  kind: string // NOTE | TAG | AI
+  text: string
+  createdBy: string
+  createdAt: string
+}
+
+/** notes & tags dialog — admin writes, the bot reads these to personalize; AI notes show what it learned */
+function CustomerNotesDialog({
+  customer,
+  onOpenChange,
+}: {
+  customer: CustomerRow | null
+  onOpenChange: () => void
+}) {
+  const [notes, setNotes] = useState<CustomerNoteRow[] | null>(null)
+  const [text, setText] = useState('')
+  const [asTag, setAsTag] = useState(false)
+  const [busy, setBusy] = useState(false)
+
+  const load = useCallback(async (id: string) => {
+    const res = await api.get<{ notes: CustomerNoteRow[] }>(`/api/admin/customer-notes?customerId=${id}`)
+    if (res.ok && res.data) setNotes(res.data.notes)
+    else setNotes([])
+  }, [])
+
+  useEffect(() => {
+    // same defer pattern as the other tabs (set-state-in-effect safe)
+    const t = setTimeout(() => customer && load(customer.id), 0)
+    return () => clearTimeout(t)
+  }, [customer, load])
+
+  const add = async () => {
+    if (!customer || !text.trim()) return
+    setBusy(true)
+    const res = await api.post('/api/admin/customer-notes', { customerId: customer.id, text, kind: asTag ? 'TAG' : 'NOTE' })
+    setBusy(false)
+    if (!res.ok) return toast.error(res.error || 'যোগ হয়নি')
+    setText('')
+    toast.success(asTag ? 'ট্যাগ যোগ হয়েছে ✓' : 'নোট যোগ হয়েছে ✓ — বট এখন এটি মনে রাখবে')
+    load(customer.id)
+  }
+
+  const del = async (id: string) => {
+    const res = await api.del(`/api/admin/customer-notes?id=${id}`)
+    if (!res.ok) return toast.error(res.error || 'মুছে যায়নি')
+    if (customer) load(customer.id)
+  }
+
+  return (
+    <Dialog open={!!customer} onOpenChange={(o) => !o && onOpenChange()}>
+      <DialogContent className="max-h-[85vh] max-w-lg overflow-y-auto">
+        <DialogHeader>
+          <DialogTitle className="flex items-center gap-2 text-base">
+            📝 নোট ও ট্যাগ — {customer ? customerName(customer) : ''}
+          </DialogTitle>
+          <DialogDescription className="text-xs">
+            এখানে লেখা তথ্য AI বট মনে রাখে এবং কথা বলার সময় ব্যবহার করে — কাস্টমারকে ব্যক্তিগত অভিজ্ঞতা দিতে। আপনিও এগুলো দেখে স্পেশাল অফার বানাতে পারবেন।
+          </DialogDescription>
+        </DialogHeader>
+
+        <div className="space-y-2">
+          <Textarea
+            rows={2}
+            value={text}
+            onChange={(e) => setText(e.target.value)}
+            placeholder={asTag ? 'ট্যাগ লিখুন (যেমন: VIP কাস্টমার)' : 'নোট লিখুন (যেমন: ক্যাটারিং নিয়ে জানতে চায়, ১০ জনের পার্টি)'}
+          />
+          <div className="flex items-center gap-2">
+            <Button size="sm" onClick={add} disabled={busy || !text.trim()} className="bg-amber-500 font-black hover:bg-amber-600">
+              {busy ? '…' : '+ যোগ করুন'}
+            </Button>
+            <label className="flex cursor-pointer items-center gap-1.5 text-xs font-bold text-stone-600">
+              <Checkbox checked={asTag} onCheckedChange={(v) => setAsTag(!!v)} /> 🏷️ ট্যাগ হিসেবে
+            </label>
+          </div>
+        </div>
+
+        <div className="thin-scroll max-h-72 space-y-1.5 overflow-y-auto">
+          {notes === null ? (
+            <p className="py-4 text-center text-sm text-stone-400">…</p>
+          ) : notes.length === 0 ? (
+            <p className="py-4 text-center text-sm text-stone-400">এখনো কোনো নোট নেই</p>
+          ) : (
+            notes.map((n) => (
+              <div
+                key={n.id}
+                className={
+                  n.kind === 'AI'
+                    ? 'flex items-start gap-2 rounded-lg bg-sky-50 p-2'
+                    : n.kind === 'TAG'
+                      ? 'flex items-start gap-2 rounded-lg bg-amber-50 p-2'
+                      : 'flex items-start gap-2 rounded-lg bg-stone-50 p-2'
+                }
+              >
+                <span className="text-sm">{n.kind === 'AI' ? '🤖' : n.kind === 'TAG' ? '🏷️' : '👤'}</span>
+                <div className="min-w-0 flex-1">
+                  <p className="break-words text-[12px] font-semibold text-stone-800">{n.text}</p>
+                  <p className="text-[10px] text-stone-400">
+                    {n.kind === 'AI' ? 'AI শিখেছে' : 'আপনি লিখেছেন'} • {bnDateOnly(n.createdAt)}
+                  </p>
+                </div>
+                <button onClick={() => del(n.id)} className="text-stone-300 hover:text-red-500" title="মুছুন">
+                  <X className="size-3.5" />
+                </button>
+              </div>
+            ))
+          )}
+        </div>
+      </DialogContent>
+    </Dialog>
+  )
 }
 
 /** real first+last name, or a friendly placeholder — never the raw word "Customer" */
@@ -2929,6 +3045,7 @@ function CustomersTab({ onAuthRequired }: TabProps) {
   const [err, setErr] = useState('')
   const [editing, setEditing] = useState<CustomerRow | null>(null)
   const [msgTarget, setMsgTarget] = useState<CustomerRow | null>(null)
+  const [notesTarget, setNotesTarget] = useState<CustomerRow | null>(null)
 
   const load = useCallback(async () => {
     const res = await api.get<{ customers: CustomerRow[]; upcoming: CustomerRow[] }>('/api/admin/customers')
@@ -3084,6 +3201,20 @@ function CustomersTab({ onAuthRequired }: TabProps) {
                 <Button
                   size="sm"
                   variant="ghost"
+                  className="relative text-sky-600 hover:bg-sky-50"
+                  onClick={() => setNotesTarget(c)}
+                  title="নোট ও ট্যাগ"
+                >
+                  📝
+                  {c.noteCount > 0 && (
+                    <span className="absolute -right-0.5 -top-0.5 flex h-4 min-w-4 items-center justify-center rounded-full bg-sky-600 px-1 text-[9px] font-black text-white">
+                      {toBn(String(c.noteCount))}
+                    </span>
+                  )}
+                </Button>
+                <Button
+                  size="sm"
+                  variant="ghost"
                   className="text-stone-500 hover:text-amber-600"
                   onClick={() => setEditing(c)}
                   title="তথ্য এডিট"
@@ -3109,6 +3240,9 @@ function CustomersTab({ onAuthRequired }: TabProps) {
 
       {/* edit dialog — key remounts it so the fields fill from the edited row */}
       <EditCustomerDialog key={editing?.id || 'edit-none'} customer={editing} onOpenChange={() => setEditing(null)} onSaved={load} />
+
+      {/* notes & tags dialog (admin writes, bot reads; AI notes visible) */}
+      <CustomerNotesDialog key={notesTarget?.id || 'notes-none'} customer={notesTarget} onOpenChange={() => setNotesTarget(null)} />
 
       {/* send message dialog */}
       <SendMessageDialog key={msgTarget?.id || 'msg-none'} customer={msgTarget} onOpenChange={() => setMsgTarget(null)} />

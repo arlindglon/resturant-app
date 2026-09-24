@@ -26,6 +26,10 @@ export async function GET() {
     }),
   ])
 
+  // per-customer notes count (admin + AI notes & tags) — shown on the CRM rows
+  const noteCounts = await db.customerNote.groupBy({ by: ['customerId'], _count: { _all: true } })
+  const noteCountMap = new Map(noteCounts.map((n) => [n.customerId, n._count._all]))
+
   const occasionIds = [...new Set(claims.map((c) => c.occasionId).filter(Boolean))] as string[]
   const occasions = occasionIds.length
     ? await db.occasionOffer.findMany({ where: { id: { in: occasionIds } }, select: { id: true, name: true, emoji: true } })
@@ -72,6 +76,7 @@ export async function GET() {
       statedName: c.statedName ?? null,
       discountClaimed: c.discountClaimed,
       claims: claimCount.get(c.psid) || 0,
+      noteCount: noteCountMap.get(c.id) || 0,
       lastClaimAt: lastClaimAt.get(c.psid) || null,
       lastSeenAt: c.lastSeenAt,
       createdAt: c.createdAt,

@@ -1,10 +1,11 @@
 // POST /api/admin/gemini-test — live-test every configured Gemini API key
 // (tiny ping per key) + a real sample chat reply built from the knowledge
-// base, so the admin sees exactly what their customers will experience.
+// base + a verification-flow sample (a customer who says the occasion
+// doesn't apply), so the admin sees exactly what their customers will experience.
 import { ok } from '@/lib/api'
 import { requirePerm } from '@/lib/staff-auth'
 import { buildKnowledgeBase } from '@/lib/knowledge'
-import { getGeminiConfig, chatWithCustomer, testGeminiKey } from '@/lib/gemini'
+import { getGeminiConfig, chatWithCustomer, verificationChat, testGeminiKey } from '@/lib/gemini'
 
 export async function POST() {
   const denied = await requirePerm('settings')
@@ -18,6 +19,7 @@ export async function POST() {
       model: cfg.model,
       keys: [],
       sample: { ok: false, reply: null, error: 'কোনো API কি যোগ করা হয়নি' },
+      verifySample: null,
     })
   }
 
@@ -31,6 +33,7 @@ export async function POST() {
     reply: null,
     error: 'সব কি ব্যর্থ',
   }
+  let verifySample: { ok: boolean; reply: string | null; action: string; error: string | null } | null = null
   if (anyKeyOk) {
     const kb = await buildKnowledgeBase()
     const ai = await chatWithCustomer({
@@ -42,6 +45,24 @@ export async function POST() {
       cfg,
     })
     sample = { ok: ai.ok, reply: ai.reply, error: ai.error }
+
+    // verification-flow sample: an UNMARRIED customer on the anniversary offer —
+    // the bot must cancel gracefully and pivot to something that fits them
+    const vi = await verificationChat({
+      fieldType: 'DATE',
+      offerName: 'বিবাহবার্ষিকী স্পেশাল',
+      askText: 'আপনার বিবাহের তারিখ বলুন (যেমন: 15/03/1995)',
+      lastAskSent: 'আপনার বিবাহের তারিখ বলুন (যেমন: 15/03/1995)',
+      askCount: 0,
+      knowledgeBase: kb.text,
+      history: [
+        { role: 'user', text: 'heo bhai' },
+        { role: 'model', text: 'আপনার বিবাহের তারিখ বলুন (যেমন: 15/03/1995)' },
+      ],
+      customerMessage: 'ami biye korini bhai, amr nam rakib',
+      cfg,
+    })
+    verifySample = { ok: vi.ok, reply: vi.reply, action: vi.action, error: vi.error }
   }
 
   return ok({
@@ -50,5 +71,6 @@ export async function POST() {
     keys,
     kbStats: (await buildKnowledgeBase().catch(() => null))?.stats ?? null,
     sample,
+    verifySample,
   })
 }

@@ -28,7 +28,7 @@ import { buildKnowledgeBase } from '@/lib/knowledge'
 import {
   aiChatEnabled,
   chatWithCustomer,
-  extractVerificationData,
+  verificationChat,
   getGeminiConfig,
   loadChatHistory,
   saveChatTurn,
@@ -199,9 +199,9 @@ async function askVerificationData(
   const fieldType = offer?.fieldType || 'DATE'
   const ask = offer?.askText?.trim() || defaultAsk(fieldType)
   const head = offer
-    ? `${offer.emoji || '🎁'} ${offer.name} — ৳${offer.discount} ছাড় অফার!\n\n${greet(name)}\n\n${ask}`
+    ? `${offer.emoji || '🎁'} ${offer.name} — ৳${offer.discount} ছাড় অফার!\n\n${greet(name)} দারুণ পছন্দ! 😊\n\nশুধু ছোট্ট একটা যাচাই দরকার — ${ask}`
     : `${greet(name)}\n\n${ask}`
-  const tail = `\n\n✅ সঠিক তথ্য পাঠালেই ছাড়টি আপনার বিলে (টেবিল ${tableNumber}) যোগ হয়ে যাবে।`
+  const tail = `\n\nযেভাবে সুবিধা হয় লিখতে পারেন (বাংলা/English)।\n✅ তথ্যটি মিলে গেলেই ছাড়টি আপনার বিলে (টেবিল ${tableNumber}) যোগ হয়ে যাবে।`
   const text = head + tail
 
   if (fieldType === 'PHONE') {
@@ -273,12 +273,28 @@ async function aiGeneralReply(psid: string, profileName: string, customerMessage
   const cfg = await getGeminiConfig()
   if (!cfg.enabled || !cfg.keys.length) return false
 
+  // CRM notes & tags → the bot genuinely remembers this customer
+  // ("আবার দেখা হলো রাকিব ভাই! গতবারের মতো বিরিয়ানি হবে?")
+  let customerNotes: string | undefined
+  try {
+    const cust = await db.customer.findUnique({
+      where: { psid },
+      select: { notes: { orderBy: { createdAt: 'desc' as const }, take: 10, select: { kind: true, text: true } } },
+    })
+    if (cust?.notes?.length) {
+      customerNotes = cust.notes.map((n) => `- ${n.text}`).join('\n')
+    }
+  } catch {
+    /* notes are optional — chat works without them */
+  }
+
   const [kb, history] = await Promise.all([buildKnowledgeBase(), loadChatHistory(psid, 10)])
   const ai = await chatWithCustomer({
     knowledgeBase: kb.text,
     history,
     customerMessage,
     customerName: profileName,
+    customerNotes,
     extraPersona: cfg.persona,
     cfg,
   })
@@ -299,9 +315,9 @@ async function aiGeneralReply(psid: string, profileName: string, customerMessage
 /** persist the data the AI picked up during small talk (CRM enrichment) */
 async function saveAiCrmData(
   psid: string,
-  extracted: { name: string | null; phone: string | null; address: string | null; specialDay: string | null; specialDayLabel: string | null },
+  extracted: { name: string | null; phone: string | null; address: string | null; specialDay: string | null; specialDayLabel: string | null; note: string | null },
 ): Promise<void> {
-  const has = extracted.name || extracted.phone || extracted.address || extracted.specialDay
+  const has = extracted.name || extracted.phone || extracted.address || extracted.specialDay || extracted.note
   if (!has) return
   try {
     // a stated phone only counts when it parses; a special day only when it parses as a date
@@ -318,6 +334,17 @@ async function saveAiCrmData(
         lastSeenAt: new Date(),
       },
     })
+    // notable fact from the conversation → CRM note the admin can act on
+    if (extracted.note) {
+      const cust = await db.customer.findUnique({ where: { psid }, select: { id: true } })
+      if (cust) {
+        const text = extracted.note.slice(0, 500)
+        const dup = await db.customerNote.findFirst({
+          where: { customerId: cust.id, kind: 'AI', text, createdAt: { gte: new Date(Date.now() - 24 * 60 * 60 * 1000) } },
+        })
+        if (!dup) await db.customerNote.create({ data: { customerId: cust.id, kind: 'AI', text, createdBy: 'ai' } })
+      }
+    }
   } catch {
     /* pre-migration DB or phone unique-collision — never block the chat */
   }
@@ -428,17 +455,42 @@ async function handleEvent(event: MessagingEvent) {
       if (dataText.length >= 2) validData = dataText.slice(0, 300)
     }
 
-    // 2c. parsers failed → AI natural-language extraction (any language),
-    // re-validated with the SAME parsers — the AI can never bypass verification
+    // 2c. parsers failed → AI verification CONVERSATION (human, sales-pro, never
+    // nagging): answers what the customer actually said, extracts the datum from
+    // ANY language, and gracefully cancels when the occasion doesn't apply.
+    // Every extracted datum is re-validated with the SAME deterministic parsers —
+    // the AI can never bypass verification or invent a discount.
     if (!validData && dataText && (await aiChatEnabled())) {
       const cfg = await getGeminiConfig()
-      const ai = await extractVerificationData({
+      const [kb, hist] = await Promise.all([buildKnowledgeBase(), loadChatHistory(psid, 8)])
+      // history already contains the current customer message (saved by the caller) — drop the duplicate
+      const history = hist.filter((h, i) => !(i === hist.length - 1 && h.role === 'user' && h.text === dataText))
+      const askCount = tokenRow.askCount || 0
+      const ai = await verificationChat({
         fieldType: fieldType as 'DATE' | 'PHONE' | 'TEXT',
         offerName: offer?.name || 'বিশেষ অফার',
         askText: offer?.askText?.trim() || defaultAsk(fieldType),
+        lastAskSent: tokenRow.askedText,
+        askCount,
+        knowledgeBase: kb.text,
+        history,
         customerMessage: dataText,
         cfg,
       })
+
+      // customer said the occasion doesn't apply (not married / not my birthday…)
+      // → close the claim gracefully, pivot warmly to offers that DO fit them
+      if (ai.ok && ai.action === 'CANCEL') {
+        await db.referralToken.update({
+          where: { id: tokenRow.id },
+          data: { status: 'CANCELLED', dataText: dataText.slice(0, 300) },
+        })
+        const pivot = ai.reply || 'কোনো সমস্যা নেই! 😊 আমাদের আরও দারুণ অফার আছে — রেস্তোরাঁয় এসে উপভোগ করুন!'
+        await sendText(psid, pivot)
+        await saveChatTurn(psid, 'bot', pivot)
+        return
+      }
+
       if (ai.ok && ai.extracted) {
         if (fieldType === 'PHONE') {
           const p = parsePhoneLoose(ai.extracted)
@@ -456,18 +508,50 @@ async function handleEvent(event: MessagingEvent) {
           validData = ai.extracted.slice(0, 300)
         }
       }
-      // still nothing → the AI writes a friendly re-ask in the customer's own
-      // language; no AI reply / AI off → the standard retry text
-      if (!validData) {
-        await sendText(psid, ai.ok && ai.reply ? ai.reply : retryAsk(fieldType))
-        if (ai.ok && ai.reply) await saveChatTurn(psid, 'bot', ai.reply)
+
+      // still nothing → the AI's warm reply (max 2 gentle asks, then it just
+      // chats like a friend). The pending token STAYS alive — deterministic
+      // parsers keep running on every next message, so late data still applies
+      // the offer silently.
+      if (!validData && ai.ok) {
+        if (ai.reply) {
+          await sendText(psid, ai.reply)
+          await saveChatTurn(psid, 'bot', ai.reply)
+        }
+        if (askCount < 2) {
+          await db.referralToken.update({
+            where: { id: tokenRow.id },
+            data: { askCount: askCount + 1, ...(ai.reply ? { askedText: ai.reply.slice(0, 300) } : {}) },
+          })
+        }
+        return
+      }
+
+      // AI down (quota/network) → static retry while we haven't nagged, else soft
+      if (!validData && !ai.ok) {
+        if (askCount < 2) {
+          await sendText(psid, retryAsk(fieldType))
+          await db.referralToken.update({ where: { id: tokenRow.id }, data: { askCount: askCount + 1 } })
+        } else {
+          await sendText(psid, '😊 ঠিক আছে! সুবিধামতো সময়ে তথ্যটি পাঠিয়ে দিলেই অফারটি আপনার বিলে যোগ হয়ে যাবে।')
+        }
         return
       }
     }
 
-    // 2d. WRONG data → re-ask, NO discount (scam attempt blocked)
+    // 2d. WRONG data / AI off → re-ask at most twice, then STOP nagging (soft mode:
+    // friendly chat; if the datum arrives later the parsers still apply the offer)
     if (!validData) {
-      await sendText(psid, retryAsk(fieldType))
+      const askCount = tokenRow.askCount || 0
+      if (askCount < 2) {
+        await sendText(psid, retryAsk(fieldType))
+        await db.referralToken.update({ where: { id: tokenRow.id }, data: { askCount: askCount + 1 } })
+      } else {
+        const handled = await aiGeneralReply(psid, name, dataText)
+        if (!handled) {
+          await sendText(psid, '😊 ঠিক আছে! সুবিধামতো সময়ে তথ্যটি পাঠিয়ে দিলেই অফারটি আপনার বিলে যোগ হয়ে যাবে। আর কিছু জানতে চাইলে বলুন!')
+        }
+      }
       return
     }
 
