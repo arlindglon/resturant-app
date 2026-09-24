@@ -158,7 +158,9 @@ async function generateWithKey(
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
-    signal: AbortSignal.timeout(20_000),
+    // 20s ছোট মডেলের জন্য যথেষ্ট; বড় ফলব্যাক মডেল (gemma-4-31b-it) লম্বা প্রম্পটে
+    // বেশি সময় নেয় — ২৮ সে; বাজেট (45s) তবু সর্বোচ্চ সীমা টেনে ধরে
+    signal: AbortSignal.timeout(28_000),
   })
   const j = (await res.json().catch(() => ({}))) as GeminiResponse
   if (!res.ok || j.error) {
