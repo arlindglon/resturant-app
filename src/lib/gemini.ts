@@ -387,7 +387,7 @@ function looksLikePromptEcho(text: string): boolean {
 function stripProtocolLines(text: string): string {
   return text
     .split('\n')
-    .filter((l) => !/^\s*(?:[*-]\s*)?(?:INFO|DATA|ACTION)\s*:/i.test(l))
+    .filter((l) => !/^\s*(?:[*•‣▪–—-]\s*)?(?:INFO|DATA|ACTION)\s*:/i.test(l))
     .join('\n')
     .trim()
 }
@@ -433,7 +433,7 @@ function salvageFinalAnswer(text: string): string | null {
     if (looksLikeReasoning(p)) continue
     if (looksLikePromptEcho(p)) continue // persona-মিরর প্যারাগ্রাফ — আসল উত্তর নয়
     // প্রোটোকল লাইন (INFO:/DATA:|ACTION:) caller নিজে পার্স করে — উত্তর নয়
-    if (/^(?:[*-]\s*)?(?:INFO|DATA|ACTION)\s*:/i.test(p) && p.length < 300) continue
+    if (/^(?:[*•‣▪–—-]\s*)?(?:INFO|DATA|ACTION)\s*:/i.test(p) && p.length < 300) continue
     if (p.length < 3 || p.length > 900) continue
     return stripLeadLabels(p)
   }
@@ -1108,7 +1108,7 @@ ${opts.knowledgeBase.slice(0, 4000)}
         break
       }
     }
-    if (!reply && !j && !extracted && cleanPlainReply(raw, 900)) reply = stripLeadLabels(raw)
+    if (!reply && !j && !extracted && cleanPlainReply(raw, 900)) reply = stripLeadLabels(stripProtocolLines(raw))
   }
   return {
     ok: true,
