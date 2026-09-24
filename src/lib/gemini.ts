@@ -159,9 +159,9 @@ export async function generateWithKey(
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
-    // প্রতি-মডেল টাইমআউট: দুই Gemma-ই বড় প্রম্পটে ধীর — MoE 26B ছোট প্রম্পটে দ্রুত
-    // হলেও ফুল চ্যাট-প্রম্পটে ২২ সে-তে টাইমআউট খেয়েছিল (লাইভ যাচাই), তাই দুটোতেই ৪০ সে
-    signal: AbortSignal.timeout(40_000),
+    // প্রতি-মডেল টাইমআউট (দুই মডেলকেই সুযোগ, তবু ফলব্যাকের বাফার থাকবে):
+    // ২৪ + ২৮ = ৫২ সে সর্বোচ্চ — ৬০ সে after()-ফেজের মধ্যে static fallback-ও যায়
+    signal: AbortSignal.timeout(model === 'gemma-4-31b-it' ? 28_000 : 24_000),
   })
   const j = (await res.json().catch(() => ({}))) as GeminiResponse
   if (!res.ok || j.error) {
@@ -247,7 +247,7 @@ function bodyForModel(body: Record<string, unknown>, model: string): Record<stri
     const sysFull = (b.systemInstruction as { parts?: { text?: string }[] } | undefined)?.parts
       ?.map((p) => p.text || '')
       .join('\n\n')
-    const sys = sysFull ? sysFull.slice(0, 5500) : ''
+    const sys = sysFull ? sysFull.slice(0, 4000) : ''
     if (sys) {
       const contents = (b.contents as { role: string; parts: { text?: string }[] }[] | undefined) || []
       const merged = contents.map((c, i) =>
@@ -271,9 +271,11 @@ function bodyForModel(body: Record<string, unknown>, model: string): Record<stri
   delete gc.responseMimeType
   delete gc.responseSchema
   delete gc.thinkingConfig
-  // Gemma JSON-মোড মানে না — আসল রিপ্লাই ২০০-৫০০ টোকেনের মধ্যে; ১০২৪-ই যথেষ্ট।
-  // বিশ্লেষণ লিখতে শুরু করলে ১০২৪-এ কাটা পড়ে দ্রুত ফলব্যাক মডেলে যাওয়া যায়
-  gc.maxOutputTokens = Math.min((gc.maxOutputTokens as number | undefined) || 1024, 1024)
+  // Gemma-র JSON-ডিসিপ্লিন কম — নিচু টেম্পারেচারে বিশ্লেষণ-প্রবণতা ও ফরম্যাট-ভাঙা
+  // লক্ষণীয়ভাবে কমে (লাইভ টেস্ট-ভিত্তিক)
+  gc.temperature = Math.min((gc.temperature as number | undefined) ?? 1, 0.4)
+  // আসল রিপ্লাই ১০০-৪০০ টোকেন — ৭৬৮-তে বিশ্লেষণ দ্রুত কাটা পড়ে → দ্রুত ফলব্যাক
+  gc.maxOutputTokens = Math.min((gc.maxOutputTokens as number | undefined) || 768, 768)
   b.generationConfig = gc
   return b
 }
