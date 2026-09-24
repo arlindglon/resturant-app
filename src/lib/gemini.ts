@@ -25,14 +25,14 @@ const API_BASE = 'https://generativelanguage.googleapis.com/v1beta/models'
 // মালিকের নির্ধারিত মডেল তালিকা (পুরনোগুলো — 3.6/3.5-flash/2.5 — বাদ):
 //  ১. gemini-3.5-flash-lite  → প্রাইমারি (১৫ RPM, ৫০০/দিন)
 //  ২. gemini-3.1-flash-lite  → ব্যাকআপ (৫০০/দিন)
-//  ৩. gemma-4-31b            → হাই-ভলিউম ব্যাকআপ (৩০ RPM, ১৪,৪০০/দিন)
-// নোট: মালিকের তালিকায় gemma-4-26b-ও ছিল, কিন্তু Google API-তে সেই নাম নেই
-// (404 — লাইভ যাচাই করা) — প্রাইমারি/ব্যাকআপ ব্যস্ত হলে gemma-4-31b-ই কাজ দেয়।
+//  ৩. gemma-4-31b-it         → হাই-ভলিউম ব্যাকআপ (৩০ RPM, ১৪,৪০০/দিন)
+// নোট: মালিকের দেওয়া "gemma-4-26b" / "gemma-4-31b" নাম দুটি API-তে নেই (404 —
+// লাইভ যাচাই); Gemma 4-এর আসল নাম gemma-4-31b-it (instruction-tuned suffix)।
 // এই তালিকাই মডেল-ফলব্যাক চেইন নির্ধারণ করে (generateRotating দেখুন)।
 export const GEMINI_MODELS = [
   { id: 'gemini-3.5-flash-lite', label: 'Gemini 3.5 Flash-Lite (প্রাইমারি — দ্রুত, ৫০০/দিন)' },
   { id: 'gemini-3.1-flash-lite', label: 'Gemini 3.1 Flash-Lite (ব্যাকআপ ১ — ৫০০/দিন)' },
-  { id: 'gemma-4-31b', label: 'Gemma 4 31B (ব্যাকআপ — হাই-ভলিউম, ১৪,৪০০/দিন)' },
+  { id: 'gemma-4-31b-it', label: 'Gemma 4 31B (ব্যাকআপ — হাই-ভলিউম, ১৪,৪০০/দিন)' },
 ]
 
 export interface GeminiConfig {
