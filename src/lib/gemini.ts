@@ -154,14 +154,14 @@ export async function generateWithKey(
   key: string,
   model: string,
   body: Record<string, unknown>,
+  timeoutMs = 24_000,
 ): Promise<string> {
   const res = await fetch(`${API_BASE}/${encodeURIComponent(model)}:generateContent?key=${encodeURIComponent(key)}`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
-    // প্রতি-মডেল টাইমআউট (দুই মডেলকেই সুযোগ, তবু ফলব্যাকের বাফার থাকবে):
-    // ২৪ + ২৮ = ৫২ সে সর্বোচ্চ — ৬০ সে after()-ফেজের মধ্যে static fallback-ও যায়
-    signal: AbortSignal.timeout(model === 'gemma-4-31b-it' ? 28_000 : 24_000),
+    // কলার বাজেট-সচেতন টাইমআউট দেয় — ৩১B ধীর, তবে বাজেটের বাইরে গর্ত খোঁদে না
+    signal: AbortSignal.timeout(timeoutMs),
   })
   const j = (await res.json().catch(() => ({}))) as GeminiResponse
   if (!res.ok || j.error) {
@@ -247,8 +247,22 @@ function bodyForModel(body: Record<string, unknown>, model: string): Record<stri
     const sysFull = (b.systemInstruction as { parts?: { text?: string }[] } | undefined)?.parts
       ?.map((p) => p.text || '')
       .join('\n\n')
-    const sys = sysFull ? sysFull.slice(0, 4000) : ''
-    if (sys) {
+    if (sysFull) {
+      // KB-প্রথম স্লাইস: কাটার সময় persona-র লম্বা অংশ না কেটে KB (মেনু/অফার —
+      // সঠিক উত্তরের উপকরণ) যতটা সম্ভব রাখা হয়; আউটপুট-ফরম্যাট নির্দেশ সবশেষে
+      // আবার জুড়ে দেওয়া হয় যেন কাটা পড়ার ভয় না থাকে
+      const kbIdx = sysFull.indexOf('KNOWLEDGE BASE')
+      let sys: string
+      if (kbIdx > 0) {
+        const head = sysFull.slice(0, kbIdx) // persona + ফরম্যাট + বাড়তি নির্দেশ
+        const outIdx = Math.max(sysFull.lastIndexOf('\nআউটপুট'), sysFull.lastIndexOf('\nশেষ নির্দেশ'))
+        // আউটপুট-নির্দেশটা বাদ দিয়ে রাখি (tail-এ ডুপ্লিকেট হবে না), শেষে আবার জোড়া
+        const outRule = outIdx > kbIdx ? '\n\n' + sysFull.slice(outIdx + 1) : ''
+        const tailBase = outIdx > kbIdx ? sysFull.slice(kbIdx, outIdx) : sysFull.slice(kbIdx)
+        sys = `${head.slice(0, 1500)}\n\n${tailBase.slice(0, 2400)}${outRule}`
+      } else {
+        sys = sysFull.slice(0, 4000)
+      }
       const contents = (b.contents as { role: string; parts: { text?: string }[] }[] | undefined) || []
       const merged = contents.map((c, i) =>
         i === 0
@@ -378,13 +392,17 @@ async function generateRotating(
       if (!usable.length) break
 
       for (let i = 0; i < usable.length; i++) {
+        // ডেডলাইন-সচেতন: বাকি সময়ে অর্থবহ উত্তরই আসবে না — এই মডেল এখানেই শেষ
+        const tl = timeLeft()
+        if (tl < 9000) break
+        const perCall = model === 'gemma-4-31b-it' ? 28_000 : 24_000
         if (timeLeft() < 2000) return { ok: false, text: null, error: lastError }
         const key = usable[(rotationCursor + i) % usable.length]
         const nextCursor = () => {
           rotationCursor = (rotationCursor + i + 1) % Math.max(usable.length, 1)
         }
         try {
-          const text = await generateWithKey(key, model, mBody)
+          const text = await generateWithKey(key, model, mBody, Math.min(perCall, timeLeft() - 1500))
           // নিয়ম-ভাঙা আউটপুট (বিশ্লেষণ-লিক/JSON নেই) — এই মডেল এই কলে ঠিক হবে
           // না (key বদলালেও লাগে), তাই বাকি কি নষ্ট না করে সরাসরি পরের মডেলে
           if (validate && !validate(text)) {
