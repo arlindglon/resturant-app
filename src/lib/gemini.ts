@@ -380,6 +380,19 @@ function looksLikePromptEcho(text: string): boolean {
 }
 
 /**
+ * প্রোটোকল-লাইন স্ট্রিপার: উত্তরের ভেতরে/সাথে আঠালো হয়ে লেগে থাকা
+ * "INFO: ভাষা=bn…" / "DATA: …" / "ACTION: …" লাইন কাস্টমারকে যেতে পারে না —
+ * এগুলো শুধু মেশিন-পার্সিং প্রোটোকল। লাইন-শুরুতে থাকলেই পুরো লাইন বাদ।
+ */
+function stripProtocolLines(text: string): string {
+  return text
+    .split('\n')
+    .filter((l) => !/^\s*(?:[*-]\s*)?(?:INFO|DATA|ACTION)\s*:/i.test(l))
+    .join('\n')
+    .trim()
+}
+
+/**
  * Narration-লেবেল স্ট্রিপার: মডেল আসল উত্তরের আগে "Final Output Construction:",
  * "Final Answer:", "উত্তর:" জাতীয় হেডিং লেখে (লাইভ টেস্ট-প্রমাণ) — লেবেলটা
  * সরিয়ে পরিষ্কার উত্তরটাই কাস্টমারকে যায়।
@@ -745,7 +758,7 @@ ${opts.formatting !== false ? MESSENGER_FORMAT_RULES + '\n- এটা একট�
   // বিশ্লেষণ-লিক হলেও শেষ প্যারাগ্রাফে আসল মেসেজ থাকলে সেটাই যাবে (salvage);
   // নেতৃত্ব-লেবেল ("Final Answer:") সরানো হয়
   const rawText = str(j?.text) || (cleanPlainReply(res.text, 800) ? res.text.trim() : salvageFinalAnswer(res.text) || '')
-  const text = stripLeadLabels(rawText)
+  const text = stripLeadLabels(stripProtocolLines(rawText))
   if (!text || looksLikePromptEcho(text)) return { ok: false, text: null, error: 'আউটপুট প্রম্পট-ইকো/খালি' }
   return { ok: true, text, error: null }
 }
@@ -901,7 +914,7 @@ export async function chatWithCustomer(opts: {
   // JSON ভাঙা/অনুপস্থিত (gemma প্লেইন মোড) — INFO লাইন থাকলে পার্স করে CRM-এ যাবে,
   // বাকিটা ছোট পরিষ্কার plain উত্তর হলে রিপ্লাই; নাহলে static fallback-এ (লাইভ KB)
   const replyParsed = str(j?.reply)
-  let reply = stripLeadLabels(replyParsed)
+  let reply = stripLeadLabels(stripProtocolLines(replyParsed))
   if (reply && looksLikePromptEcho(reply)) reply = '' // persona-মিরর JSON-রিপ্লাই — বাতিল
   let extractedData = {
     name: str(j?.customerName) || null,
@@ -936,7 +949,7 @@ export async function chatWithCustomer(opts: {
       }
       reply = salvaged
     } else {
-      reply = stripLeadLabels(bodyText)
+      reply = stripLeadLabels(stripProtocolLines(bodyText))
     }
     const pick = (...keys: string[]): string | null => {
       for (const k of keys) if (info[k]) return info[k]
@@ -1073,7 +1086,7 @@ ${opts.knowledgeBase.slice(0, 4000)}
   let action: 'ASK' | 'CANCEL' = str(j?.action) === 'CANCEL' ? 'CANCEL' : 'ASK'
   // JSON রিপ্লাইতেও নেতৃত্ব-লেবেল ("Final Output Construction:") থাকতে পারে — সরানো;
   // persona-মিরর রিপ্লাই হলে বাতিল (deterministic ফ্লো সামলায়)
-  let reply = stripLeadLabels(str(j?.reply))
+  let reply = stripLeadLabels(stripProtocolLines(str(j?.reply)))
   if (reply && looksLikePromptEcho(reply)) reply = ''
   if (!j || (!reply && !extracted)) {
     const raw = res.text.trim()
@@ -1085,7 +1098,7 @@ ${opts.knowledgeBase.slice(0, 4000)}
         if (m[2]) action = m[2].toUpperCase() as 'ASK' | 'CANCEL'
         const bodyText = lines.slice(0, i).join('\n').trim()
         if (bodyText) {
-          if (cleanPlainReply(bodyText, 900)) reply = stripLeadLabels(bodyText)
+          if (cleanPlainReply(bodyText, 900)) reply = stripLeadLabels(stripProtocolLines(bodyText))
           else {
             // বিশ্লেষণের শেষে পরিষ্কার উত্তর থাকলে সেটাই (মালিকের নির্দেশ)
             const salvaged = salvageFinalAnswer(bodyText)
