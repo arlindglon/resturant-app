@@ -4231,6 +4231,7 @@ function SettingsTab({ onAuthRequired }: TabProps) {
   const [geminiTest, setGeminiTest] = useState<GeminiTestResult | null>(null)
   const [rnBusy, setRnBusy] = useState<'ask' | 'broadcast' | null>(null)
   const [rnResult, setRnResult] = useState<{ total: number; sent: number; failed: number; errors: string[] } | null>(null)
+  const [rnBroadcastText, setRnBroadcastText] = useState('')
   const logoFileRef = useRef<HTMLInputElement>(null)
 
   const load = useCallback(async () => {
@@ -4313,7 +4314,7 @@ function SettingsTab({ onAuthRequired }: TabProps) {
       [SETTING_KEYS.DEVELOPER_NOTE_LINK]: form[SETTING_KEYS.DEVELOPER_NOTE_LINK] ?? '',
       [SETTING_KEYS.ITEM_SPECIAL_NOTE_ENABLED]: form[SETTING_KEYS.ITEM_SPECIAL_NOTE_ENABLED] ?? 'true',
       [SETTING_KEYS.MESSENGER_AUTO_REPLY_ENABLED]: form[SETTING_KEYS.MESSENGER_AUTO_REPLY_ENABLED] ?? 'true',
-      [SETTING_KEYS.META_RN_TEMPLATE_ID]: form[SETTING_KEYS.META_RN_TEMPLATE_ID] ?? '',
+      [SETTING_KEYS.META_RN_TITLE]: form[SETTING_KEYS.META_RN_TITLE] ?? '',
       [SETTING_KEYS.GEMINI_ENABLED]: form[SETTING_KEYS.GEMINI_ENABLED] ?? 'false',
       [SETTING_KEYS.GEMINI_API_KEYS]: form[SETTING_KEYS.GEMINI_API_KEYS] ?? '',
       [SETTING_KEYS.GEMINI_MODEL]: form[SETTING_KEYS.GEMINI_MODEL] ?? 'gemini-3.6-flash',
@@ -4391,7 +4392,10 @@ function SettingsTab({ onAuthRequired }: TabProps) {
   const runRn = async (action: 'ask' | 'broadcast') => {
     setRnBusy(action)
     setRnResult(null)
-    const res = await api.post<{ total: number; sent: number; failed: number; errors: string[] }>('/api/admin/rn', { action })
+    const res = await api.post<{ total: number; sent: number; failed: number; errors: string[] }>('/api/admin/rn', {
+      action,
+      text: action === 'broadcast' ? rnBroadcastText.trim() || undefined : undefined,
+    })
     setRnBusy(null)
     if (!res.ok || !res.data) return toast.error(res.error || 'কাজ হয়নি')
     setRnResult(res.data)
@@ -5187,20 +5191,31 @@ function SettingsTab({ onAuthRequired }: TabProps) {
         </CardHeader>
         <CardContent className="space-y-3">
           <div className="rounded-lg border border-violet-200 bg-white p-3 text-xs leading-relaxed text-stone-600">
-            Meta-র নিয়ম: কাস্টমারের শেষ মেসেজের <b>২৪ ঘণ্টা পার হলে</b> সাধারণ মেসেজ পাঠানো যায় না। Recurring Notifications (সম্পূর্ণ ফ্রি) — কাস্টমার একবার <b>[Opt-in]</b> বাটনে ক্লিক করলেই সাপ্তাহিক অফার, উৎসবের শুভেচ্ছা ও জন্মদিনের সারপ্রাইজ <b>যেকোনো সময়</b> পাঠানো যাবে, কোনো এরর ছাড়াই।
+            Meta-র নিয়ম: কাস্টমারের শেষ মেসেজের <b>২৪ ঘণ্টা পার হলে</b> সাধারণ মেসেজ পাঠানো যায় না। Notification Messages (সম্পূর্ণ ফ্রি) — কাস্টমার একবার <b>[Get Updates]</b> বাটনে ক্লিক করলেই সাপ্তাহিক অফার, উৎসবের শুভেচ্ছা ও জন্মদিনের সারপ্রাইজ <b>যেকোনো সময়</b> পাঠানো যাবে। ✅ <b>কোনো Meta Dashboard টেমপ্লেট লাগে না</b> — টাইটেল আর রেস্টুরেন্টের লোগো সরাসরি কার্ডে যায়, সব অটো-ম্যাজিক!
           </div>
 
           <div className="space-y-1">
-            <FieldLabel>Meta RN Template ID</FieldLabel>
+            <FieldLabel>অপট-ইন কার্ডের টাইটেল (ঐচ্ছিক)</FieldLabel>
             <Input
-              value={form[SETTING_KEYS.META_RN_TEMPLATE_ID] ?? ''}
-              onChange={(e) => set(SETTING_KEYS.META_RN_TEMPLATE_ID, e.target.value)}
-              placeholder="যেমন: 1234567890123456"
-              className="max-w-xs font-mono text-xs"
+              value={form[SETTING_KEYS.META_RN_TITLE] ?? ''}
+              onChange={(e) => set(SETTING_KEYS.META_RN_TITLE, e.target.value)}
+              placeholder="সাপ্তাহিক অফার ও জন্মদিনের সারপ্রাইজ"
+              className="max-w-sm"
             />
             <p className="text-[11px] leading-relaxed text-stone-500">
-              কোথায় পাবেন: developers.facebook.com → আপনার App → Messenger → <b>Recurring Notifications</b> → টেমপ্লেট বানান (টাইটেল, লেখা, ছবি, বাটন — যেমন “ভাইয়া, সাপ্তাহিক অফার ও জন্মদিনের সারপ্রাইজ গিফট পেতে চান?”) → টেমপ্লেটের ID কপি করে এখানে বসিয়ে <b>সেটিংস সেভ করুন</b>।
+              ফাঁকা রাখলে ডিফল্ট টাইটেল যাবে: “সাপ্তাহিক অফার ও জন্মদিনের সারপ্রাইজ”। সর্বোচ্চ ৬৫ অক্ষর — একই টাইটেল একই কাস্টমারকে সপ্তাহে একবারের বেশি পাঠানো যায় না (Meta স্প্যাম-নিয়ম)। কার্ডে রেস্টুরেন্টের লোগোও দেখাবে (সেটিংসে যে লোগো আছে)।
             </p>
+          </div>
+
+          <div className="space-y-1">
+            <FieldLabel>ব্রডকাস্ট মেসেজ (ঐচ্ছিক — ফাঁকা রাখলে ডিফল্ট অফার-লেখা যাবে)</FieldLabel>
+            <Textarea
+              value={rnBroadcastText}
+              onChange={(e) => setRnBroadcastText(e.target.value)}
+              rows={3}
+              placeholder="🎁 এই সপ্তাহের স্পেশাল অফার…"
+              className="max-w-lg text-sm"
+            />
           </div>
 
           <div className="flex flex-wrap gap-2">

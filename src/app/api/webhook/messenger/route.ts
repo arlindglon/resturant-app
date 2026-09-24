@@ -19,7 +19,7 @@ import { NextRequest } from 'next/server'
 import crypto from 'crypto'
 import { db } from '@/lib/db'
 import { fail, ok } from '@/lib/api'
-import { fetchMessengerProfile, askPhoneQuickReply, sendReceipt, sendText, sendRnOptInTemplate } from '@/lib/messenger'
+import { fetchMessengerProfile, askPhoneQuickReply, sendReceipt, sendText, sendRnOptInRequest } from '@/lib/messenger'
 import { applyBirthdayDiscount } from '@/lib/birthday'
 import { setSettings, getSetting } from '@/lib/settings'
 import { SETTING_KEYS } from '@/lib/constants'
@@ -113,11 +113,16 @@ interface MessagingEvent {
   recipient?: { id: string }
   referral?: { ref?: string; source?: string; type?: string }
   postback?: { payload?: string; referral?: { ref?: string } }
-  // Recurring Notifications opt-in (customer tapped [Opt-in] on the RN card).
-  // Meta delivers the PSID as sender OR recipient depending on the event type.
+  // Marketing/Notification Messages opt-in (customer tapped [Get Updates] on
+  // the opt-in card). Meta delivers the PSID as sender OR recipient depending
+  // on the event type. New API: token comes as optin.notification_messages_token
+  // and optin.payload is a string; legacy events carried optin.payload.token.
   optin?: {
     type?: string
-    payload?: { token?: string; recurring_notification_topic?: string }
+    payload?: string | { token?: string; recurring_notification_topic?: string }
+    notification_messages_token?: string
+    notification_messages_timezone?: string
+    title?: string
     user_token_status?: string
     ref?: string
   }
@@ -412,13 +417,14 @@ async function handleRnOptIn(psid: string, optin: NonNullable<MessagingEvent['op
       console.log('[webhook:rn] opt-in revoked —', psid)
       return
     }
-    const token = optin.payload?.token || ''
+    const token = optin.notification_messages_token || (typeof optin.payload === 'object' && optin.payload?.token) || ''
     if (!token) return
+    const topic = optin.title || (typeof optin.payload === 'string' ? optin.payload : null) || (typeof optin.payload === 'object' ? optin.payload?.recurring_notification_topic : null) || null
     await db.customer.updateMany({
       where: { psid },
       data: {
         rnToken: token,
-        rnTopic: optin.payload?.recurring_notification_topic || null,
+        rnTopic: topic,
         rnOptInAt: new Date(),
       },
     })
@@ -435,13 +441,13 @@ async function handleRnOptIn(psid: string, optin: NonNullable<MessagingEvent['op
  */
 async function maybeAskRnOptIn(psid: string): Promise<void> {
   try {
-    const templateId = ((await getSetting(SETTING_KEYS.META_RN_TEMPLATE_ID)) || '').trim()
-    if (!templateId) return // মালিক এখনো Meta-তে RN টেমপ্লেট বানায়নি — কিছু করার নেই
     const cust = await db.customer.findUnique({ where: { psid }, select: { rnToken: true, rnAskedAt: true } })
     if (!cust || cust.rnToken) return // ইতোমধ্যে অপট-ইন করা — আর ভদ্রতা দেখানোর দরকার নেই
     if (cust.rnAskedAt && Date.now() - cust.rnAskedAt.getTime() < RN_ASK_COOLDOWN_MS) return // no-nag guard
     await db.customer.update({ where: { psid }, data: { rnAskedAt: new Date() } })
-    const r = await sendRnOptInTemplate(psid, templateId)
+    const title = ((await getSetting(SETTING_KEYS.META_RN_TITLE)) || '').trim() || undefined
+    const logo = ((await getSetting(SETTING_KEYS.RESTAURANT_LOGO_URL)) || '').trim() || null
+    const r = await sendRnOptInRequest(psid, { title, imageUrl: logo })
     if (!r.ok) console.error('[webhook:rn-ask]', r.error)
   } catch (e) {
     console.error('[webhook:rn-ask]', e)
@@ -454,7 +460,7 @@ async function handleEvent(event: MessagingEvent) {
   // Case 0: Recurring Notifications opt-in — the customer tapped [Opt-in] on the
   // RN template card. The PSID may arrive as sender OR recipient (Meta uses
   // recipient for marketing-message opt-ins), so check both.
-  if (event.optin && (event.optin.payload?.token || event.optin.user_token_status === 'REVOKED')) {
+  if (event.optin && (event.optin.notification_messages_token || (typeof event.optin.payload === 'object' && event.optin.payload?.token) || event.optin.user_token_status === 'REVOKED')) {
     const psidOptin = event.sender?.id || event.recipient?.id
     if (psidOptin) await handleRnOptIn(psidOptin, event.optin)
     return

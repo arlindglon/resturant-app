@@ -223,8 +223,6 @@ export async function runBirthdayCron(): Promise<{ sent: number; skipped: boolea
   const fmt = new Intl.DateTimeFormat('en-US', { timeZone: tz, month: '2-digit', day: '2-digit' })
   const [mm, dd] = fmt.format(now).split('/').map(Number)
 
-  const rnTemplate = ((await getSetting(SETTING_KEYS.META_RN_TEMPLATE_ID)) || '').trim()
-
   const customers = await db.customer.findMany()
   let sent = 0
   for (const c of customers) {
@@ -235,8 +233,11 @@ export async function runBirthdayCron(): Promise<{ sent: number; skipped: boolea
     // never greet with a placeholder word — real name only
     const nm = c.firstName && !/^customer$/i.test(c.firstName) ? c.firstName : ''
     // 🔔 RN-চালু কাস্টমার → নোটিফিকেশন টোকেন দিয়ে পাঠাই (24h window-নির্ভর নয়)
-    if (c.rnToken && rnTemplate) {
-      const rn = await sendRnToToken(rnTemplate, c.rnToken)
+    if (c.rnToken) {
+      const rn = await sendRnToToken(
+        c.rnToken,
+        `🎂 শুভ জন্মদিন${nm ? ` ${nm}` : ''}!\n\nআপনার বিশেষ দিনে আমাদের পক্ষ থেকে ছোট্ট উপহার — কুপন "BDAY${mm}${dd}" ব্যবহার করে আজকের অর্ডারে ১৫% ছাড় নিন! 🎉\nআমরা অপেক্ষায় আছি।`
+      )
       if (rn.ok) {
         sent++
         continue

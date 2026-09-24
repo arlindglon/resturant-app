@@ -86,7 +86,7 @@ export const SETTING_KEYS = {
   DEVELOPER_NOTE_LINK: 'developer_note_link',
   ITEM_SPECIAL_NOTE_ENABLED: 'item_special_note_enabled',
   MESSENGER_AUTO_REPLY_ENABLED: 'messenger_auto_reply_enabled',
-  META_RN_TEMPLATE_ID: 'meta_rn_template_id', // Meta Recurring Notifications template — 24h-window-free marketing messages
+  META_RN_TITLE: 'meta_rn_title', // opt-in কার্ডের টাইটেল — ২৪ঘ-উইন্ডো-বহির্ভূত notification messages (ফাঁকা = ডিফল্ট)
   GEMINI_ENABLED: 'gemini_enabled',
   GEMINI_API_KEYS: 'gemini_api_keys',
   GEMINI_MODEL: 'gemini_model',
@@ -128,7 +128,7 @@ export const SETTING_DEFAULTS: Record<string, string> = {
   [SETTING_KEYS.DEVELOPER_NOTE_LINK]: 'https://github.com/',
   [SETTING_KEYS.ITEM_SPECIAL_NOTE_ENABLED]: 'true',
   [SETTING_KEYS.MESSENGER_AUTO_REPLY_ENABLED]: 'true',
-  [SETTING_KEYS.META_RN_TEMPLATE_ID]: '',
+  [SETTING_KEYS.META_RN_TITLE]: '',
   [SETTING_KEYS.GEMINI_ENABLED]: 'false',
   [SETTING_KEYS.GEMINI_API_KEYS]: '',
   [SETTING_KEYS.GEMINI_MODEL]: 'gemini-3.6-flash',

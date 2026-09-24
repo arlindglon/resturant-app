@@ -200,6 +200,10 @@ export async function sendBirthdayGreeting(psid: string, name: string, voucherCo
  * ইভেন্টে একটি notification token আসে; সেই টোকেন দিয়ে যেকোনো সময় (টপিকের
  * ফ্রিকোয়েন্সি অনুযায়ী) মেসেজ পাঠানো যায় — জন্মদিন, উৎসব, সাপ্তাহিক অফার। */
 
+/** opt-in কার্ডের টাইটেল (≤৬৫ অক্ষর) — admin চাইলে meta_rn_title সেটিং দিয়ে বদলাতে পারবেন */
+export const RN_DEFAULT_TITLE = 'সাপ্তাহিক অফার ও জন্মদিনের সারপ্রাইজ'
+const RN_TIMEZONE = 'Asia/Dhaka'
+
 interface GraphSendResult {
   ok: boolean
   error?: string
@@ -224,49 +228,45 @@ async function graphPost<T>(path: string, body: unknown): Promise<{ ok: boolean;
   }
 }
 
-/** create the recurring-notification creative (template wrapped for the Send API) */
-async function createRnCreative(templateId: string): Promise<{ ok: boolean; creativeId?: string; error?: string }> {
-  const r = await graphPost<{ message_creative_id?: string }>('/me/message_creatives', {
-    message: {
-      template: {
-        type: 'recurring_notification',
-        payload: { template_id: templateId },
-      },
-    },
-  })
-  if (!r.ok || !r.data?.message_creative_id) return { ok: false, error: r.error || 'message_creative তৈরি হয়নি' }
-  return { ok: true, creativeId: r.data.message_creative_id }
-}
-
 /**
- * Send the RN template to a PSID — this renders the card with the [Opt-in]
- * button. When the customer taps it, Meta fires the messaging_optins webhook
- * and we store the token on the CRM customer (rnToken).
+ * Opt-in request card → renders the [Get Updates] button in Messenger.
+ * Must be sent within the customer's 24h window. কোনো টেমপ্লেট ID লাগে না —
+ * টাইটেল + লোগো সরাসরি পে-লোডে যায় (docs: template_type notification_messages)।
+ * কাস্টমার বাটনে ক্লিক করলে Meta messaging_optins webhook পাঠায় আমরা
+ * টোকেনটা CRM কাস্টমারের rnToken-এ জমা রাখি।
  */
-export async function sendRnOptInTemplate(psid: string, templateId: string): Promise<GraphSendResult> {
-  const creative = await createRnCreative(templateId)
-  if (!creative.ok || !creative.creativeId) return { ok: false, error: creative.error }
+export async function sendRnOptInRequest(
+  psid: string,
+  opts?: { title?: string; imageUrl?: string | null }
+): Promise<GraphSendResult> {
+  const payload: Record<string, unknown> = {
+    template_type: 'notification_messages',
+    title: (opts?.title || RN_DEFAULT_TITLE).trim().slice(0, 65) || RN_DEFAULT_TITLE,
+    notification_messages_cta_text: 'GET_UPDATES',
+    notification_messages_timezone: RN_TIMEZONE,
+    payload: 'teantreat_rn',
+  }
+  if (opts?.imageUrl) payload.image_url = opts.imageUrl
   const r = await graphPost('/me/messages', {
     recipient: { id: psid },
-    message: { message_creative_id: creative.creativeId },
+    message: { attachment: { type: 'template', payload } },
   })
   return { ok: r.ok, error: r.error }
 }
 
 /**
- * Deliver the RN template to an OPTED-IN customer via their notification
- * token — works even 24h+ after their last message. The documented recipient
- * key is notification_message_token; some Graph versions expect
- * notification_messages_token → we try both before giving up.
+ * Deliver a message to an OPTED-IN customer via their notification token —
+ * works even 24h+ after their last message (প্রতি টোকেনে ২৪ ঘণ্টা কুলডাউন;
+ * followup-মেসেজে প্রযোজ্য নয়)। সরাসরি টেক্সট — কোনো creative লাগে না।
+ * Docs key: notification_messages_token; পুরোনো কিছু Graph ভার্সন
+ * notification_message_token চায় → দুটোই চেষ্টা করি।
  */
-export async function sendRnToToken(templateId: string, token: string): Promise<GraphSendResult> {
-  const creative = await createRnCreative(templateId)
-  if (!creative.ok || !creative.creativeId) return { ok: false, error: creative.error }
+export async function sendRnToToken(token: string, text: string): Promise<GraphSendResult> {
   let lastError = 'notification token rejected by Graph'
-  for (const key of ['notification_message_token', 'notification_messages_token']) {
+  for (const key of ['notification_messages_token', 'notification_message_token']) {
     const r = await graphPost('/me/messages', {
       recipient: { [key]: token },
-      message: { message_creative_id: creative.creativeId },
+      message: { text },
     })
     if (r.ok) return { ok: true }
     lastError = r.error || lastError
