@@ -150,7 +150,7 @@ interface GeminiResponse {
 }
 
 /** single-key generateContent; throws typed errors so rotation can decide */
-async function generateWithKey(
+export async function generateWithKey(
   key: string,
   model: string,
   body: Record<string, unknown>,
