@@ -298,7 +298,9 @@ export async function composePersonalBlast(opts: {
     contents: [{ role: 'user', parts: [{ text: 'এই কাস্টমারের জন্য মেসেজটা লিখো।' }] }],
     generationConfig: {
       temperature: 1.0,
-      maxOutputTokens: 1024,
+      // Gemini 3.x thinking মডেল: thinking টোকেনও এই বাজেট থেকেই কাটে —
+      // ছোট বাজেটে পুরোটাই thinking-এ শেষ, দৃশ্যমান মেসেজই থাকে না
+      maxOutputTokens: 2048,
       responseMimeType: 'application/json',
       responseSchema: BLAST_SCHEMA,
     },
