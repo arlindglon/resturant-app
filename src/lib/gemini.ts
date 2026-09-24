@@ -172,6 +172,11 @@ async function generateWithKey(
     const reason = j.candidates?.[0]?.finishReason || (j.error as { status?: string } | undefined)?.status || 'UNKNOWN'
     throw new Error(`Gemini খালি উত্তর দিয়েছে (finishReason: ${reason})`)
   }
+  // কাটা উত্তর (MAX_TOKENS): JSON-schema কলে এটা ভাঙা JSON — কাস্টমারকে কখনো
+  // আধা-উত্তর/কাঁচা JSON যাবে না; rotation এটাকে retryable ধরে strip/পরের মডেলে যায়
+  if (j.candidates?.[0]?.finishReason === 'MAX_TOKENS') {
+    throw new Error(`Gemini আউটপুট কাটা পড়েছে (MAX_TOKENS) — উত্তর অসম্পূর্ণ`)
+  }
   return text
 }
 
@@ -289,6 +294,22 @@ async function generateRotating(
           // মৃত কি (ভুল কি / পারমিশন নেই / অঞ্চল-ব্লক) — ১০ মিনিট স্কিপ
           if (isDeadKeyError(msg)) {
             markKeyBad(key, msg)
+            continue
+          }
+          // কাটা উত্তর (MAX_TOKENS): thinkingConfig থাকলে বাদ দিয়ে একই জায়গায়
+          // আরেকবার (thinking-ই বাজেট খেয়েছিল); নাহলে পরের কি/মডেলে
+          const truncated = /MAX_TOKENS|কাটা পড়েছে/.test(msg)
+          if (truncated) {
+            if (body.generationConfig && (body.generationConfig as Record<string, unknown>).thinkingConfig) {
+              try {
+                const text = await generateWithKey(key, model, stripThinking())
+                markKeyGood(key)
+                nextCursor()
+                return { ok: true, text, error: null }
+              } catch {
+                /* strip করেও কাটা → পরের কি/মডেল */
+              }
+            }
             continue
           }
           const waitS = retryDelaySeconds(msg)
@@ -436,7 +457,8 @@ ${opts.formatting !== false ? MESSENGER_FORMAT_RULES + '\n- এটা একট�
       temperature: 1.0,
       // Gemini 3.x thinking বন্ধ — ব্রডকাস্ট দ্রুত লেখা শেষ হয় (প্রতি কাস্টমারে ২-৫ সে সময় বাঁচে)
       thinkingConfig: { thinkingBudget: 0 },
-      maxOutputTokens: 2048,
+      // বড় বাজেট: মডেল thinking-ইগনোর করলেও JSON কাটা না পড়ে সম্পূর্ণ থাকে
+      maxOutputTokens: 8192,
       responseMimeType: 'application/json',
       responseSchema: BLAST_SCHEMA,
     },
@@ -566,7 +588,9 @@ export async function chatWithCustomer(opts: {
       // thinking বন্ধ → পুরো টোকেন বাজেট উত্তরে, রিপ্লাই ২-৫ সেকেন্ড দ্রুত;
       // মডেল ফিল্ডটা না মানলে generateRotating নিজেই বাদ দিয়ে আবার চেষ্টা করে
       thinkingConfig: { thinkingBudget: 0 },
-      maxOutputTokens: 2048,
+      // বড় বাজেট: thinking অগ্রাহ্য হলেও JSON সম্পূর্ণ থাকে (MAX_TOKENS →
+      // rotation strip/মডেল-ফলব্যাক করে সঠিক উত্তর আনে)
+      maxOutputTokens: 8192,
       responseMimeType: 'application/json',
       responseSchema: CHAT_SCHEMA,
     },
@@ -690,7 +714,7 @@ JSON ফরম্যাট: {"extractedData":"","reply":"","action":"ASK"}`
     generationConfig: {
       temperature: 0.7,
       thinkingConfig: { thinkingBudget: 0 },
-      maxOutputTokens: 1024,
+      maxOutputTokens: 4096,
       responseMimeType: 'application/json',
       responseSchema: VERIFY_SCHEMA,
     },
