@@ -7,6 +7,7 @@ import { emitEvent } from '@/lib/emit'
 import { appendLedger, LEDGER_TYPES } from '@/lib/ledger'
 import { deviceMatch } from '@/lib/device'
 import { nextCustomerCode } from '@/lib/customer-code'
+import { t, pickBotLang, globalBotLang, type BotLang } from '@/lib/bot-text'
 
 export interface AntiFraudResult {
   ok: boolean
@@ -24,7 +25,9 @@ export async function antiFraudCheck(p: {
   deviceFp?: string | null
   sessionId: string
   occasionId?: string | null
+  lang?: BotLang // pack language for the customer-facing block reasons (default bn)
 }): Promise<AntiFraudResult> {
+  const L = p.lang ?? 'bn'
   const deviceOr = deviceMatch({ id: p.deviceId, fp: p.deviceFp || null })
 
   if (p.occasionId) {
@@ -33,11 +36,11 @@ export async function antiFraudCheck(p: {
       where: { sessionId: p.sessionId, occasionId: { not: null } },
     })
     if (sessionOffer) {
-      return { ok: false, reason: 'এই বিলে ইতোমধ্যে একটি অফার ব্যবহার করা হয়েছে — প্রতি বিলে একটি অফারই প্রযোজ্য। বিল পরিশোধ করে আবার স্ক্যান করলেই নতুন অফার নিতে পারবেন! 😊' }
+      return { ok: false, reason: t(L, 'blockOnePerBill') }
     }
     const sessionRow = await db.tableSession.findUnique({ where: { id: p.sessionId } })
     if (sessionRow?.birthdayGranted) {
-      return { ok: false, reason: 'এই বিলে ইতোমধ্যে একটি অফার ব্যবহার করা হয়েছে — প্রতি বিলে একটি অফারই প্রযোজ্য। বিল পরিশোধ করে আবার স্ক্যান করলেই নতুন অফার নিতে পারবেন! 😊' }
+      return { ok: false, reason: t(L, 'blockOnePerBill') }
     }
 
     // ── 2. THIS offer already claimed earlier by the same customer / phone / device?
@@ -52,26 +55,26 @@ export async function antiFraudCheck(p: {
         ],
       },
     })
-    if (prior) return { ok: false, reason: 'এই অফারটি আগেই দাবি করা হয়েছে — একবারই প্রযোজ্য।' }
+    if (prior) return { ok: false, reason: t(L, 'blockOfferUsed') }
   } else {
     // ── legacy birthday (no occasion selected): lifetime locks ──
     // 1. Facebook ID already claimed lifetime discount?
     const byPsid = await db.customer.findUnique({ where: { psid: p.psid } })
-    if (byPsid?.discountClaimed) return { ok: false, reason: 'জন্মদিনের ছাড়টি ইতোমধ্যে দাবি করা হয়েছে।' }
+    if (byPsid?.discountClaimed) return { ok: false, reason: t(L, 'blockBirthdayUsed') }
 
     // 2. Phone already claimed?
     const byPhone = await db.customer.findUnique({ where: { phone: p.phone } })
-    if (byPhone?.discountClaimed) return { ok: false, reason: 'এই ফোন নম্বর ইতোমধ্যে ছাড় নিয়েছে।' }
+    if (byPhone?.discountClaimed) return { ok: false, reason: t(L, 'blockPhoneUsed') }
 
     // 3. Device (id OR fingerprint) already claimed the legacy birthday — lifetime?
     if (deviceOr.length > 0) {
       const byDevice = await db.birthdayClaim.findFirst({ where: { OR: deviceOr, occasionId: null } })
-      if (byDevice) return { ok: false, reason: 'জন্মদিনের ছাড়টি আগেই দাবি করা হয়েছে — একবারই প্রযোজ্য।' }
+      if (byDevice) return { ok: false, reason: t(L, 'blockDeviceUsed') }
     }
 
     // 4. This bill already got the discount?
     const session = await db.tableSession.findUnique({ where: { id: p.sessionId } })
-    if (session?.birthdayGranted) return { ok: false, reason: 'এই বিলে ইতোমধ্যে ছাড় প্রয়োগ করা হয়েছে।' }
+    if (session?.birthdayGranted) return { ok: false, reason: t(L, 'blockBillUsed') }
   }
 
   // 5. Minimum bill? (occasion-specific min overrides the global birthday min)
@@ -85,7 +88,7 @@ export async function antiFraudCheck(p: {
     _sum: { subtotal: true },
   })
   const subtotal = orders._sum.subtotal || 0
-  if (subtotal < minBill) return { ok: false, reason: `ন্যূনতম বিল ৳${minBill} হলে ছাড় প্রযোজ্য।` }
+  if (subtotal < minBill) return { ok: false, reason: t(L, 'blockMinBill', { min: minBill }) }
 
   return { ok: true }
 }
@@ -104,12 +107,14 @@ export async function applyBirthdayDiscount(p: {
   occasionId?: string | null
   occasionName?: string | null
   dataText?: string | null // verification data the customer provided (messenger flow)
+  lang?: BotLang // pack language for the customer-facing messages (default bn)
 }): Promise<{ ok: boolean; message: string }> {
+  const L = p.lang ?? 'bn'
   // occasion override (anniversary, wedding, custom occasion from admin panel)
   let amount = await getSettingNumber(SETTING_KEYS.BIRTHDAY_DISCOUNT_AMOUNT, 50)
   if (p.occasionId) {
     const occ = await db.occasionOffer.findUnique({ where: { id: p.occasionId } }).catch(() => null)
-    if (!occ || !occ.active) return { ok: false, message: 'নির্বাচিত অফারটি এখন সক্রিয় নয়' }
+    if (!occ || !occ.active) return { ok: false, message: t(L, 'errOfferInactive') }
     amount = occ.discount
   }
 
@@ -123,14 +128,14 @@ export async function applyBirthdayDiscount(p: {
       tableNumber: p.tableNumber,
       payload: { psid: p.psid, phone: p.phone, reason: check.reason || 'anti_fraud' },
     })
-    return { ok: false, message: check.reason || 'অ্যান্টি-ফ্রড চেক ব্যর্থ' }
+    return { ok: false, message: check.reason || t(L, 'errFraudFallback') }
   }
 
   const session = await db.tableSession.findUnique({
     where: { id: p.sessionId },
     include: { table: true },
   })
-  if (!session) return { ok: false, message: 'সেশন পাওয়া যায়নি' }
+  if (!session) return { ok: false, message: t(L, 'errNoSession') }
 
   // apply to the most recent non-completed order, else latest order
   const targetOrder =
@@ -143,7 +148,7 @@ export async function applyBirthdayDiscount(p: {
       orderBy: { placedAt: 'desc' },
     }))
 
-  if (!targetOrder) return { ok: false, message: 'কোনো অর্ডার পাওয়া যায়নি' }
+  if (!targetOrder) return { ok: false, message: t(L, 'errNoOrder') }
 
   const discount = Math.min(amount, targetOrder.total)
   const prevDiscount = targetOrder.birthdayDiscount || 0
@@ -207,7 +212,7 @@ export async function applyBirthdayDiscount(p: {
     status: targetOrder.status,
     birthdayDiscount: discount,
   })
-  return { ok: true, message: `৳${discount} ছাড় প্রয়োগ হয়েছে!` }
+  return { ok: true, message: t(L, 'applySuccess', { amt: discount }) }
 }
 
 /** Daily cron: birthday greetings + voucher.
@@ -224,6 +229,7 @@ export async function runBirthdayCron(): Promise<{ sent: number; skipped: boolea
   const [mm, dd] = fmt.format(now).split('/').map(Number)
 
   const customers = await db.customer.findMany()
+  const globalLang = await globalBotLang()
   let sent = 0
   for (const c of customers) {
     if (!c.birthday) continue
@@ -231,23 +237,22 @@ export async function runBirthdayCron(): Promise<{ sent: number; skipped: boolea
     const bd = c.birthday.getDate()
     if (bm !== mm || bd !== dd) continue
     // never greet with a placeholder word — real name only
-    const nm = c.firstName && !/^customer$/i.test(c.firstName) ? c.firstName : ''
+    const nm = c.firstName && !/^customer$/i.test(c.firstName) && c.firstName !== 'নাম যাচাই বাকি' ? c.firstName : ''
+    // ভাষা: কাস্টমারের মার্ক করা ভাষা > admin গ্লোবাল সেটিং > বাংলা
+    const wish = t(pickBotLang(c.language, globalLang), 'birthdayWish', {
+      name: nm ? ` ${nm}` : '',
+      coupon: `BDAY${mm}${dd}`,
+    })
     // 🔔 RN-চালু কাস্টমার → নোটিফিকেশন টোকেন দিয়ে পাঠাই (24h window-নির্ভর নয়)
     if (c.rnToken) {
-      const rn = await sendRnToToken(
-        c.rnToken,
-        `🎂 শুভ জন্মদিন${nm ? ` ${nm}` : ''}!\n\nআপনার বিশেষ দিনে আমাদের পক্ষ থেকে ছোট্ট উপহার — কুপন "BDAY${mm}${dd}" ব্যবহার করে আজকের অর্ডারে ১৫% ছাড় নিন! 🎉\nআমরা অপেক্ষায় আছি।`
-      )
+      const rn = await sendRnToToken(c.rnToken, wish)
       if (rn.ok) {
         sent++
         continue
       }
       console.error('[cron:rn-birthday]', c.psid, rn.error) // fall through to text
     }
-    const ok = await sendText(
-      c.psid,
-      `🎂 শুভ জন্মদিন${nm ? ` ${nm}` : ''}!\n\nআপনার বিশেষ দিনে আমাদের পক্ষ থেকে ছোট্ট উপহার — কুপন "BDAY${mm}${dd}" ব্যবহার করে আজকের অর্ডারে ১৫% ছাড় নিন! 🎉\nআমরা অপেক্ষায় আছি।`
-    )
+    const ok = await sendText(c.psid, wish)
     if (ok) sent++
   }
   return { sent, skipped: false }

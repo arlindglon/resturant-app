@@ -26,6 +26,7 @@ import { SETTING_KEYS } from '@/lib/constants'
 import { parseDateLoose, parsePhoneLoose } from '@/lib/verify'
 import { nextCustomerCode } from '@/lib/customer-code'
 import { buildKnowledgeBase } from '@/lib/knowledge'
+import { t, pickBotLang, globalBotLang, aiLanguageFor, nameVar, type BotLang } from '@/lib/bot-text'
 import {
   aiChatEnabled,
   chatWithCustomer,
@@ -173,34 +174,30 @@ function politeName(p: { firstName?: string | null; lastName?: string | null }):
   return full
 }
 
-/** greeting head that never shows a placeholder name */
-function greet(name: string): string {
-  return name ? `স্বাগতম ${name}! 🎉` : 'স্বাগতম! 🎉'
+/** greeting head that never shows a placeholder name (localized) */
+function greet(name: string, lang: BotLang): string {
+  return t(lang, 'greet', { name: nameVar(name) })
 }
 
 /** friendly follow-the-page nudge (link shown when the page username is configured) */
-async function followNudge(): Promise<string> {
+async function followNudge(lang: BotLang): Promise<string> {
   const username = ((await getSetting(SETTING_KEYS.MESSENGER_PAGE_USERNAME)) || '').trim()
   if (!username) return ''
-  return `\n\n💙 আমাদের Facebook পেজ Follow করে রাখুন — নতুন অফার সবার আগে পাবেন!\n${'https://facebook.com/'}${username}`
+  return t(lang, 'followNudge', { url: `https://facebook.com/${username}` })
 }
 
 /** default ask-text per field type (when the admin left askText empty) */
-function defaultAsk(fieldType: string): string {
-  if (fieldType === 'PHONE') return 'যাচাইয়ের জন্য আপনার ফোন নম্বরটি পাঠান।'
-  if (fieldType === 'TEXT') return 'যাচাইয়ের জন্য নিচে আপনার তথ্যটি লিখে পাঠান।'
-  return 'যাচাইয়ের জন্য তারিখটি লিখে পাঠান (যেমন: 15/03/1995 বা 15 মার্চ 1995)।'
+function defaultAsk(fieldType: string, lang: BotLang): string {
+  if (fieldType === 'PHONE') return t(lang, 'askPhone')
+  if (fieldType === 'TEXT') return t(lang, 'askText')
+  return t(lang, 'askDate')
 }
 
 /** wrong-data retry text per field type */
-function retryAsk(fieldType: string): string {
-  if (fieldType === 'PHONE') {
-    return '😔 এটি সঠিক ফোন নম্বর মনে হচ্ছে না। ১১ ডিজিটের নম্বর লিখে পাঠান (যেমন: 01712345678)।'
-  }
-  if (fieldType === 'TEXT') {
-    return '😔 বুঝতে পারা যায়নি — একটু পরিষ্কার করে আবার লিখে পাঠান।'
-  }
-  return '😔 এটি সঠিক তারিখ মনে হচ্ছে না। এভাবে লিখে পাঠান: 15/03/1995 অথবা 15 মার্চ 1995।'
+function retryAsk(fieldType: string, lang: BotLang): string {
+  if (fieldType === 'PHONE') return t(lang, 'retryPhone')
+  if (fieldType === 'TEXT') return t(lang, 'retryText')
+  return t(lang, 'retryDate')
 }
 
 /** build + send the "send me your verification data" message for an offer */
@@ -209,13 +206,20 @@ async function askVerificationData(
   name: string,
   offer: { name: string; emoji: string; discount: number; askText: string | null; fieldType: string } | null,
   tableNumber: number,
+  lang: BotLang,
 ): Promise<void> {
   const fieldType = offer?.fieldType || 'DATE'
-  const ask = offer?.askText?.trim() || defaultAsk(fieldType)
+  const ask = offer?.askText?.trim() || defaultAsk(fieldType, lang)
   const head = offer
-    ? `${offer.emoji || '🎁'} ${offer.name} — ৳${offer.discount} ছাড় অফার!\n\n${greet(name)} দারুণ পছন্দ! 😊\n\nশুধু ছোট্ট একটা যাচাই দরকার — ${ask}`
-    : `${greet(name)}\n\n${ask}`
-  const tail = `\n\nযেভাবে সুবিধা হয় লিখতে পারেন (বাংলা/English)।\n✅ তথ্যটি মিলে গেলেই ছাড়টি আপনার বিলে (টেবিল ${tableNumber}) যোগ হয়ে যাবে।`
+    ? t(lang, 'askOfferHead', {
+        emoji: offer.emoji || '🎁',
+        offer: offer.name,
+        discount: offer.discount,
+        greet: greet(name, lang),
+        ask,
+      })
+    : `${greet(name, lang)}\n\n${ask}`
+  const tail = t(lang, 'askTail', { table: tableNumber })
   const text = head + tail
 
   if (fieldType === 'PHONE') {
@@ -226,13 +230,13 @@ async function askVerificationData(
 }
 
 /** upsert the CRM customer from a Facebook profile */
-async function upsertCustomer(psid: string): Promise<{ name: string; firstName: string; lastName: string }> {
+async function upsertCustomer(psid: string): Promise<{ name: string; firstName: string; lastName: string; language: string | null }> {
   const profile = await fetchMessengerProfile(psid)
   const firstName = profile.firstName
   const lastName = profile.lastName
   // only overwrite the stored name when Facebook actually returned one — a failed
   // Graph lookup must never wipe a real name the AI learned earlier (নাম যাচাই বাকি loop)
-  await db.customer.upsert({
+  const row = await db.customer.upsert({
     where: { psid },
     update: {
       ...(firstName ? { firstName } : {}),
@@ -247,7 +251,7 @@ async function upsertCustomer(psid: string): Promise<{ name: string; firstName: 
       lastSeenAt: new Date(),
     },
   })
-  return { name: politeName({ firstName, lastName }), firstName, lastName }
+  return { name: politeName({ firstName, lastName }), firstName, lastName, language: row.language }
 }
 
 /** find the newest PENDING referral token opened from this conversation */
@@ -262,28 +266,29 @@ async function pendingToken(psid: string) {
 async function sendBillReceipt(
   psid: string,
   name: string,
-  t: { tableNumber: number; sessionId: string },
+  info: { tableNumber: number; sessionId: string },
+  lang: BotLang,
 ): Promise<void> {
   const orders = await db.order.findMany({
-    where: { sessionId: t.sessionId },
+    where: { sessionId: info.sessionId },
     include: { items: true },
     orderBy: { placedAt: 'asc' },
   })
-  const lines: string[] = [`🧾 ডিজিটাল রিসিট — টেবিল ${t.tableNumber}`]
+  const lines: string[] = [t(lang, 'receiptTitle', { table: info.tableNumber })]
   let payable = 0
   for (const o of orders) {
     payable += o.total
-    lines.push(`অর্ডার #${o.orderNo}:`)
+    lines.push(t(lang, 'receiptOrderNo', { no: o.orderNo }))
     for (const i of o.items) {
       lines.push(`  • ${i.itemName} ×${i.quantity} — ৳${i.lineTotal}`)
     }
-    if (o.voucherDiscount) lines.push(`  কুপন ছাড়: -৳${o.voucherDiscount}`)
-    if (o.happyHourDiscount) lines.push(`  হ্যাপি আওয়ার ছাড়: -৳${o.happyHourDiscount}`)
-    if (o.birthdayDiscount) lines.push(`  🎁 অফারের ছাড়: -৳${o.birthdayDiscount}`)
+    if (o.voucherDiscount) lines.push(t(lang, 'receiptCoupon', { amt: o.voucherDiscount }))
+    if (o.happyHourDiscount) lines.push(t(lang, 'receiptHappy', { amt: o.happyHourDiscount }))
+    if (o.birthdayDiscount) lines.push(t(lang, 'receiptOffer', { amt: o.birthdayDiscount }))
   }
-  lines.push(`\nমোট প্রদেয়: ৳${Math.round(payable * 100) / 100}`)
-  lines.push(`\nধন্যবাদ${name ? ` ${name}` : ''}! 🙏 আবার আসবেন — বিল আপডেট ও অফার পেতে এই চ্যাটটি রেখে দিন।`)
-  lines.push(await followNudge())
+  lines.push(t(lang, 'receiptTotal', { amt: Math.round(payable * 100) / 100 }))
+  lines.push(t(lang, 'receiptThanks', { name: nameVar(name) }))
+  lines.push(await followNudge(lang))
   await sendReceipt(psid, [{ text: lines.join('\n') }])
 }
 
@@ -301,7 +306,8 @@ async function aiGeneralReply(psid: string, profileName: string, customerMessage
 
   // CRM notes & tags → the bot genuinely remembers this customer
   // ("আবার দেখা হলো রাকিব ভাই! গতবারের মতো বিরিয়ানি হবে?")
-  // admin-marked language → the bot always replies in it
+  // admin-marked language → the bot always replies in it; no mark → the global
+  // bot_language setting; both empty → the AI mirrors the customer's language
   let customerNotes: string | undefined
   let customerLanguage: string | null | undefined
   try {
@@ -312,7 +318,7 @@ async function aiGeneralReply(psid: string, profileName: string, customerMessage
         notes: { orderBy: { createdAt: 'desc' as const }, take: 10, select: { kind: true, text: true } },
       },
     })
-    customerLanguage = cust?.language ?? null
+    customerLanguage = await aiLanguageFor(cust?.language)
     if (cust?.notes?.length) {
       customerNotes = cust.notes.map((n) => `- ${n.text}`).join('\n')
     }
@@ -441,11 +447,13 @@ async function handleRnOptIn(psid: string, optin: NonNullable<MessagingEvent['op
  */
 async function maybeAskRnOptIn(psid: string): Promise<void> {
   try {
-    const cust = await db.customer.findUnique({ where: { psid }, select: { rnToken: true, rnAskedAt: true } })
+    const cust = await db.customer.findUnique({ where: { psid }, select: { rnToken: true, rnAskedAt: true, language: true } })
     if (!cust || cust.rnToken) return // ইতোমধ্যে অপট-ইন করা — আর ভদ্রতা দেখানোর দরকার নেই
     if (cust.rnAskedAt && Date.now() - cust.rnAskedAt.getTime() < RN_ASK_COOLDOWN_MS) return // no-nag guard
     await db.customer.update({ where: { psid }, data: { rnAskedAt: new Date() } })
-    const title = ((await getSetting(SETTING_KEYS.META_RN_TITLE)) || '').trim() || undefined
+    // কার্ডের টাইটেলও কাস্টমারের ভাষায় (admin টাইটেল না দিলে প্যাক-ডিফল্ট)
+    const lang = pickBotLang(cust.language, await globalBotLang())
+    const title = ((await getSetting(SETTING_KEYS.META_RN_TITLE)) || '').trim() || t(lang, 'rnTitleDefault')
     const logo = ((await getSetting(SETTING_KEYS.RESTAURANT_LOGO_URL)) || '').trim() || null
     const r = await sendRnOptInRequest(psid, { title, imageUrl: logo })
     if (!r.ok) console.error('[webhook:rn-ask]', r.error)
@@ -474,7 +482,10 @@ async function handleEvent(event: MessagingEvent) {
   const ref = event.referral?.ref || event.postback?.referral?.ref
   if (ref) {
     const tokenRow = await db.referralToken.findUnique({ where: { token: ref } })
-    const { name } = await upsertCustomer(psid)
+    const cust = await upsertCustomer(psid)
+    const { name } = cust
+    // ভাষা: কাস্টমারের মার্ক করা ভাষা > admin গ্লোবাল সেটিং > বাংলা
+    const lang = pickBotLang(cust.language, await globalBotLang())
 
     if (!tokenRow || tokenRow.status !== 'PENDING') return
 
@@ -491,7 +502,7 @@ async function handleEvent(event: MessagingEvent) {
 
     // remember what we asked (shown in the admin panel)
     const fieldType = offer?.fieldType || 'DATE'
-    const askedText = offer?.askText?.trim() || defaultAsk(fieldType)
+    const askedText = offer?.askText?.trim() || defaultAsk(fieldType, lang)
     await db.referralToken.update({ where: { id: tokenRow.id }, data: { askedText } })
 
     await askVerificationData(
@@ -507,6 +518,7 @@ async function handleEvent(event: MessagingEvent) {
           }
         : null,
       tokenRow.tableNumber,
+      lang,
     )
     return
   }
@@ -516,7 +528,10 @@ async function handleEvent(event: MessagingEvent) {
   const sharedPhone = extractPhone(event)
 
   if (event.message) {
-    const { name, lastName } = await upsertCustomer(psid)
+    const cust = await upsertCustomer(psid)
+    const { name, lastName } = cust
+    // ভাষা: কাস্টমারের মার্ক করা ভাষা > admin গ্লোবাল সেটিং > বাংলা — এই কথোপকথনের সব স্ট্যাটিক মেসেজ এতেই যাবে
+    const lang = pickBotLang(cust.language, await globalBotLang())
     const tokenRow = await pendingToken(psid)
     const dataTextIn = (text || sharedPhone || '').trim()
     if (dataTextIn) await saveChatTurn(psid, 'customer', dataTextIn)
@@ -530,7 +545,7 @@ async function handleEvent(event: MessagingEvent) {
       if (!aiHandled) {
         await sendText(
           psid,
-          `${greet(name)}\n\nআমাদের বিশেষ অফার নিতে রেস্তোরাঁর বিল পেজ থেকে "🎉 Claim on Messenger" চাপুন — সেখান থেকে যাচাই করে ছাড় নিতে পারবেন।${await followNudge()}`
+          `${greet(name, lang)}\n\n${t(lang, 'generalFallback')}${await followNudge(lang)}`
         )
       }
       // সরাসরি পেজে মেসেজ দেওয়া কাস্টমারও RN-এর সুযোগ পাক (একবারই, কুলডাউন গার্ড সহ)
@@ -580,18 +595,18 @@ async function handleEvent(event: MessagingEvent) {
       // history already contains the current customer message (saved by the caller) — drop the duplicate
       const history = hist.filter((h, i) => !(i === hist.length - 1 && h.role === 'user' && h.text === dataText))
       const askCount = tokenRow.askCount || 0
-      // admin-marked language → the verify conversation respects it too
+      // admin-marked / global language → the verify conversation respects it too
       const markedLang = await db.customer.findUnique({ where: { psid }, select: { language: true } })
       const ai = await verificationChat({
         fieldType: fieldType as 'DATE' | 'PHONE' | 'TEXT',
         offerName: offer?.name || 'বিশেষ অফার',
-        askText: offer?.askText?.trim() || defaultAsk(fieldType),
+        askText: offer?.askText?.trim() || defaultAsk(fieldType, lang),
         lastAskSent: tokenRow.askedText,
         askCount,
         knowledgeBase: kb.text,
         history,
         customerMessage: dataText,
-        customerLanguage: markedLang?.language ?? null,
+        customerLanguage: await aiLanguageFor(markedLang?.language),
         cfg,
       })
 
@@ -602,7 +617,7 @@ async function handleEvent(event: MessagingEvent) {
           where: { id: tokenRow.id },
           data: { status: 'CANCELLED', dataText: dataText.slice(0, 300) },
         })
-        const pivot = ai.reply || 'কোনো সমস্যা নেই! 😊 আমাদের আরও দারুণ অফার আছে — রেস্তোরাঁয় এসে উপভোগ করুন!'
+        const pivot = ai.reply || t(lang, 'cancelPivot')
         await sendText(psid, pivot)
         await saveChatTurn(psid, 'bot', pivot)
         return
@@ -647,10 +662,10 @@ async function handleEvent(event: MessagingEvent) {
       // AI down (quota/network) → static retry while we haven't nagged, else soft
       if (!validData && !ai.ok) {
         if (askCount < 2) {
-          await sendText(psid, retryAsk(fieldType))
+          await sendText(psid, retryAsk(fieldType, lang))
           await db.referralToken.update({ where: { id: tokenRow.id }, data: { askCount: askCount + 1 } })
         } else {
-          await sendText(psid, '😊 ঠিক আছে! সুবিধামতো সময়ে তথ্যটি পাঠিয়ে দিলেই অফারটি আপনার বিলে যোগ হয়ে যাবে।')
+          await sendText(psid, t(lang, 'softWait'))
         }
         return
       }
@@ -661,12 +676,12 @@ async function handleEvent(event: MessagingEvent) {
     if (!validData) {
       const askCount = tokenRow.askCount || 0
       if (askCount < 2) {
-        await sendText(psid, retryAsk(fieldType))
+        await sendText(psid, retryAsk(fieldType, lang))
         await db.referralToken.update({ where: { id: tokenRow.id }, data: { askCount: askCount + 1 } })
       } else {
         const handled = await aiGeneralReply(psid, name, dataText)
         if (!handled) {
-          await sendText(psid, '😊 ঠিক আছে! সুবিধামতো সময়ে তথ্যটি পাঠিয়ে দিলেই অফারটি আপনার বিলে যোগ হয়ে যাবে। আর কিছু জানতে চাইলে বলুন!')
+          await sendText(psid, t(lang, 'softWaitMore'))
         }
       }
       return
@@ -686,6 +701,7 @@ async function handleEvent(event: MessagingEvent) {
       occasionId: tokenRow.occasionId,
       occasionName: tokenRow.occasionName,
       dataText: validData,
+      lang,
     })
 
     // keep the collected data on the customer profile (CRM)
@@ -715,14 +731,16 @@ async function handleEvent(event: MessagingEvent) {
       data: { status: 'CLAIMED', phone: parsedPhone || null, birthday: parsedBirthday || undefined, dataText: validData },
     })
 
-    await sendText(
+    await sendText(psid, t(lang, 'verifySuccess', { name: nameVar(name) }))
+    await sendBillReceipt(
       psid,
-      `✅ যাচাই সফল${name ? ` — ${name}` : ''}, আপনার অফারটি বিলে যোগ হয়েছে! 🎉`
+      name,
+      {
+        tableNumber: tokenRow.tableNumber,
+        sessionId: tokenRow.sessionId,
+      },
+      lang,
     )
-    await sendBillReceipt(psid, name, {
-      tableNumber: tokenRow.tableNumber,
-      sessionId: tokenRow.sessionId,
-    })
 
     // সবচেয়ে এনগেজড মুহূর্ত — অফার পেয়ে খুশি কাস্টমারকে একবারই (১৪ দিন
     // কুলডাউন) RN অপট-ইন কার্ড দেখাই: ২৪ ঘণ্টা পার হলেও ভবিষ্যতের সব

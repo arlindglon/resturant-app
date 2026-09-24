@@ -3079,25 +3079,28 @@ function CustomersTab({ onAuthRequired }: TabProps) {
 
   const customers = data.customers
 
-  // quick lookup: code (C-0007), phone, name, AI-learned name or language — case-insensitive
+  // quick lookup: code (C-0007), PSID, phone, name, AI-learned name or language — case-insensitive
   const q = query.trim().toLowerCase()
   const filtered = q
     ? customers.filter((c) =>
-        [c.code, c.phone, c.statedName, customerName(c), c.firstName, c.lastName, c.language ? LANGUAGE_LABELS[c.language] : null]
+        [c.code, c.psid, c.phone, c.statedName, customerName(c), c.firstName, c.lastName, c.language ? LANGUAGE_LABELS[c.language] : null]
           .filter(Boolean)
           .some((v) => String(v).toLowerCase().includes(q))
       )
     : customers
 
-  /** copy a customer code to the clipboard so it can be pasted anywhere */
-  const copyCode = async (code: string) => {
+  /** copy any value (customer code / PSID) to the clipboard with a toast */
+  const copyValue = async (value: string, label = 'কোড') => {
     try {
-      await navigator.clipboard.writeText(code)
-      toast.success(`কোড ${code} কপি হয়েছে`)
+      await navigator.clipboard.writeText(value)
+      toast.success(`${label} কপি হয়েছে`)
     } catch {
       toast.error('কপি করা যায়নি')
     }
   }
+
+  /** short display of a long PSID (full value goes to the clipboard) */
+  const psidDisplay = (psid: string) => (psid.length > 24 ? `${psid.slice(0, 12)}…${psid.slice(-6)}` : psid)
 
   return (
     <div className="space-y-4">
@@ -3219,13 +3222,20 @@ function CustomersTab({ onAuthRequired }: TabProps) {
                     {customerName(c)}
                     {c.code && (
                       <button
-                        onClick={() => copyCode(c.code!)}
+                        onClick={() => copyValue(c.code!)}
                         title="কোড কপি করুন"
                         className="shrink-0 rounded border border-amber-200 bg-amber-50 px-1.5 py-0.5 font-mono text-[10px] font-black tracking-wide text-amber-700 transition-colors hover:bg-amber-100"
                       >
                         {c.code}
                       </button>
                     )}
+                    <button
+                      onClick={() => copyValue(c.psid, 'PSID')}
+                      title={`PSID কপি করুন: ${c.psid}`}
+                      className="shrink-0 rounded border border-stone-200 bg-white px-1.5 py-0.5 font-mono text-[10px] font-bold text-stone-500 transition-colors hover:bg-stone-100"
+                    >
+                      🆔 {psidDisplay(c.psid)}
+                    </button>
                   </p>
                   <p className="truncate text-[11px] text-stone-500">
                     {c.eventLabel ? `${c.eventLabel}: ${bnDateOnly(c.birthday)}` : bnDateOnly(c.birthday)}
@@ -3341,11 +3351,23 @@ function EditCustomerDialog({
   const [birthday, setBirthday] = useState(customer?.birthday ? customer.birthday.slice(0, 10) : '')
   const [saving, setSaving] = useState(false)
 
+  const copyPsid = async () => {
+    if (!customer) return
+    try {
+      await navigator.clipboard.writeText(customer.psid)
+      toast.success('PSID কপি হয়েছে')
+    } catch {
+      toast.error('কপি করা যায়নি')
+    }
+  }
+
   const save = async () => {
     if (!customer) return
     setSaving(true)
+    // name is ALWAYS sent — an empty field CLEARS the manual name so Facebook/AI
+    // can learn the real name again (ফাঁকা = “নাম যাচাই বাকি” placeholder-এ ফেরা)
     const res = await api.patch(`/api/admin/customers/${customer.id}`, {
-      ...(name.trim() ? { firstName: name } : {}),
+      firstName: name.trim(),
       eventLabel,
       language: language === 'unknown' ? null : language,
       phone,
@@ -3380,11 +3402,27 @@ function EditCustomerDialog({
           </DialogDescription>
         </DialogHeader>
         <div className="space-y-3">
+          {customer && (
+            <div className="flex items-center gap-2 rounded-md border border-stone-200 bg-stone-50 px-2.5 py-1.5">
+              <span className="text-[10px] font-black uppercase tracking-wide text-stone-400">PSID</span>
+              <span className="min-w-0 flex-1 truncate font-mono text-[11px] text-stone-700" title={customer.psid}>
+                {customer.psid}
+              </span>
+              <button
+                onClick={copyPsid}
+                title="PSID কপি করুন"
+                className="shrink-0 rounded border border-stone-200 bg-white px-1.5 py-0.5 text-[10px] font-bold text-stone-500 transition-colors hover:bg-stone-100"
+              >
+                📋 কপি
+              </button>
+            </div>
+          )}
           <div className="space-y-1">
             <FieldLabel>কাস্টমারের নাম</FieldLabel>
             <Input value={name} onChange={(e) => setName(e.target.value)} placeholder="যেমন: রাকিব ইসলাম" />
             <p className="text-[10px] text-stone-400">
               Facebook/AI নাম জানতে না পারলে এখানে “নাম যাচাই বাকি” দেখায় — নিজে লিখে দিন, CRM ও মেসেজে এই নামই ব্যবহৃত হবে।
+              <b> নাম মুছতে চাইলে ফাঁকা রেখে সেভ করুন</b> — এরপর AI/Facebook আবার নাম শিখে নেবে।
             </p>
           </div>
           <div className="space-y-1">
@@ -4314,6 +4352,7 @@ function SettingsTab({ onAuthRequired }: TabProps) {
       [SETTING_KEYS.DEVELOPER_NOTE_LINK]: form[SETTING_KEYS.DEVELOPER_NOTE_LINK] ?? '',
       [SETTING_KEYS.ITEM_SPECIAL_NOTE_ENABLED]: form[SETTING_KEYS.ITEM_SPECIAL_NOTE_ENABLED] ?? 'true',
       [SETTING_KEYS.MESSENGER_AUTO_REPLY_ENABLED]: form[SETTING_KEYS.MESSENGER_AUTO_REPLY_ENABLED] ?? 'true',
+      [SETTING_KEYS.BOT_LANGUAGE]: form[SETTING_KEYS.BOT_LANGUAGE] ?? '',
       [SETTING_KEYS.META_RN_TITLE]: form[SETTING_KEYS.META_RN_TITLE] ?? '',
       [SETTING_KEYS.GEMINI_ENABLED]: form[SETTING_KEYS.GEMINI_ENABLED] ?? 'false',
       [SETTING_KEYS.GEMINI_API_KEYS]: form[SETTING_KEYS.GEMINI_API_KEYS] ?? '',
@@ -5011,6 +5050,39 @@ function SettingsTab({ onAuthRequired }: TabProps) {
               {runningCron ? <Loader2 className="h-4 w-4 animate-spin" /> : '🎂'} জন্মদিন জব এখন চালান
             </Button>
           </div>
+        </CardContent>
+      </Card>
+
+      {/* ---- bot language (global) ---- */}
+      <Card className="border-teal-200 bg-gradient-to-br from-teal-50/60 to-white">
+        <CardHeader className="pb-2">
+          <CardTitle className="flex items-center gap-2 text-base">🌐 বটের ভাষা — সব কাস্টমারের জন্য</CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-2">
+          <Select
+            value={form[SETTING_KEYS.BOT_LANGUAGE] || 'auto'}
+            onValueChange={(v) => set(SETTING_KEYS.BOT_LANGUAGE, v === 'auto' ? '' : v)}
+          >
+            <SelectTrigger className="max-w-xs">
+              <SelectValue placeholder="ভাষা বেছে নিন" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="auto">অটো — কাস্টমারের নিজের ভাষায় (AI শিখে নেয়)</SelectItem>
+              {Object.entries(LANGUAGE_LABELS)
+                .filter(([code]) => code !== 'other')
+                .map(([code, label]) => (
+                  <SelectItem key={code} value={code}>
+                    {label}
+                  </SelectItem>
+                ))}
+            </SelectContent>
+          </Select>
+          <p className="text-xs leading-relaxed text-stone-600">
+            এখানে ভাষা সেট করলে <b>সব কাস্টমারের</b> (পুরনো + নতুন) সব মেসেজ ওই ভাষায় যাবে — AI চ্যাট, অফার যাচাইয়ের প্রশ্ন, ভুল তথ্যের উত্তর, ডিজিটাল রসিদ, জন্মদিনের শুভেচ্ছা, 🔔 অপট-ইন কার্ড ও ব্রডকাস্ট।
+          </p>
+          <p className="rounded-lg bg-teal-50 px-3 py-2 text-[11px] leading-relaxed text-teal-900">
+            💡 <b>অটো</b> = AI কাস্টমার যে ভাষায় লিখবে সেই ভাষাতেই উত্তর দেবে (আগের মতো)। আর কোনো কাস্টমারের এডিটে আলাদা ভাষা মার্ক করা থাকলে (👥 কাস্টমার ট্যাব) শুধু সেই কাস্টমারের ক্ষেত্রে মার্ক করা ভাষাই প্রাধান্য পাবে।
+          </p>
         </CardContent>
       </Card>
 

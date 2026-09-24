@@ -12,6 +12,7 @@ import { requirePerm } from '@/lib/staff-auth'
 import { getSetting } from '@/lib/settings'
 import { SETTING_KEYS } from '@/lib/constants'
 import { sendRnOptInRequest, sendRnToToken } from '@/lib/messenger'
+import { t, pickBotLang, globalBotLang, nameVar } from '@/lib/bot-text'
 
 const ASK_COOLDOWN_MS = 14 * 24 * 60 * 60 * 1000
 const ASK_ACTIVE_WINDOW_MS = 60 * 24 * 60 * 60 * 1000
@@ -26,17 +27,23 @@ export async function POST(req: NextRequest) {
 
   if (action === 'broadcast') {
     const base = ((await getSetting(SETTING_KEYS.PUBLIC_BASE_URL)) || '').trim().replace(/\/+$/, '')
+    const globalLang = await globalBotLang()
     const customers = await db.customer.findMany({
       where: { rnToken: { not: null } },
-      select: { psid: true, rnToken: true, firstName: true, lastName: true },
+      select: { psid: true, rnToken: true, firstName: true, lastName: true, language: true },
     })
     let sent = 0
     const errors: string[] = []
     for (const c of customers) {
+      // admin-নির্ধারিত টেক্সট সবাই পায়; ফাঁকা রাখলে প্রতি কাস্টমারের ভাষায় ডিফল্ট অফার-লেখা যায়
+      const lang = pickBotLang(c.language, globalLang)
       const name = (c.firstName || '').trim()
       const text =
         body.text?.trim() ||
-        `🎁 আসসালামু আলাইকুম${name ? ' ' + name : ''}! এই সপ্তাহের স্পেশাল অফার এসে গেছে — সাথে জন্মদিনের সারপ্রাইজও অপেক্ষা করছে! 🍔🎉${base ? `\n\nঅর্ডার দিতে: ${base}` : ''}`
+        t(lang, 'rnBroadcastDefault', {
+          name: nameVar(name),
+          base: base ? t(lang, 'rnOrderLink', { url: base }) : '',
+        })
       const r = await sendRnToToken(c.rnToken as string, text)
       if (r.ok) sent++
       else errors.push(`${c.firstName || c.psid}: ${r.error}`)
@@ -45,7 +52,11 @@ export async function POST(req: NextRequest) {
   }
 
   // ask — opt-in request to recently-active customers who have NOT opted in yet
-  const title = body.title?.trim() || (await getSetting(SETTING_KEYS.META_RN_TITLE)).trim() || undefined
+  // (কাস্টমার-নির্দিষ্ট টাইটেল পাঠানো যায় না — এক কার্ডে এক টাইটেল; গ্লোবাল ভাষার ডিফল্ট)
+  const title =
+    body.title?.trim() ||
+    ((await getSetting(SETTING_KEYS.META_RN_TITLE)) || '').trim() ||
+    t(await globalBotLang(), 'rnTitleDefault')
   const logo = ((await getSetting(SETTING_KEYS.RESTAURANT_LOGO_URL)) || '').trim() || null
   const since = new Date(Date.now() - ASK_ACTIVE_WINDOW_MS)
   const cooldownBefore = new Date(Date.now() - ASK_COOLDOWN_MS)

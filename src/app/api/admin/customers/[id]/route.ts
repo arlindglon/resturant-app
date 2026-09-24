@@ -18,12 +18,17 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
 
   const data: Record<string, unknown> = {}
   // admin-typed full name goes into firstName (lastName cleared so the display
-  // never doubles up "রাকিব ইসলাম" + leftover FB surname)
+  // never doubles up "রাকিব ইসলাম" + leftover FB surname).
+  // EMPTY string = CLEAR the manual name → back to the "নাম যাচাই বাকি"
+  // placeholder so Facebook/AI can learn the real name again.
   if (typeof body.firstName === 'string') {
     const name = body.firstName.trim().slice(0, 80)
     if (name) {
       data.firstName = name
       data.lastName = ''
+    } else {
+      data.firstName = 'নাম যাচাই বাকি'
+      data.lastName = null
     }
   }
   if (typeof body.eventLabel === 'string') data.eventLabel = body.eventLabel.trim().slice(0, 60) || null
