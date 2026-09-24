@@ -25,7 +25,17 @@ export async function GET(_req: NextRequest, { params }: { params: Promise<{ id:
   }
 
   const p = await fetchMessengerProfile(customer.psid)
-  if (!p.ok) return fail(p.error || 'Facebook প্রোফাইল আনা যায়নি', 502, 'GRAPH_ERROR')
+  if (!p.ok) {
+    const raw = p.error || ''
+    // সবচেয়ে কমন কারণ: Page Token-এ profile-read স্কোপ নেই (মেসেজ পাঠানো যায়,
+    // কিন্তু নাম/ছবি পড়া যায় না) — admin-কে হাতে-কলমে সমাধান দেখাই
+    let friendly = raw
+    if (/Unsupported get request|missing permissions|does not exist|insufficient/i.test(raw)) {
+      friendly =
+        'Facebook টোকেনে প্রোফাইল পড়ার অনুমতি নেই। সমাধান: Meta Developer → আপনার App → Permissions-এ "pages_read_engagement" যোগ করুন → নতুন Page Token নিয়ে Vercel-এর META_PAGE_TOKEN বদলান। ততক্ষণ Meta Business Suite → Inbox-এ কাস্টমারের নাম দিয়ে খুঁজুন।'
+    }
+    return fail(friendly, 502, 'GRAPH_ERROR')
+  }
   return ok({
     messenger: true,
     psid: customer.psid,
