@@ -250,11 +250,20 @@ function bodyForModel(body: Record<string, unknown>, model: string): Record<stri
     const sys = sysFull ? sysFull.slice(0, 5500) : ''
     if (sys) {
       const contents = (b.contents as { role: string; parts: { text?: string }[] }[] | undefined) || []
-      b.contents = contents.map((c, i) =>
+      const merged = contents.map((c, i) =>
         i === 0
           ? { ...c, parts: [{ text: `${DIRECT_ANSWER_RULE}\n${sys}\n\n---\n\n${c.parts.map((p) => p.text || '').join('')}` }] }
           : c,
       )
+      // শেষ মুহূর্তের রিমাইন্ডার — মডেল শেষ টোকেনগুলোতেই সবচেয়ে বেশি মনোযোগ দেয়;
+      // বিশ্লেষণ-প্রবণতা দমনে শুরু ও শেষ দুই প্রান্তেই কড়া নির্দেশ
+      const lastMsg = merged[merged.length - 1]
+      if (lastMsg?.parts?.length) {
+        lastMsg.parts[lastMsg.parts.length - 1] = {
+          text: `${lastMsg.parts[lastMsg.parts.length - 1].text || ''}\n\n(চূড়ান্ত নির্দেশ: আউটপুট = কেবল চূড়ান্ত উত্তর/JSON — কোনো বিশ্লেষণ, নোট বা ব্যাখ্যা নয়।)`,
+        }
+      }
+      b.contents = merged
       delete b.systemInstruction
     }
   }
@@ -262,9 +271,9 @@ function bodyForModel(body: Record<string, unknown>, model: string): Record<stri
   delete gc.responseMimeType
   delete gc.responseSchema
   delete gc.thinkingConfig
-  // Gemma JSON-মোড মানে না — রিপ্লাই সংক্ষিপ্ত (২-৫ বাক্য + JSON ফিল্ড); বিশাল
-  // বাজেট দিলে runaway জেনারেশন ধরা পড়তে দেরি হয় → ২০৪৮-ই যথেষ্ট
-  gc.maxOutputTokens = Math.min((gc.maxOutputTokens as number | undefined) || 2048, 2048)
+  // Gemma JSON-মোড মানে না — আসল রিপ্লাই ২০০-৫০০ টোকেনের মধ্যে; ১০২৪-ই যথেষ্ট।
+  // বিশ্লেষণ লিখতে শুরু করলে ১০২৪-এ কাটা পড়ে দ্রুত ফলব্যাক মডেলে যাওয়া যায়
+  gc.maxOutputTokens = Math.min((gc.maxOutputTokens as number | undefined) || 1024, 1024)
   b.generationConfig = gc
   return b
 }
@@ -329,6 +338,8 @@ function simplifiedConfig(src: Record<string, unknown>): Record<string, unknown>
 async function generateRotating(
   cfg: GeminiConfig,
   body: Record<string, unknown>,
+  /** ফলাফল-যাচাই: মডেল নিয়ম ভাঙলে (বিশ্লেষণ-লিক/ভাঙা JSON) সেই মডেল স্কিপ */
+  validate?: (text: string) => boolean,
 ): Promise<{ ok: boolean; text: string | null; error: string | null }> {
   const started = Date.now()
   // webhook after()-ফেজের maxDuration ৬০ সে — দুই Gemma-র ধীর উত্তরেও যেন ফলব্যাক
@@ -372,6 +383,12 @@ async function generateRotating(
         }
         try {
           const text = await generateWithKey(key, model, mBody)
+          // নিয়ম-ভাঙা আউটপুট (বিশ্লেষণ-লিক/JSON নেই) — এই মডেল এই কলে ঠিক হবে
+          // না (key বদলালেও লাগে), তাই বাকি কি নষ্ট না করে সরাসরি পরের মডেলে
+          if (validate && !validate(text)) {
+            lastError = `${model}: আউটপুট নিয়ম-ভাঙা (বিশ্লেষণ/অসম্পূর্ণ)`
+            continue modelLoop
+          }
           markKeyGood(key)
           nextCursor()
           return { ok: true, text, error: null }
@@ -405,9 +422,12 @@ async function generateRotating(
             }
           }
           // কাটা উত্তর (MAX_TOKENS): thinkingConfig থাকলে বাদ দিয়ে একই জায়গায়
-          // আরেকবার (thinking-ই বাজেট খেয়েছিল); নাহলে পরের কি/মডেলে
+          // আরেকবার (thinking-ই বাজেট খেয়েছিল); gemma-র ক্ষেত্রে কাটাটা প্রায়
+          // সবসময় বিশ্লেষণ-প্লাবনের প্রমাণ — ওই মডেল স্কিপ করে পরেরটায় (key
+          // বদলেও কিছু হয় না), নাহলে পরের কি/মডেলে
           const truncated = /MAX_TOKENS|কাটা পড়েছে/.test(msg)
           if (truncated) {
+            if (/^gemma/i.test(model)) continue modelLoop
             if (mBody.generationConfig && (mBody.generationConfig as Record<string, unknown>).thinkingConfig) {
               try {
                 const text = await generateWithKey(key, model, stripThinking(mBody))
@@ -570,12 +590,15 @@ ${opts.formatting !== false ? MESSENGER_FORMAT_RULES + '\n- এটা একট�
       responseMimeType: 'application/json',
       responseSchema: BLAST_SCHEMA,
     },
+  }, (t) => {
+    // নিয়ম-ভাঙা আউটপুট (বিশ্লেষণ/ভাঙা JSON) → ইঞ্জিন এই মডেল স্কিপ করে পরেরটায়
+    const j2 = extractJson(t)
+    return !!(j2 && str(j2.text)) || cleanPlainReply(t, 800)
   })
   if (!res.ok || !res.text) return { ok: false, text: null, error: res.error }
   const j = extractJson(res.text)
   // বিশ্লেষণ-লিক/কাঁচা JSON কখনো কাস্টমারের ব্রডকাস্ট হবে না
-  const rawOk = !res.text.trimStart().startsWith('{') && !looksLikeReasoning(res.text)
-  const text = str(j?.text) || (rawOk ? res.text.trim() : '')
+  const text = str(j?.text) || (cleanPlainReply(res.text, 800) ? res.text.trim() : '')
   if (!text) return { ok: false, text: null, error: 'খালি উত্তর (thinking বাজেট শেষ?)' }
   return { ok: true, text, error: null }
 }
@@ -598,6 +621,12 @@ function extractJson(text: string): Record<string, unknown> | null {
 }
 
 const str = (v: unknown): string => (typeof v === 'string' ? v.trim() : '')
+
+/** ছোট পরিষ্কার plain উত্তর (JSON ব্যর্থ হলেও এটা রিপ্লাই হতে পারে) */
+function cleanPlainReply(text: string, maxLen = 600): boolean {
+  const raw = text.trim()
+  return !!raw && !raw.startsWith('{') && !looksLikeReasoning(raw) && raw.length <= maxLen
+}
 
 /* ─────────────── Messenger মার্কডাউন ফরম্যাটিং (professional usage) ─────────────── */
 
@@ -704,6 +733,10 @@ export async function chatWithCustomer(opts: {
       responseMimeType: 'application/json',
       responseSchema: CHAT_SCHEMA,
     },
+  }, (t) => {
+    // নিয়ম-ভাঙা আউটপুট → ইঞ্জিন এই মডেল স্কিপ করে পরেরটায় (রোটেশনের ভেতরেই)
+    const j2 = extractJson(t)
+    return !!(j2 && str(j2.reply)) || cleanPlainReply(t)
   })
 
   if (!res.ok || !res.text) return { ok: false, reply: null, extracted: empty, error: res.error }
@@ -721,7 +754,7 @@ export async function chatWithCustomer(opts: {
   let reply = replyParsed
   if (!reply) {
     const raw = res.text.trim()
-    if (!raw || raw.startsWith('{') || looksLikeReasoning(raw) || raw.length > 600) {
+    if (!cleanPlainReply(raw)) {
       return { ok: false, reply: null, extracted: empty, error: 'AI আউটপুট অগ্রাহ্য (বিশ্লেষণ-লিক/ভাঙা JSON)' }
     }
     reply = raw
@@ -839,6 +872,10 @@ ${opts.knowledgeBase.slice(0, 4000)}
       responseMimeType: 'application/json',
       responseSchema: VERIFY_SCHEMA,
     },
+  }, (t) => {
+    // ভাঙা JSON/বিশ্লেষণ-লিক → ইঞ্জিন পরের মডেলে চেষ্টা করবে
+    const j2 = extractJson(t)
+    return !!(j2 && (str(j2.reply) || str(j2.extractedData))) || cleanPlainReply(t)
   })
 
   if (!res.ok || !res.text) return { ok: false, extracted: null, reply: null, action: 'ASK', error: res.error }
@@ -849,7 +886,7 @@ ${opts.knowledgeBase.slice(0, 4000)}
   let reply = str(j?.reply)
   if (!reply && !j) {
     const raw = res.text.trim()
-    reply = raw && !raw.startsWith('{') && !looksLikeReasoning(raw) && raw.length <= 600 ? raw : null
+    reply = cleanPlainReply(raw) ? raw : null
   }
   return {
     ok: true,
