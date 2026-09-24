@@ -4,7 +4,11 @@
 //   method: "CASH"|"CARD"|"BKASH"|"NAGAD"|"ONLINE",
 //   returns?: [{ orderId, itemId, returnedQty }]   // bill-time item returns
 // }
+// BILL-READINESS GUARD: সব অর্ডার সার্ভ হওয়ার আগে (ও খাওয়া-দাওয়া শেষ হওয়ার
+// আগে) বিল নেওয়া যাবে না — অপরিশোধিত প্রতিটি অর্ডার অবশ্যই SERVED হতে হবে।
 // Marks every non-cancelled order of the session billPaid + COMPLETED.
+// AUTO TABLE CLEAR: বিল পরিশোধ হতেই টেবিল অটো-ক্লিয়ার — active সেশন ধ্বংস
+// (পুরনো QR লিঙ্ক আর কাজ করবে না), টেবিল → FREE, খোলা ওয়েটার কল → DONE।
 // RETURNS: the admin can exclude returned items right at bill collection —
 //   • per item: lineTotal is recomputed as (quantity − returnedQty) × unitPrice
 //   • ANTI-SCAM RULE: if ANY item of the session is returned, EVERY
@@ -12,16 +16,27 @@
 //     customer could save money with a coupon at order time and then return
 //     food at bill time. (Happy-hour savings are already baked into the
 //     unitPrice snapshot and birthday/occasion discounts stay as-is.)
-// Writes BILL_PAID (+ ITEM_RETURNED) blocks to the security ledger and notifies clients.
+// Writes BILL_PAID (+ ITEM_RETURNED + SESSION_CLEARED) blocks to the ledger.
 import { NextRequest } from 'next/server'
 import { db } from '@/lib/db'
 import { ok, fail } from '@/lib/api'
-import { ORDER_STATUS } from '@/lib/constants'
+import { ORDER_STATUS, TABLE_STATUS } from '@/lib/constants'
 import { appendLedger, LEDGER_TYPES } from '@/lib/ledger'
+import { destroySession } from '@/lib/session'
 import { emitEvent } from '@/lib/emit'
 import { requirePerm } from '@/lib/staff-auth'
 
 const METHODS = ['CASH', 'CARD', 'BKASH', 'NAGAD', 'ONLINE'] as const
+
+/** বিল-রেডিনেস এররে দেখানোর জন্য অর্ডার স্ট্যাটাসের বাংলা নাম */
+const STATUS_BN: Record<string, string> = {
+  PLACED: 'প্লেসড',
+  COOKING: 'রান্নায়',
+  READY: 'রেডি — পরিবেশন বাকি',
+  SERVED: 'সার্ভড',
+  COMPLETED: 'সম্পন্ন',
+  CANCELLED: 'বাতিল',
+}
 
 interface ReturnLine {
   orderId: string
@@ -56,6 +71,18 @@ export async function POST(req: NextRequest) {
 
   const alreadyPaid = orders.every((o) => o.billPaid)
   if (alreadyPaid) return fail('এই বিল আগেই পরিশোধ হয়েছে', 400)
+
+  // ── BILL-READINESS GUARD: serve first, bill later ────────────────────
+  // অপরিশোধিত প্রতিটি অর্ডার সার্ভড হতে হবে — রান্নায়/রেডি থাকলে বিল নয়।
+  // (আগেই পরিশোধিত অর্ডার COMPLETED — ওগুলো বাদ; আংশিক বিলের পর নতুন
+  // অর্ডার এলে শুধু নতুনগুলোই সার্ভ হওয়া দেখা হয়)
+  const notServed = orders.filter(
+    (o) => !o.billPaid && o.status !== ORDER_STATUS.SERVED && o.status !== ORDER_STATUS.COMPLETED
+  )
+  if (notServed.length > 0) {
+    const list = notServed.map((o) => `#${o.orderNo} — ${STATUS_BN[o.status] || o.status}`).join(', ')
+    return fail(`সব খাবার সার্ভ ও খাওয়া-দাওয়া শেষ হওয়ার আগে বিল নেওয়া যাবে না (বাকি: ${list})`, 400)
+  }
 
   // ── parse & validate requested returns ──────────────────────────────
   const rawReturns: ReturnLine[] = Array.isArray(body.returns) ? body.returns : []
@@ -225,6 +252,35 @@ export async function POST(req: NextRequest) {
     },
   })
 
+  // ── AUTO TABLE CLEAR: বিল পরিশোধ = খাওয়া-দাওয়ার সমাপ্তি ──────────────
+  // পরিশোধ হতেই: ১) টেবিলের সব active সেশন স্থায়ীভাবে ধ্বংস (পুরনো QR লিঙ্ক
+  // আর অর্ডার করতে পারে না), ২) খোলা ওয়েটার কল → DONE, ৩) টেবিল → FREE —
+  // admin আর আলাদা করে "টেবিল ক্লিয়ার" চাপতে হয় না, নতুন কাস্টমার সাথে সাথেই
+  // স্ক্যান করে নতুন সেশন খুলতে পারে।
+  let tableCleared = false
+  try {
+    const activeSessions = await db.tableSession.findMany({
+      where: { tableId: session.tableId, active: true, clearedAt: null },
+    })
+    for (const s of activeSessions) {
+      await destroySession(s.id) // প্রতিটির জন্য SESSION_CLEARED লেজার ব্লকও যায়
+    }
+    await db.waiterCall.updateMany({
+      where: { tableId: session.tableId, status: 'PENDING' },
+      data: { status: 'DONE', resolvedAt: new Date() },
+    })
+    await db.restaurantTable.update({
+      where: { id: session.tableId },
+      data: { status: TABLE_STATUS.FREE },
+    })
+    emitEvent('table:cleared', { tableNumber: session.table.number })
+    tableCleared = true
+  } catch (e) {
+    // পেমেন্ট অবশ্যই সফল — অটো-ক্লিয়ার কোনো কারণে আটকে গেলে admin ম্যানুয়ালি
+    // ক্লিয়ার করতে পারবে; বিল/রসিদ কখনোই ব্যর্থ করা হবে না
+    console.error('[bills:pay] auto table clear failed', e)
+  }
+
   return ok({
     sessionId,
     tableNumber: session.table.number,
@@ -236,5 +292,6 @@ export async function POST(req: NextRequest) {
     receiptId: receipt.id,
     receiptNo: receipt.receiptNo,
     ordersPaid: orders.filter((o) => !o.billPaid).length || orders.length,
+    tableCleared,
   })
 }

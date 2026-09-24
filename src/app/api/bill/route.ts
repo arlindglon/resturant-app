@@ -1,15 +1,20 @@
 // GET /api/bill — session bill summary + birthday offer eligibility
+// GRACE VIEW: বিল পরিশোধের সাথে সাথেই টেবিল অটো-ক্লিয়ার হয় (সেশন মরে যায়) —
+// তখনও কাস্টমারের বিল পেজে "✅ পরিশোধিত + রসিদ" দেখা যায় (sessionEnded: true,
+// শুধু-পড়ার মতো; অফার/ক্লেইম সেকশন বন্ধ)। অপরিশোধিত মেয়াদোত্তীর্ণ সেশন কখনো দেখানো হয় না।
 import { NextRequest } from 'next/server'
 import { db } from '@/lib/db'
 import { ok, fail, parseJSON } from '@/lib/api'
-import { getValidSession } from '@/lib/session'
+import { getValidSession, parseSessionCookieValue } from '@/lib/session'
+import { SESSION_COOKIE } from '@/lib/constants'
 import { getSetting, getSettingNumber } from '@/lib/settings'
 import { SETTING_KEYS } from '@/lib/constants'
 import { deviceIdentity, deviceMatch } from '@/lib/device'
+import { cookies } from 'next/headers'
 
 export async function GET(req: NextRequest) {
   const session = await getValidSession()
-  if (!session) return fail('অবৈধ সেশন', 403, 'SESSION_INVALID')
+  if (!session) return paidGraceView((await cookies()).get(SESSION_COOKIE)?.value)
 
   const [orders, birthdayAmount, minBill, messengerEnabled, occasions] = await Promise.all([
     db.order.findMany({
@@ -132,5 +137,96 @@ export async function GET(req: NextRequest) {
       eligible: subtotal >= o.minBill && !sessionHasOffer && !deviceClaimedOcc.has(o.id),
       alreadyClaimed: sessionHasOffer || deviceClaimedOcc.has(o.id),
     })),
+  })
+}
+
+/**
+ * PAID GRACE VIEW — টেবিল অটো-ক্লিয়ার (বিল পরিশোধের সাথে সাথে) কাস্টমারের
+ * সেশন কুকি মেরে দেয়; এই fallback কুকি থেকে সেশনটি খুঁজে দেখে বিলটি আগেই
+ * পুরোপুরি পরিশোধিত কি না। পরিশোধিত হলে শুধু-পড়ার মতো রসিদ-সহ উত্তর যায় —
+ * কাস্টমার "সেশন শেষ" স্ক্রিনের বদলে "ধন্যবাদ + রসিদ" দেখে। অপরিশোধিত
+ * (বা শুধু মেয়াদোত্তীর্ণ) সেশন কখনোই এভাবে দেখানো হয় না — তখন SESSION_INVALID।
+ */
+async function paidGraceView(rawCookie: string | undefined) {
+  const parsed = parseSessionCookieValue(rawCookie)
+  if (!parsed) return fail('অবৈধ সেশন', 403, 'SESSION_INVALID')
+
+  const srow = await db.tableSession.findUnique({
+    where: { id: parsed.sessionId },
+    include: { table: { select: { number: true } } },
+  })
+  if (!srow) return fail('অবৈধ সেশন', 403, 'SESSION_INVALID')
+
+  const orders = await db.order.findMany({
+    where: { sessionId: srow.id, status: { notIn: ['CANCELLED'] } },
+    orderBy: { placedAt: 'asc' },
+    include: { items: true },
+  })
+  // নিরাপত্তা: পুরো বিল পরিশোধিত না হলে কোনো ডেটা যাবে না
+  if (orders.length === 0 || !orders.every((o) => o.billPaid)) {
+    return fail('অবৈধ সেশন', 403, 'SESSION_INVALID')
+  }
+
+  const receipt = await db.receipt.findFirst({
+    where: { sessionId: srow.id },
+    orderBy: { paidAt: 'desc' },
+    select: { id: true, receiptNo: true },
+  })
+  const lastPaid = orders[orders.length - 1]
+  const subtotal = orders.reduce((s, o) => s + o.subtotal, 0)
+  const total = orders.reduce((s, o) => s + o.total, 0)
+
+  return ok({
+    tableNumber: srow.table.number,
+    sessionEnded: true, // খাওয়া-দাওয়া শেষ, টেবিল ক্লিয়ার হয়ে গেছে — শুধু রসিদ দেখা যাবে
+    orders: orders.map((o) => ({
+      id: o.id,
+      orderNo: o.orderNo,
+      status: o.status,
+      subtotal: o.subtotal,
+      returnedAmount: o.returnedAmount,
+      voucherDiscount: o.voucherDiscount,
+      happyHourDiscount: o.happyHourDiscount,
+      birthdayDiscount: o.birthdayDiscount,
+      total: o.total,
+      billPaid: o.billPaid,
+      paidAt: o.paidAt,
+      paymentMethod: o.paymentMethod,
+      placedAt: o.placedAt,
+      items: o.items.map((i) => ({
+        itemName: i.itemName,
+        quantity: i.quantity,
+        returnedQty: i.returnedQty,
+        unitPrice: i.unitPrice,
+        spiceLevel: i.spiceLevel,
+        addons: parseJSON<{ name: string; price: number }[]>(i.addons, []),
+        specialNote: i.specialNote,
+        lineTotal: i.lineTotal,
+      })),
+    })),
+    summary: {
+      subtotal: Math.round(subtotal * 100) / 100,
+      happyHourDiscount: orders.reduce((s, o) => s + o.happyHourDiscount, 0),
+      voucherDiscount: orders.reduce((s, o) => s + o.voucherDiscount, 0),
+      birthdayDiscount: orders.reduce((s, o) => s + o.birthdayDiscount, 0),
+      payable: Math.round(total * 100) / 100,
+    },
+    payment: {
+      billPaid: true,
+      paymentMethod: lastPaid.paymentMethod || null,
+      paidAt: lastPaid.paidAt,
+      receiptId: receipt?.id || null,
+      receiptNo: receipt?.receiptNo || null,
+    },
+    // সব অফার/ক্লেইম বন্ধ — খাওয়া শেষ, নতুন স্ক্যানে নতুন সেশনে অফার আবার আসবে
+    birthdayOffer: {
+      enabled: false,
+      eligible: false,
+      amount: 0,
+      minBill: 0,
+      alreadyClaimed: true,
+      deviceAlreadyClaimed: true,
+    },
+    occasions: [],
   })
 }

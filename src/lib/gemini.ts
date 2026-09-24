@@ -91,7 +91,7 @@ export async function aiChatEnabled(): Promise<boolean> {
   }
 }
 
-/* ───────────────────── key health (skip known-bad keys for 10 min) ───────────────────── */
+/* ───────────── key health (skip known-bad keys / full-quota buckets) ───────────── */
 interface KeyHealth {
   badUntil: number
   lastError: string
@@ -108,6 +108,27 @@ function markKeyBad(key: string, error: string) {
 }
 function markKeyGood(key: string) {
   keyHealth.delete(key)
+}
+
+/**
+ * PER key+model quota cooldown. ফ্রি টিয়ারে প্রতি মডেলের আলাদা কোটা বাকেট
+ * (যেমন gemini-3.6-flash = ২০ রিকোয়েস্ট/মিনিট)। Gemini 429-এ যখন বলে
+ * "retry in 37.7s" — সেই সময়টা পর্যন্ত এই key+model জোড়াকে স্কিপ করা হয়:
+ * কোটা-শেষ বাকেটে বারবার বস্তা মারার দরকার নেই, পরের কি/মডেলেই উত্তর আসে।
+ */
+const quotaHealth = new Map<string, { badUntil: number; lastError: string }>()
+
+function quotaKey(key: string, model: string): string {
+  return `${key}:${model}`
+}
+function isKeyQuotaBad(key: string, model: string): boolean {
+  const h = quotaHealth.get(quotaKey(key, model))
+  return !!h && Date.now() < h.badUntil
+}
+function markKeyQuotaBad(key: string, model: string, seconds: number, error: string) {
+  // সামান্য buffer + hard cap (কোটা রিসেট সাধারণত ১ মিনিটেই)
+  const s = Math.min(Math.max(seconds, 10), 120)
+  quotaHealth.set(quotaKey(key, model), { badUntil: Date.now() + s * 1000 + 2_000, lastError: error })
 }
 
 /* ───────────────────────────── low-level API call ───────────────────────────── */
@@ -154,12 +175,27 @@ async function generateWithKey(
   return text
 }
 
-/** is this failure worth trying the next key? (rate limit / server / network) */
-function isRetryable(e: unknown): boolean {
-  const err = e as { geminiStatus?: string; httpStatus?: number; code?: string }
-  if (err?.httpStatus === 429 || err?.httpStatus === 500 || err?.httpStatus === 503) return true
-  if (err?.geminiStatus === 'RESOURCE_EXHAUSTED' || err?.geminiStatus === 'UNAVAILABLE' || err?.geminiStatus === 'INTERNAL') return true
-  return !(err instanceof Error && /API key not valid|API_KEY_INVALID/i.test(err.message))
+/* ─────────────── error classification (rotation decisions) ─────────────── */
+
+/** quota/rate-limit failure (429 family) — the key works, the bucket is full */
+function isQuotaError(e: unknown): boolean {
+  const err = e as { geminiStatus?: string; httpStatus?: number }
+  if (err?.httpStatus === 429) return true
+  if (err?.geminiStatus === 'RESOURCE_EXHAUSTED') return true
+  return e instanceof Error && /quota exceeded|rate limit|resource_exhausted/i.test(e.message)
+}
+
+/** permanent per-key failure — the key can never answer (invalid / forbidden / region-locked) */
+function isDeadKeyError(msg: string): boolean {
+  return /API key not valid|API_KEY_INVALID|PERMISSION_DENIED|location is not supported|FAILED_PRECONDITION/i.test(msg)
+}
+
+/** transient server/network failure — worth trying the next key (or round) */
+function isServerError(e: unknown): boolean {
+  const err = e as { geminiStatus?: string; httpStatus?: number }
+  if (err?.httpStatus === 500 || err?.httpStatus === 502 || err?.httpStatus === 503 || err?.httpStatus === 504) return true
+  if (err?.geminiStatus === 'UNAVAILABLE' || err?.geminiStatus === 'INTERNAL') return true
+  return e instanceof Error && /overloaded|aborted|timeout|timed out|network|fetch failed|ECONNRESET|ETIMEDOUT/i.test(e.message)
 }
 
 const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms))
@@ -174,25 +210,29 @@ function retryDelaySeconds(msg: string): number | null {
 }
 
 /**
- * Round-robin Gemini call across ALL configured keys — WITH RETRY ROUNDS.
+ * Quota-aware, model-fallback Gemini engine.
  *
- * আগে একবার সব কি চেষ্টা করে হাল ছেড়ে দিত — ফ্রি টিয়ারের মাঝে মাঝে 503/নেটওয়ার্ক
- * ঝামেলা বা মিনিট-কোটা শেষ হলেই কাস্টমার "একটু পরে লিখুন" fallback খেত। এখন:
- *   • ৩ রাউন্ড পর্যন্ত — রাউন্ডের মাঝে ছোট অপেক্ষা (1.2s / 3.5s), ট্রানজিয়েন্ট
- *     ভুলগুলো সেরে ওঠে
- *   • 429-এ Gemini যদি বলে "retry in Ns" (N ≤ 18s) আর বাজেট থাকে → অপেক্ষা
- *     করে একই কি-তে আবার — কাস্টমার fallback-এর বদলে সঠিক উত্তরই পায়
- *   • মোট ২৮ সেকেন্ড বাজেট — Meta webhook-এর ধৈর্যের মধ্যেই শেষ
- * Returns null reply when EVERY key in EVERY round failed (caller falls back).
+ * আসল সমস্যা (production-এ ধরা পড়েছে): ফ্রি টিয়ারে প্রতি মডেলের কোটা আলাদা
+ * বাকেট (যেমন gemini-3.6-flash = ২০ রিকোয়েস্ট/মিনিট)। ৩টা কি একসাথে
+ * "Quota exceeded, retry in 37.7s" দিলে আগের ইঞ্জিন একই মডেলে বারবার বস্তা
+ * মেরে সময় ও কোটা দুটোই নষ্ট করত — শেষে কাস্টমার fallback মেসেজ খেত। এখন:
+ *   • মডেল ফলব্যাক চেইন — কনফিগার করা মডেলের কোটা শেষ হলে পরের মডেলে
+ *     (3.5-flash → flash-lite…) উত্তর আসে; প্রতিটির কোটা বাকেট আলাদা
+ *   • 429-এর "retry in Ns" পড়ে সেই key+model জোড়া N সেকেন্ডের জন্য স্কিপ —
+ *     পরের মেসেজ নষ্ট কোটায় না গিয়ে সরাসরি জীবন্ত বাকেটে যায়
+ *   • N ≤ 12s হলে অপেক্ষা করে একই জায়গায় আবার (কোটা রিসেট হয়েই উত্তর)
+ *   • মৃত কি (invalid / permission / region-locked) ১০ মিনিটের জন্য স্কিপ
+ *   • মোট ৩০ সেকেন্ড বাজেট — webhook `after()`-এ চলে, Meta সাথে সাথে 200 পায়
+ * Returns { ok:false } only when EVERY key × EVERY model failed (caller then
+ * sends a useful static answer — never an apologetic message).
  */
 async function generateRotating(
   cfg: GeminiConfig,
   body: Record<string, unknown>,
 ): Promise<{ ok: boolean; text: string | null; error: string | null }> {
-  let lastError = 'কোনো API কি নেই'
   const started = Date.now()
-  const BUDGET_MS = 28_000
-  const ROUND_WAITS = [0, 1200, 3500]
+  const BUDGET_MS = 30_000
+  const WAIT_CAP_S = 12
   const timeLeft = () => BUDGET_MS - (Date.now() - started)
 
   // thinkingConfig জাতীয় নতুন ফিল্ড পুরনো মডেল/শেপ মানে না — বাদ দিয়ে চেষ্টা করার জন্য
@@ -203,61 +243,85 @@ async function generateRotating(
     return { ...body, generationConfig: rest }
   }
 
-  for (let round = 0; round < ROUND_WAITS.length; round++) {
-    if (ROUND_WAITS[round]) {
-      if (timeLeft() < 2000) break
-      await sleep(ROUND_WAITS[round])
-      if (timeLeft() < 1500) break
-    }
-    const usable = cfg.keys.filter((k) => !isKeyBad(k))
-    const list = usable.length ? usable : cfg.keys // all cooling down → try anyway once
+  const models = [cfg.model, ...GEMINI_MODELS.map((m) => m.id).filter((id) => id !== cfg.model)]
+  let lastError = 'কোনো API কি নেই'
 
-    for (let i = 0; i < list.length; i++) {
-      if (timeLeft() < 1500) return { ok: false, text: null, error: lastError }
-      const key = list[(rotationCursor + i) % list.length]
-      try {
-        const text = await generateWithKey(key, cfg.model, body)
-        markKeyGood(key)
-        rotationCursor = (rotationCursor + i + 1) % Math.max(list.length, 1)
-        return { ok: true, text, error: null }
-      } catch (e) {
-        const msg = e instanceof Error ? e.message : String(e)
-        // মডেল thinkingConfig মানে না (INVALID_ARGUMENT/unknown field) → ফিল্ডটা
-        // বাদ দিয়ে একই কি-তে আরেকবার — বট কখনো পুরোপুরি বন্ধ হয়ে যায় না
-        if (body.generationConfig && (body.generationConfig as Record<string, unknown>).thinkingConfig) {
-          try {
-            const text = await generateWithKey(key, cfg.model, stripThinking())
-            markKeyGood(key)
-            rotationCursor = (rotationCursor + i + 1) % Math.max(list.length, 1)
-            return { ok: true, text, error: null }
-          } catch {
-            /* still failing → normal error handling below */
-          }
-        }
-        lastError = msg
-        if (e instanceof Error && /API key not valid|API_KEY_INVALID|PERMISSION_DENIED/i.test(msg)) {
-          markKeyBad(key, msg) // dead key — skip it for 10 min
-          continue
-        }
-        // 429 কিন্তু কোটা কয়েক সেকেন্ডেই রিসেট হবে? অপেক্ষা করে এই কি-তেই আরেকবার
-        const waitS = e instanceof Error ? retryDelaySeconds(msg) : null
-        if (waitS && waitS > 0 && waitS <= 18 && timeLeft() > (waitS + 4) * 1000) {
-          await sleep(waitS * 1000 + 250)
-          try {
-            const text = await generateWithKey(key, cfg.model, body)
-            markKeyGood(key)
-            rotationCursor = (rotationCursor + i + 1) % Math.max(list.length, 1)
-            return { ok: true, text, error: null }
-          } catch (e2) {
-            lastError = e2 instanceof Error ? e2.message : String(e2)
-            if (isRetryable(e2)) continue
-            return { ok: false, text: null, error: lastError }
-          }
-        }
-        if (isRetryable(e)) continue // busy/quota → next key (পরে পরের রাউন্ডও আছে)
-        return { ok: false, text: null, error: msg } // non-retryable (bad request etc.)
+  for (const model of models) {
+    for (let round = 0; round < 2; round++) {
+      if (round) {
+        if (timeLeft() < 3000) break
+        await sleep(1500)
+        if (timeLeft() < 2000) break
       }
+      let usable = cfg.keys.filter((k) => !isKeyBad(k) && !isKeyQuotaBad(k, model))
+      // সবাই cooling down হলেও একবার (প্রথম রাউন্ডে) চেষ্টা করে দেখা হয় —
+      // cooldown ভুল হলে কাস্টমার তবু উত্তর পায়
+      if (!usable.length && round === 0) usable = cfg.keys.filter((k) => !isKeyBad(k))
+      if (!usable.length) usable = cfg.keys
+      if (!usable.length) break
+
+      for (let i = 0; i < usable.length; i++) {
+        if (timeLeft() < 2000) return { ok: false, text: null, error: lastError }
+        const key = usable[(rotationCursor + i) % usable.length]
+        const nextCursor = () => {
+          rotationCursor = (rotationCursor + i + 1) % Math.max(usable.length, 1)
+        }
+        try {
+          const text = await generateWithKey(key, model, body)
+          markKeyGood(key)
+          nextCursor()
+          return { ok: true, text, error: null }
+        } catch (e) {
+          const msg = e instanceof Error ? e.message : String(e)
+          // মডেল thinkingConfig মানে না (INVALID_ARGUMENT/unknown field) → ফিল্ডটা
+          // বাদ দিয়ে একই কি-তে আরেকবার — বট কখনো পুরোপুরি বন্ধ হয়ে যায় না
+          if (body.generationConfig && (body.generationConfig as Record<string, unknown>).thinkingConfig) {
+            try {
+              const text = await generateWithKey(key, model, stripThinking())
+              markKeyGood(key)
+              nextCursor()
+              return { ok: true, text, error: null }
+            } catch {
+              /* still failing → normal error handling below */
+            }
+          }
+          lastError = `${model}: ${msg}`
+          // মৃত কি (ভুল কি / পারমিশন নেই / অঞ্চল-ব্লক) — ১০ মিনিট স্কিপ
+          if (isDeadKeyError(msg)) {
+            markKeyBad(key, msg)
+            continue
+          }
+          const waitS = retryDelaySeconds(msg)
+          if (isQuotaError(e)) {
+            if (waitS && waitS > 0 && waitS <= WAIT_CAP_S && timeLeft() > (waitS + 4) * 1000) {
+              // কোটা কয়েক সেকেন্ডেই রিসেট হবে → অপেক্ষা করে এই key+model-এই আবার
+              await sleep(waitS * 1000 + 250)
+              try {
+                const text = await generateWithKey(key, model, body)
+                markKeyGood(key)
+                nextCursor()
+                return { ok: true, text, error: null }
+              } catch (e2) {
+                const msg2 = e2 instanceof Error ? e2.message : String(e2)
+                lastError = `${model}: ${msg2}`
+                markKeyQuotaBad(key, model, retryDelaySeconds(msg2) || 45, msg2)
+                if (isQuotaError(e2) || isServerError(e2)) continue
+                return { ok: false, text: null, error: lastError }
+              }
+            }
+            // কোটা অন্তত ১০+ সেকেন্ড বাকি → এই key+model জোড়া স্কিপ, পরেরটায়
+            // (পরের মেসেজও এখান থেকে সরাসরি জীবন্ত বাকেটে যাবে — কোনো বস্তা নয়)
+            markKeyQuotaBad(key, model, waitS || 45, msg)
+            continue
+          }
+          if (isServerError(e)) continue // 5xx/নেটওয়ার্ক → পরের কি
+          return { ok: false, text: null, error: msg } // non-retryable (bad request etc.)
+        }
+      }
+      // এই মডেলের সব কি কোটা-শেষ → বাকি রাউন্ড বাদ, পরের মডেলের কোটা বাকেটে
+      if (cfg.keys.every((k) => isKeyQuotaBad(k, model) || isKeyBad(k))) break
     }
+    if (timeLeft() < 2500) break
   }
   return { ok: false, text: null, error: lastError }
 }

@@ -804,6 +804,7 @@ function TablesTab({ onAuthRequired }: TabProps) {
       receiptId: string
       receiptNo: number
       ordersPaid: number
+      tableCleared?: boolean
     }>('/api/admin/bills/pay', {
       sessionId: payTarget.session.id,
       method: payMethod,
@@ -817,8 +818,8 @@ function TablesTab({ onAuthRequired }: TabProps) {
     const voucherVoidedTotal = res.data?.voucherVoidedTotal ?? 0
     toast.success(
       returnTotal > 0
-        ? `বিল পরিশোধ হয়েছে (${payMethod}) — রিটার্ন −৳${returnTotal}${voucherVoidedTotal > 0 ? ' + কুপন ছাড় বাতিল' : ''}, রসিদ #${toBn(String(receiptNo))}`
-        : `বিল পরিশোধ হয়েছে (${payMethod}) — রসিদ #${toBn(String(receiptNo))}`,
+        ? `বিল পরিশোধ হয়েছে (${payMethod}) — রিটার্ন −৳${returnTotal}${voucherVoidedTotal > 0 ? ' + কুপন ছাড় বাতিল' : ''}, রসিদ #${toBn(String(receiptNo))} — টেবিল অটো-ক্লিয়ার ✅`
+        : `বিল পরিশোধ হয়েছে (${payMethod}) — রসিদ #${toBn(String(receiptNo))} — টেবিল অটো-ক্লিয়ার ✅`,
       {
         action: receiptId
           ? { label: '🧾 রসিদ দেখুন', onClick: () => window.open(`/receipt/${receiptId}`, '_blank') }
@@ -839,7 +840,7 @@ function TablesTab({ onAuthRequired }: TabProps) {
       <div className="flex items-start gap-2 rounded-xl border border-amber-300 bg-amber-50 p-3 text-sm text-amber-900">
         <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-amber-600" />
         <p className="font-bold">
-          একই টেবিলে যত জন QR স্ক্যান করুক সবাই <u>একই সেশন ও একই বিলে</u> থাকবে। বিল পরিশোধের পর টেবিল ক্লিয়ার করুন — পুরনো QR লিঙ্ক আর কাজ করবে না।
+          একই টেবিলে যত জন QR স্ক্যান করুক সবাই <u>একই সেশন ও একই বিলে</u> থাকবে। <u>সব অর্ডার সার্ভ ও খাওয়া-দাওয়া শেষ হলেই</u> বিল নেওয়া যাবে — আর বিল পরিশোধ হতেই টেবিল <u>অটো-ক্লিয়ার</u> হয়ে যাবে (পুরনো QR লিঙ্ক বন্ধ, নতুন কাস্টমার স্ক্যান করতে পারবে)।
         </p>
       </div>
 
@@ -882,10 +883,12 @@ function TablesTab({ onAuthRequired }: TabProps) {
           {tables.map((t) => {
             const s = t.session
             const expired = s ? new Date(s.expiresAt).getTime() < Date.now() : false
-            // bill-readiness: all orders served/completed & unpaid → ready to bill
+            // সার্ভ-গার্ড: অপরিশোধিত প্রতিটি অর্ডার SERVED হলেই বিল নেওয়া যাবে
+            // (খাওয়া-দাওয়া শেষ হওয়াই এই সিস্টেমের "বিল-রেডি" সংজ্ঞা)
             const activeOrders = (s?.orders ?? []).filter((o) => o.status !== 'CANCELLED')
-            const billReady = activeOrders.length > 0 && activeOrders.every((o) => o.status === 'SERVED' || o.status === 'COMPLETED')
-            const stillEating = activeOrders.some((o) => o.status === 'PLACED' || o.status === 'COOKING')
+            const unserved = activeOrders.filter((o) => !o.billPaid && o.status !== 'SERVED' && o.status !== 'COMPLETED')
+            const billReady = activeOrders.length > 0 && unserved.length === 0
+            const cookingLeft = unserved.some((o) => o.status === 'PLACED' || o.status === 'COOKING')
             return (
               <Card key={t.id} className={cn('border-stone-200', s && 'border-amber-200 ring-1 ring-amber-100')}>
                 <CardContent className="space-y-3 p-4">
@@ -976,15 +979,17 @@ function TablesTab({ onAuthRequired }: TabProps) {
                     </div>
                   )}
 
-                  {/* bill-readiness hint */}
+                  {/* bill-readiness hint: সার্ভ শেষ না হলে বিল নয় */}
                   {s && s.orders.length > 0 && !s.bill.allPaid && billReady && (
                     <div className="animate-pulse rounded-lg border border-amber-400 bg-amber-100 px-3 py-2 text-xs font-extrabold text-amber-900">
                       ✅ খাওয়া-দাওয়া সম্পন্ন — এখন বিল নেওয়া যাবে
                     </div>
                   )}
-                  {s && s.orders.length > 0 && !s.bill.allPaid && !billReady && stillEating && (
+                  {s && s.orders.length > 0 && !s.bill.allPaid && !billReady && (
                     <div className="rounded-lg border border-stone-200 bg-stone-50 px-3 py-2 text-xs font-bold text-stone-500">
-                      ⏳ খাওয়া চলছে…
+                      {cookingLeft
+                        ? '⏳ রান্না-বান্না চলছে — সব অর্ডার সার্ভ হলেই বিল নেওয়া যাবে'
+                        : '🍽️ পরিবেশন বাকি — সব অর্ডার সার্ভ হলেই বিল নেওয়া যাবে'}
                     </div>
                   )}
 
@@ -1005,13 +1010,15 @@ function TablesTab({ onAuthRequired }: TabProps) {
                       ) : (
                         <Button
                           size="sm"
+                          disabled={!billReady}
+                          title={!billReady ? 'সব অর্ডার সার্ভ হওয়ার আগে বিল নেওয়া যাবে না' : 'বিল পরিশোধ করুন — সাথে সাথেই টেবিল অটো-ক্লিয়ার হবে'}
                           onClick={() => {
                             setPayTarget(t)
                             setPayMethod('CASH')
                             setPayResult(null)
                             setReturns({})
                           }}
-                          className="h-8 bg-emerald-600 font-black text-white hover:bg-emerald-700"
+                          className="h-8 bg-emerald-600 font-black text-white hover:bg-emerald-700 disabled:cursor-not-allowed disabled:opacity-40"
                         >
                           <Banknote className="h-4 w-4" /> বিল নিন
                         </Button>
@@ -1089,6 +1096,9 @@ function TablesTab({ onAuthRequired }: TabProps) {
                       {payResult.voucherVoidedTotal > 0 && ' • কুপন ছাড় বাতিল হয়েছে (রিটার্ন নিয়ম)'}
                     </span>
                   )}
+                  <span className="mt-2 block font-bold text-emerald-700">
+                    🧹 টেবিল অটো-ক্লিয়ার হয়েছে — টেবিলটি এখন ফাঁকা, নতুন কাস্টমার QR স্ক্যান করতে পারবেন
+                  </span>
                 </DialogDescription>
               </DialogHeader>
               <DialogFooter className="gap-2 sm:gap-0">
@@ -5427,6 +5437,17 @@ function SettingsTab({ onAuthRequired }: TabProps) {
               placeholder="যেমন: খুবই মজার ঢঙে কথা বলবে, কাস্টমারকে বিরিয়ানি recommend করবে…"
             />
           </div>
+
+          {/* last AI failure diagnostics (written by the webhook) */}
+          {form['gemini_last_error'] && (
+            <div className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-xs leading-snug">
+              <p className="font-black text-amber-900">⚠️ শেষ AI ব্যর্থতার কারণ (ডায়াগনস্টিকস):</p>
+              <p className="mt-1 break-words font-mono text-[11px] text-amber-800">{form['gemini_last_error']}</p>
+              <p className="mt-1 text-amber-700">
+                মূলত ফ্রি কোটা (প্রতি মিনিটের লিমিট) শেষ হলে এমন হয় — এরপর কাস্টমার অটো-অফার/মেনু উত্তর পায়, সমস্যার মেসেজ পায় না। কোটা রিসেটে নিজেই ঠিক হয়ে যায়।
+              </p>
+            </div>
+          )}
 
           {/* live test */}
           <div className="space-y-2">

@@ -15,7 +15,7 @@
 //
 // Security: when META_APP_SECRET is configured, every POST must carry a valid
 // X-Hub-Signature-256 HMAC — forged/fake webhook events can never apply discounts.
-import { NextRequest } from 'next/server'
+import { NextRequest, after } from 'next/server'
 import crypto from 'crypto'
 import { db } from '@/lib/db'
 import { fail, ok } from '@/lib/api'
@@ -27,6 +27,7 @@ import { parseDateLoose, parsePhoneLoose } from '@/lib/verify'
 import { nextCustomerCode } from '@/lib/customer-code'
 import { usedVoucherIdsForPsid } from '@/lib/vouchers'
 import { buildKnowledgeBase } from '@/lib/knowledge'
+import { buildStaticReply } from '@/lib/bot-static'
 import { t, pickBotLang, globalBotLang, aiLanguageFor, nameVar, type BotLang } from '@/lib/bot-text'
 import {
   aiChatEnabled,
@@ -130,11 +131,16 @@ interface MessagingEvent {
   }
   message?: {
     text?: string
+    mid?: string // Meta message id — re-delivery dedup
     is_echo?: boolean // our own page-sent messages echoed back — never reply to those
     quick_reply?: { payload?: string }
     attachments?: { type: string; payload?: unknown }[]
   }
 }
+
+// AI + Messenger কল webhook-এর after()-ফেজে চলে — Meta সাথে সাথেই 200 পায়,
+// তাই টাইমআউট-জনিত একই মেসেজের বারবার re-delivery (একই fallback ৪ বার!) আর হয় না
+export const maxDuration = 60
 
 export async function POST(req: NextRequest) {
   try {
@@ -151,7 +157,20 @@ export async function POST(req: NextRequest) {
 
     for (const entry of body.entry as WebhookEntry[]) {
       for (const event of entry.messaging || []) {
-        await handleEvent(event).catch((e) => console.error('[webhook:handler]', e))
+        // Meta re-delivery dedup: একই message-id দ্বিতীয়বার এলে আর প্রসেস নয়
+        // (নতুবা এক প্রশ্নের উত্তর ২-৩ বার চলে যেত)
+        const mid = event.message?.mid
+        if (mid) {
+          if (seenMids.has(mid)) continue
+          seenMids.set(mid, Date.now())
+          if (seenMids.size > 1000) {
+            const cutoff = Date.now() - 10 * 60 * 1000
+            for (const [m, ts] of seenMids) {
+              if (ts < cutoff) seenMids.delete(m)
+            }
+          }
+        }
+        after(() => handleEvent(event).catch((e) => console.error('[webhook:handler]', e)))
       }
     }
     return ok({ received: true })
@@ -160,6 +179,9 @@ export async function POST(req: NextRequest) {
     return ok({ received: true }) // always 200 for Meta
   }
 }
+
+/** processed message ids (re-delivery guard) — per instance, 10-minute window */
+const seenMids = new Map<string, number>()
 
 /* ───────────────────────── conversation helpers ───────────────────────── */
 
@@ -175,7 +197,9 @@ function politeName(p: { firstName?: string | null; lastName?: string | null }):
   return full
 }
 
-/** greeting head that never shows a placeholder name (localized) */
+/**
+ * greeting head that never shows a placeholder name (localized)
+ */
 function greet(name: string, lang: BotLang): string {
   return t(lang, 'greet', { name: nameVar(name) })
 }
@@ -185,34 +209,6 @@ async function followNudge(lang: BotLang): Promise<string> {
   const username = ((await getSetting(SETTING_KEYS.MESSENGER_PAGE_USERNAME)) || '').trim()
   if (!username) return ''
   return t(lang, 'followNudge', { url: `https://facebook.com/${username}` })
-}
-
-/**
- * has this customer EVER received an AI bot reply? (welcome-once guard —
- * একই "স্বাগতম + অফার" বিজ্ঞাপন বারবার গিয়ে কাস্টমার বিরক্ত হওয়া ঠেকায়)
- */
-async function hasPriorBotTurn(psid: string): Promise<boolean> {
-  try {
-    const m = await db.chatMessage.findFirst({ where: { psid, role: 'bot' }, select: { id: true } })
-    return Boolean(m)
-  } catch {
-    return false
-  }
-}
-
-/** last N bot messages (newest first) — fallback-duplicate guard reads it */
-async function recentBotTurns(psid: string, n = 3): Promise<string[]> {
-  try {
-    const rows = await db.chatMessage.findMany({
-      where: { psid, role: 'bot' },
-      orderBy: { createdAt: 'desc' },
-      take: n,
-      select: { text: true },
-    })
-    return rows.map((r) => r.text)
-  } catch {
-    return []
-  }
 }
 
 /** default ask-text per field type (when the admin left askText empty) */
@@ -370,14 +366,13 @@ async function aiGeneralReply(psid: string, profileName: string, customerMessage
     formatting: await markdownEnabled(), // বন্ধ থাকলে AI মার্কডাউন চিহ্নই লিখবে না
     cfg,
   }
-  // একটা retry — মাঝে মাঝে Gemini rate-limit/খালি উত্তর দেয়; retry-তেই বেশিরভাগ ঠিক হয়ে যায়
-  let ai = await chatWithCustomer(chatOpts)
-  if (!ai.ok || !ai.reply) {
-    await new Promise((r) => setTimeout(r, 1200))
-    ai = await chatWithCustomer(chatOpts)
-  }
+  // রোটেশন ইঞ্জিনেই বহু key × বহু মডেল × রিট্রাই-রাউন্ড আছে — এখানে আর দ্বিতীয়
+  // পুরো চেষ্টা নয় (আগের ডাবল-রিট্রাই ফ্রি-কোটা দ্রুত শেষ করে দিত)
+  const ai = await chatWithCustomer(chatOpts)
   if (!ai.ok || !ai.reply) {
     console.error('[webhook:ai]', ai.error)
+    // ডায়াগনস্টিকস: শেষ AI ব্যর্থতার কারণ admin প্যানেলে দেখা যাবে (১ মিনিট থ্রটল)
+    recordAiError(ai.error || 'unknown')
     return false
   }
 
@@ -443,6 +438,18 @@ async function saveAiCrmData(
 function isPlaceholderName(name?: string | null): boolean {
   const n = (name || '').trim()
   return !n || n === 'Customer' || n === 'নাম যাচাই বাকি'
+}
+
+/** last AI failure (admin diagnostics) — written at most once a minute */
+const KEY_LAST_AI_ERR = 'gemini_last_error'
+let lastAiErrWrite = 0
+let lastAiErrText = ''
+function recordAiError(error: string) {
+  const text = `${new Date().toISOString()} — ${error}`.slice(0, 500)
+  if (text === lastAiErrText && Date.now() - lastAiErrWrite < 60_000) return
+  lastAiErrWrite = Date.now()
+  lastAiErrText = text
+  setSettings({ [KEY_LAST_AI_ERR]: text }).catch(() => {})
 }
 
 /* ───────────────────── Recurring Notifications (24h-বাইপাস মার্কেটিং) ───────────────────── */
@@ -575,28 +582,17 @@ async function handleEvent(event: MessagingEvent) {
     const dataTextIn = (text || sharedPhone || '').trim()
     if (dataTextIn) await saveChatTurn(psid, 'customer', dataTextIn)
 
-    // 2a. no pending claim → AI chat (or friendly info fallback)
+    // 2a. no pending claim → AI chat (AI down → লাইভ নলেজ বেস থেকে সঠিক উত্তর)
     if (!tokenRow) {
       const aiOn = dataTextIn ? await aiChatEnabled() : false
       const aiHandled = aiOn ? await aiGeneralReply(psid, name, dataTextIn) : false
       if (!aiHandled && dataTextIn) {
-        // একই অফার-বিজ্ঞাপন বারবার যেতে পারে না (কাস্টমার বিরক্ত):
-        // • প্রথম যোগাযোগে একবারই স্বাগতম + অফার তথ্য (lifetime একবার)
-        // • এরপর AI fail/disabled হলে ছোট্ট "একটু পরে আবার লিখুন" মেসেজ —
-        //   তবে সেটাই সম্প্রতি গেলে আর পাঠানো হয় না: একের পর এক একই
-        //   "পরে লিখুন" আরও বিরক্তিকর — নীরবতা ভালো (রিট্রাই-রাউন্ডও আছে)
-        if (!(await hasPriorBotTurn(psid))) {
-          await sendText(
-            psid,
-            `${greet(name, lang)}\n\n${t(lang, 'generalFallback')}${await followNudge(lang)}`
-          )
-          await saveChatTurn(psid, 'bot', t(lang, 'generalFallback'))
-        } else {
-          const retryText = t(lang, 'aiFailRetry')
-          if (!(await recentBotTurns(psid, 3)).includes(retryText)) {
-            await sendText(psid, retryText)
-          }
-        }
+        // AI চলেনি (কোটা/নেটওয়ার্ক) বা বন্ধ — কখনোই "সমস্যা হচ্ছে, পরে লিখুন"
+        // জাতীয় মেসেজ যায় না। লাইভ ডাটাবেস থেকে চলমান অফার/কুপন/মেনু সাজিয়ে
+        // কাস্টমারের প্রশ্নের সঠিক উত্তরই যায় (bot-static.ts)।
+        const staticReply = await buildStaticReply({ lang, message: dataTextIn, psid })
+        await sendText(psid, staticReply)
+        await saveChatTurn(psid, 'bot', staticReply)
       }
       // সরাসরি পেজে মেসেজ দেওয়া কাস্টমারও RN-এর সুযোগ পাক (একবারই, কুলডাউন গার্ড সহ)
       await maybeAskRnOptIn(psid)
