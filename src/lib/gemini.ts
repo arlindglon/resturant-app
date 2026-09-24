@@ -41,6 +41,8 @@ export interface GeminiConfig {
   keys: string[]
   model: string
   persona: string
+  /** টেস্ট/প্রোব: শুধু এই এক মডেলেই চলবে — ফলব্যাক চেইন নয় */
+  pinned?: boolean
 }
 
 /** masked key for logs / admin display: AIzaSy…abcd → AIza…abcd */
@@ -372,7 +374,7 @@ async function generateRotating(
     return { ...src, generationConfig: rest }
   }
 
-  const models = [cfg.model, ...GEMINI_MODELS.map((m) => m.id).filter((id) => id !== cfg.model)]
+  const models = cfg.pinned ? [cfg.model] : [cfg.model, ...GEMINI_MODELS.map((m) => m.id).filter((id) => id !== cfg.model)]
   let lastError = 'কোনো API কি নেই'
 
   modelLoop: for (const model of models) {

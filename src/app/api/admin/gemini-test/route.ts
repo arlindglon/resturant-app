@@ -27,13 +27,38 @@ export async function POST(req: Request) {
   // কি না (404), কোটা আছে কি না (429), কত সময় নেয় — হুবহু রিপোর্ট দেয়।
   // নতুন মডেল-নাম যাচাইয়ের সবচেয়ে নির্ভরযোগ্য উপায় (চেইনের অন্ধকারে না গিয়ে)।
   let probeModel: string | null = null
+  let chatMode = false
   try {
-    const body = (await req.json()) as { model?: string }
+    const body = (await req.json()) as { model?: string; chat?: boolean }
     if (body?.model && typeof body.model === 'string') probeModel = body.model.trim()
+    chatMode = !!body?.chat
   } catch {
     /* no body → normal chain test */
   }
   if (probeModel) {
+    // chat:true → আসল চ্যাট-কল এই এক মডেলেই পিন করে (কোন মডেল ক্লিন উত্তর দেয়,
+    // কত সময় নেয় — ডাটা দিয়ে সিদ্ধান্ত); chat:false → ছোট পিং
+    if (chatMode) {
+      const kb = await buildKnowledgeBase()
+      const t0 = Date.now()
+      const ai = await chatWithCustomer({
+        knowledgeBase: kb.text,
+        history: [],
+        customerMessage: 'তোমাদের জনপ্রিয় খাবার কোনটা? দাম কত? আর কোনো অফার আছে?',
+        customerName: '',
+        extraPersona: cfg.persona,
+        cfg: { ...cfg, model: probeModel, pinned: true },
+      })
+      return ok({
+        probe: {
+          model: probeModel,
+          ok: ai.ok,
+          ms: Date.now() - t0,
+          sample: (ai.reply || ai.error || '').slice(0, 300),
+          error: ai.ok ? null : ai.error,
+        },
+      })
+    }
     const t0 = Date.now()
     try {
       const text = await generateWithKey(
