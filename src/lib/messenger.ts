@@ -332,9 +332,30 @@ export interface MenuEntry {
  * Persistent Menu — চ্যাটবক্সের নিচে সবসময় থাকা ফিক্সড হ্যামবার্গার মেনু।
  * Meta নিয়ম: সর্বোচ্চ ৩টা টপ-লেভেল এন্ট্রি; ৩টার বেশি চাইলে নেস্টেড (≤৫ nested)।
  * POST /me/messenger_profile — পেজ-লেভেল সেটিং, একবার সেট করলেই সবার জন্য।
+ *
+ * ⚠️ Meta বাধ্যতামূলক নিয়ম: persistent_menu সেট করতে হলে আগে Get Started
+ * বাটন (get_started) পেজ প্রোফাইলে থাকতেই হবে — নইলে Graph (#100)
+ * "You must set a Get started button if you also wish to use persistent menu"
+ * দিয়ে রিজেক্ট করে। তাই এই ফাংশন আগে get_started (+ greeting) সেট করে
+ * (idempotent — আগে থেকে থাকলে শুধু আপডেট হয়), তারপর মেনু পাঠায়।
+ * নতুন কাস্টমার "শুরু করুন" চাপলে getStartedPayload postback যায় → webhook
+ * সেটাকে Rich-UI অ্যাকশন হিসেবে সামলায় (bot-ui.ts handleBotUiAction)।
  */
-export async function setPersistentMenu(entries: MenuEntry[]): Promise<GraphSendResult> {
-  // টপ-লেভেল ৩টার বেশি হলে বাকিগুলো একটা "আরও" নেস্টেড গ্রুপে ঢোকানো হয়
+export async function setPersistentMenu(
+  entries: MenuEntry[],
+  opts?: { getStartedPayload?: string; greeting?: string }
+): Promise<GraphSendResult> {
+  // ধাপ ১: Get Started বাটন (+ স্বাগতম গ্রিটিং) — মেনুর পূর্বশর্ত
+  const pre: Record<string, unknown> = {}
+  if (opts?.getStartedPayload) pre.get_started = { payload: opts.getStartedPayload.slice(0, 1000) }
+  if (opts?.greeting) pre.greeting = [{ locale: 'default', text: opts.greeting.slice(0, 160) }]
+  if (Object.keys(pre).length) {
+    const preRes = await graphPost('/me/messenger_profile', pre)
+    // get_started ছাড়া মেনু যাই হোক না কেন (#100)-এ আটকাবে — তাই এখানেই থামি
+    if (!preRes.ok && opts?.getStartedPayload) return { ok: false, error: preRes.error }
+  }
+
+  // ধাপ ২: টপ-লেভেল ৩টার বেশি হলে বাকিগুলো একটা "আরও" নেস্টেড গ্রুপে ঢোকানো হয়
   const top = entries.slice(0, 3).map((e) => ({ type: 'postback', title: e.title.slice(0, 20), payload: e.payload.slice(0, 1000) }))
   const rest = entries.slice(3)
   const callToActions = rest.length

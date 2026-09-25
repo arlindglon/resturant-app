@@ -4687,7 +4687,7 @@ function SettingsTab({ onAuthRequired }: TabProps) {
     const res = await api.post<{ ok: boolean; error?: string }>('/api/admin/messenger-menu')
     setMenuSyncing(false)
     if (!res.ok || !res.data) return toast.error(res.error || 'মেনু সেট করা যায়নি')
-    if (res.data.ok) toast.success('✅ পার্সিস্টেন্ট মেনু সেট হয়েছে — Messenger খুলে নিচের ☰ আইকনে দেখুন')
+    if (res.data.ok) toast.success('✅ পার্সিস্টেন্ট মেনু + শুরু করুন (Get Started) বাটন সেট হয়েছে — Messenger খুলে নিচের ☰ আইকনে দেখুন')
     else toast.error(`Meta রিজেক্ট করেছে: ${res.data.error || 'অজানা ত্রুটি'}`)
   }
 
@@ -5215,7 +5215,7 @@ function SettingsTab({ onAuthRequired }: TabProps) {
               </Button>
             </div>
             <p className="text-xs leading-snug text-stone-500">
-              📋 পার্সিস্টেন্ট মেনু = কাস্টমারের চ্যাটবক্সের নিচে সবসময় থাকা ফিক্সড মেনু (🍕 মেনু · 🔥 অফার · 📍 লোকেশন · ☎️ হেল্পলাইন) — একবার সেট করলেই সব কাস্টমারের জন্য চালু হয়।
+              📋 পার্সিস্টেন্ট মেনু = কাস্টমারের চ্যাটবক্সের নিচে সবসময় থাকা ফিক্সড মেনু (🍕 মেনু · 🔥 অফার · 📍 লোকেশন · ☎️ হেল্পলাইন) — একসাথে "শুরু করুন" বাটন ও স্বাগতম গ্রিটিংও সেট হয় (Meta-র নিয়ম: মেনুর আগে Get Started লাগবেই)। একবার সেট করলেই সব কাস্টমারের জন্য চালু হয়।
             </p>
             {metaTest && (
               <div
