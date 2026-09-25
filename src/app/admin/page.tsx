@@ -3084,11 +3084,20 @@ function CustomersTab({ onAuthRequired }: TabProps) {
 
   useEffect(() => {
     const t = setTimeout(load, 0)
-    // লাইভ "✍️ লিখছে…" ব্যাজ — ৮ সেকেন্ড পরপর রিফ্রেশ (bot কখন কার উত্তর লিখছে)
-    const iv = setInterval(load, 8000)
+    // লাইভ "✍️ লিখছে…" ব্যাজ — প্রতি ১-৫ সেকেন্ডে (র‍্যান্ডম) রিফ্রেশ:
+    // ফিক্সড ইন্টারভালের মেশিনি তাল নয়, প্রায়-রিয়েলটাইম লাইভ ফিল (bot কখন কার উত্তর লিখছে)
+    let cancelled = false
+    let iv: ReturnType<typeof setTimeout> | null = null
+    const tick = () => {
+      if (cancelled) return
+      load()
+      iv = setTimeout(tick, 1000 + Math.floor(Math.random() * 4000)) // ১-৫ সেকেন্ড
+    }
+    iv = setTimeout(tick, 3000)
     return () => {
+      cancelled = true
       clearTimeout(t)
-      clearInterval(iv)
+      if (iv) clearTimeout(iv)
     }
   }, [load])
 
@@ -4519,6 +4528,7 @@ function SettingsTab({ onAuthRequired }: TabProps) {
   const [runningCron, setRunningCron] = useState(false)
   const [testingMeta, setTestingMeta] = useState(false)
   const [metaTest, setMetaTest] = useState<MessengerTestResult | null>(null)
+  const [menuSyncing, setMenuSyncing] = useState(false)
   const [testingGemini, setTestingGemini] = useState(false)
   const [geminiTest, setGeminiTest] = useState<GeminiTestResult | null>(null)
   const [rnBusy, setRnBusy] = useState<'ask' | 'broadcast' | null>(null)
@@ -4669,6 +4679,16 @@ function SettingsTab({ onAuthRequired }: TabProps) {
     )
     if (res.data.tokenTest.ok) toast.success(`টোকেন ঠিক আছে — পেজ: ${res.data.tokenTest.pageName}`)
     else toast.error('টোকেন কাজ করছে না — নিচে বিস্তারিত দেখুন')
+  }
+
+  // পার্সিস্টেন্ট মেনু Meta-তে সেট করা — চ্যাটবক্সের নিচে সবসময় ফিক্সড মেনু
+  const syncPersistentMenu = async () => {
+    setMenuSyncing(true)
+    const res = await api.post<{ ok: boolean; error?: string }>('/api/admin/messenger-menu')
+    setMenuSyncing(false)
+    if (!res.ok || !res.data) return toast.error(res.error || 'মেনু সেট করা যায়নি')
+    if (res.data.ok) toast.success('✅ পার্সিস্টেন্ট মেনু সেট হয়েছে — Messenger খুলে নিচের ☰ আইকনে দেখুন')
+    else toast.error(`Meta রিজেক্ট করেছে: ${res.data.error || 'অজানা ত্রুটি'}`)
   }
 
   const runGeminiTest = async () => {
@@ -5176,14 +5196,27 @@ function SettingsTab({ onAuthRequired }: TabProps) {
 
           {/* live test */}
           <div className="space-y-2">
-            <Button
-              onClick={runMessengerTest}
-              disabled={testingMeta}
-              variant="outline"
-              className="border-amber-300 font-black text-amber-700 hover:bg-amber-50"
-            >
-              {testingMeta ? <Loader2 className="h-4 w-4 animate-spin" /> : '🔍'} টোকেন ও সংযোগ টেস্ট করুন
-            </Button>
+            <div className="flex flex-wrap gap-2">
+              <Button
+                onClick={runMessengerTest}
+                disabled={testingMeta}
+                variant="outline"
+                className="border-amber-300 font-black text-amber-700 hover:bg-amber-50"
+              >
+                {testingMeta ? <Loader2 className="h-4 w-4 animate-spin" /> : '🔍'} টোকেন ও সংযোগ টেস্ট করুন
+              </Button>
+              <Button
+                onClick={syncPersistentMenu}
+                disabled={menuSyncing}
+                variant="outline"
+                className="border-stone-300 font-black text-stone-700 hover:bg-stone-50"
+              >
+                {menuSyncing ? <Loader2 className="h-4 w-4 animate-spin" /> : '📋'} পার্সিস্টেন্ট মেনু সেট করুন
+              </Button>
+            </div>
+            <p className="text-xs leading-snug text-stone-500">
+              📋 পার্সিস্টেন্ট মেনু = কাস্টমারের চ্যাটবক্সের নিচে সবসময় থাকা ফিক্সড মেনু (🍕 মেনু · 🔥 অফার · 📍 লোকেশন · ☎️ হেল্পলাইন) — একবার সেট করলেই সব কাস্টমারের জন্য চালু হয়।
+            </p>
             {metaTest && (
               <div
                 className={`rounded-lg border p-3 text-xs leading-snug ${

@@ -19,7 +19,8 @@ import { NextRequest, after } from 'next/server'
 import crypto from 'crypto'
 import { db } from '@/lib/db'
 import { fail, ok } from '@/lib/api'
-import { fetchMessengerProfile, askPhoneQuickReply, sendReceipt, sendText, sendTypingOn, sendRnOptInRequest, markdownEnabled } from '@/lib/messenger'
+import { fetchMessengerProfile, askPhoneQuickReply, sendReceipt, sendText, sendTypingOn, sendRnOptInRequest, sendQuickReplies, markdownEnabled } from '@/lib/messenger'
+import { botActionFromPayload, botActionFromText, handleBotUiAction, botQuickReplies, BOT_ACTIONS } from '@/lib/bot-ui'
 import { applyBirthdayDiscount } from '@/lib/birthday'
 import { setSettings, getSetting } from '@/lib/settings'
 import { SETTING_KEYS } from '@/lib/constants'
@@ -422,7 +423,8 @@ async function aiGeneralReply(psid: string, profileName: string, customerMessage
     return false
   }
 
-  await sendText(psid, ai.reply)
+  // প্রতিটি AI উত্তরের নিচে কুইক-রিপ্লাই বাটন (🍕 মেনু / 🔥 অফার / 📍 লোকেশন / ☎️ হেল্পলাইন)
+  await sendQuickReplies(psid, ai.reply, botQuickReplies(pickBotLang(customerLanguage, await globalBotLang())))
   stopTyping()
 
   // history + CRM writes are best-effort — never block the conversation
@@ -635,6 +637,25 @@ async function handleEvent(event: MessagingEvent) {
 
     // 2a. no pending claim → AI chat (AI down → লাইভ নলেজ বেস থেকে সঠিক উত্তর)
     if (!tokenRow) {
+      // 2a-quick: কুইক-রিপ্লাই বাটনে ট্যাপ (payload) — ডিটারমিনিস্টিক Rich-UI অ্যাকশন
+      const qrAction = botActionFromPayload(event.message?.quick_reply?.payload)
+      if (qrAction) {
+        const r = await handleBotUiAction(psid, lang, qrAction, (msg) => aiGeneralReply(psid, name, msg))
+        if (r.handled) {
+          if (r.echo) await saveChatTurn(psid, 'bot', r.echo)
+          return
+        }
+      }
+      // 2a-text: সরাসরি টেক্সটেও মেনু/অফার চাইলে একই কার্ড/বাটন-উত্তর
+      const textAction = botActionFromText(dataTextIn)
+      if (textAction && (textAction === BOT_ACTIONS.MENU || textAction === BOT_ACTIONS.OFFERS || textAction === BOT_ACTIONS.ORDER)) {
+        const r = await handleBotUiAction(psid, lang, textAction)
+        if (r.handled) {
+          if (r.echo) await saveChatTurn(psid, 'bot', r.echo)
+          await maybeAskRnOptIn(psid)
+          return
+        }
+      }
       const aiOn = dataTextIn ? await aiChatEnabled() : false
       const aiHandled = aiOn ? await aiGeneralReply(psid, name, dataTextIn) : false
       if (!aiHandled && dataTextIn) {
@@ -642,7 +663,7 @@ async function handleEvent(event: MessagingEvent) {
         // জাতীয় মেসেজ যায় না। লাইভ ডাটাবেস থেকে চলমান অফার/কুপন/মেনু সাজিয়ে
         // কাস্টমারের প্রশ্নের সঠিক উত্তরই যায় (bot-static.ts)।
         const staticReply = await buildStaticReply({ lang, message: dataTextIn, psid })
-        await sendText(psid, staticReply)
+        await sendQuickReplies(psid, staticReply, botQuickReplies(lang))
         await saveChatTurn(psid, 'bot', staticReply)
       }
       // সরাসরি পেজে মেসেজ দেওয়া কাস্টমারও RN-এর সুযোগ পাক (একবারই, কুলডাউন গার্ড সহ)
@@ -846,7 +867,20 @@ async function handleEvent(event: MessagingEvent) {
     // কুলডাউন) RN অপট-ইন কার্ড দেখাই: ২৪ ঘণ্টা পার হলেও ভবিষ্যতের সব
     // অফার/জন্মদিনের শুভেচ্ছা তাকে পৌঁছে দেওয়ার লিগ্যাল চ্যানেল চালু হয়
     await maybeAskRnOptIn(psid)
+    return
   }
+
+  // Case 1b: persistent-menu / কার্ড-বাটনের postback — ডিটারমিনিস্টিক Rich-UI অ্যাকশন
+  // (🍕 মেনু / 🔥 অফার / 📍 লোকেশন / ☎️ হেল্পলাইন / 🛒 অর্ডার) — AI-র অপেক্ষা ছাড়াই
+  // সঠিক উত্তর; অজানা payload হলে আগের মতো নিঃশব্দে বাদ
+  const pbAction = botActionFromPayload(event.postback?.payload)
+  if (event.postback && pbAction) {
+    const cust = await upsertCustomer(psid)
+    const lang = pickBotLang(cust.language, await globalBotLang())
+    await handleBotUiAction(psid, lang, pbAction, (msg) => aiGeneralReply(psid, cust.name, msg))
+    return
+  }
+  if (event.postback) return
 }
 
 function extractPhone(event: MessagingEvent): string | null {

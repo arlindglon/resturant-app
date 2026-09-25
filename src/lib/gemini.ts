@@ -373,7 +373,36 @@ function looksLikeReasoning(text: string): boolean {
   // আউটপুট-ফরম্যাটের টেমপ্লেট-ইকো ("INFO line", "ভাষা=bn", "নাম=<…") — কখনোই বৈধ নয়
   if (/\b(?:info|data|action)\s*(?:line|ফরম্যাট|format)\b/i.test(s)) return true
   if (/ভাষা=\s*(?:bn|banglish|en|hi|other)|নাম=\s*<|ফোন=\s*<|<bn\s*\||language=\s*(?:bn|banglish|en|hi)/i.test(s)) return true
+  // লাইভ-প্রমাণিত নতুন narration-রূপ (প্রোডাকশন ট্রান্সক্রিপ্ট থেকে):
+  //  ১) "Wait, "hihi" could be interpreted as banglish… I'll use en." — ভাষা-বিশ্লেষণের মনোলগ
+  //  ২) "Drafting the final response: …" / "Composing the reply …"
+  //  ৩) "Let's go.আমাদের স্পেশাল…" — উত্তরের সাথে আঠালো narration-প্রস্তাবনা
+  if (/^wait\s*[,.!:]/i.test(s) || /^wait\s+[,\u201c"']?(?:hmm|okay|ok\b|let|so\b|the (?:user|customer)|i )/i.test(s)) return true
+  if (/\bcould be interpreted as\b|\bstrictly,? it'?s\b/i.test(s)) return true
+  if (/\bi'?ll (?:use|go with|stick with)\s+(?:the\s+)?(?:bn|en|banglish|hi|english|bengali)\b|\bi will (?:use|go with)\s+(?:the\s+)?(?:bn|en|banglish|hi)\b/i.test(s)) return true
+  if (/\b(?:drafting|composing|writing|finalizing|polishing|crafting)\s+(?:the\s+)?(?:final\s+)?(?:response|reply|message|answer|output|version)\b/i.test(s)) return true
+  if (/^let'?s\s+(?:go|start|begin|dive(?: in)?)\b[.,!:]/i.test(s)) return true
   return false
+}
+
+/**
+ * অর্থহীন-উত্তর ডিটেক্টর: মডেল মাঝে মাঝে শুধু "…" / "..." / "-" ধরনের ফাঁকা
+ * ইশারা পাঠায় (লাইভ প্রমাণ: কাস্টমার উত্তর হিসেবে শুধু "..." পেয়েছে) — এটা
+ * কাস্টমারকে কখনো যায় না; কলার static fallback-এ যায়।
+ */
+function hasRealText(text: string): boolean {
+  // অক্ষর ছাড়া সব (emoji/চিহ্ন/স্পেস/মার্কডাউন) সরিয়ে কমপক্ষে ২টা আসল অক্ষর দরকার
+  const letters = (text || '').replace(/[^\p{L}\p{N}]/gu, '')
+  return letters.length >= 2
+}
+
+/**
+ * একীভূত চূড়ান্ত রিপ্লাই-গার্ড — কাস্টমারকে যাওয়ার আগে প্রতিটি AI-উত্তর এর ভেতর দিয়ে যায়:
+ * প্রোটোকল-জাংক (INFO:/ভাষা=…), বিশ্লেষণ-লিক ("Wait,…"/"Drafting…"), persona-মিরর
+ * আর অর্থহীন ইশারা ("...") — যেকোনো একটা হলেই বাতিল (webhook static fallback-এ যায়)।
+ */
+export function isCustomerUnfitReply(text: string): boolean {
+  return isProtocolJunk(text) || looksLikeReasoning(text) || looksLikePromptEcho(text) || !hasRealText(text)
 }
 
 /**
@@ -424,6 +453,18 @@ export function sanitizeCustomerReply(text: string): string {
     .replace(/\s*(?:নাম|ফোন|name|phone)\s*=\s*<[^>\n>]*>?/gi, '')
     .replace(/<bn\s*\|[^>\n]*>/gi, '')
     .replace(/\n{3,}/g, '\n\n')
+    .trim()
+
+  // ১.৫) উত্তরের সাথে আঠালো narration-প্রস্তাবনা — লাইভ-প্রমাণিত রূপ:
+  //   "Drafting the final response:\n    আমি তো…" / "Let's go.আমাদের স্পেশাল…"
+  // বৈধ বাংলা উত্তরে এই প্রস্তাবনাগুলো কখনো থাকে না — পুরো প্রস্তাবনাটাই কাটা হয়
+  out = out
+    .replace(
+      /^\s*(?:[*•‣▪–—-]\s*)?(?:drafting|composing|writing|finalizing|polishing|crafting)\s+(?:the\s+)?(?:final\s+)?(?:response|reply|message|answer|output|version)\s*:?[\s\n]*/i,
+      '',
+    )
+    .replace(/^\s*(?:final\s+)?(?:response|reply|message|answer)\s*(?:draft|text)?\s*:\s*[\n\s]*/i, '')
+    .replace(/^\s*(?:let'?s|let us)\s+(?:go|start|begin|dive(?: in)?|get started)\b\s*[.,!:]?\s*/i, '')
     .trim()
 
   // ২) শুরুর narration/label — প্রথম লাইন নিছক মেটা-কথা হলে ফেলে দাও (২+ লাইন থাকলে)
@@ -834,7 +875,8 @@ ${opts.formatting !== false ? MESSENGER_FORMAT_RULES + '\n- এটা একট�
   // নেতৃত্ব-লেবেল ("Final Answer:") সরানো হয়
   const rawText = str(j?.text) || (cleanPlainReply(res.text, 800) ? res.text.trim() : salvageFinalAnswer(res.text) || '')
   const text = sanitizeCustomerReply(rawText)
-  if (!text || looksLikePromptEcho(text) || isProtocolJunk(text)) return { ok: false, text: null, error: 'আউটপুট প্রম্পট-ইকো/খালি' }
+  if (!text || isCustomerUnfitReply(text))
+    return { ok: false, text: null, error: 'আউটপুট প্রম্পট-ইকো/খালি' }
   return { ok: true, text, error: null }
 }
 
@@ -861,7 +903,7 @@ const str = (v: unknown): string => (typeof v === 'string' ? v.trim() : '')
  * persona-মিরর/প্রম্পট-ইকো কখনো গ্রহণযোগ্য নয় */
 function cleanPlainReply(text: string, maxLen = 600): boolean {
   const raw = text.trim()
-  return !!raw && !raw.startsWith('{') && !looksLikeReasoning(raw) && !looksLikePromptEcho(raw) && raw.length <= maxLen
+  return !!raw && hasRealText(raw) && !raw.startsWith('{') && !looksLikeReasoning(raw) && !looksLikePromptEcho(raw) && raw.length <= maxLen
 }
 
 /* ─────────────── Messenger মার্কডাউন ফরম্যাটিং (professional usage) ─────────────── */
@@ -995,7 +1037,9 @@ export async function chatWithCustomer(opts: {
   // বাকিটা ছোট পরিষ্কার plain উত্তর হলে রিপ্লাই; নাহলে static fallback-এ (লাইভ KB)
   const replyParsed = str(j?.reply)
   let reply = sanitizeCustomerReply(replyParsed)
-  if (reply && looksLikePromptEcho(reply)) reply = '' // persona-মিরর JSON-রিপ্লাই — বাতিল
+  // JSON-reply-তেই বিশ্লেষণ/ইকো/অর্থহীন টেক্সট এলে বাতিল — নিচের plain-path তখন
+  // raw আউটপুট থেকে পরিষ্কার উত্তর খোঁজে (salvage), নাহলে static fallback
+  if (reply && isCustomerUnfitReply(reply)) reply = ''
   let extractedData = {
     name: str(j?.customerName) || null,
     phone: str(j?.phone) || null,
@@ -1048,7 +1092,7 @@ export async function chatWithCustomer(opts: {
   }
   return {
     ok: true,
-    reply: reply && isProtocolJunk(reply) ? '' : reply,
+    reply: reply && isCustomerUnfitReply(reply) ? '' : reply,
     extracted: extractedData,
     error: null,
   }
@@ -1167,7 +1211,8 @@ ${opts.knowledgeBase.slice(0, 4000)}
   // JSON রিপ্লাইতেও নেতৃত্ব-লেবেল ("Final Output Construction:") থাকতে পারে — সরানো;
   // persona-মিরর রিপ্লাই হলে বাতিল (deterministic ফ্লো সামলায়)
   let reply = sanitizeCustomerReply(str(j?.reply))
-  if (reply && looksLikePromptEcho(reply)) reply = ''
+  // persona-মিরর/বিশ্লেষণ-লিক রিপ্লাই হলে বাতিল (deterministic ফ্লো সামলায়)
+  if (reply && isCustomerUnfitReply(reply)) reply = ''
   if (!j || (!reply && !extracted)) {
     const raw = res.text.trim()
     const lines = raw.split('\n')
@@ -1193,7 +1238,7 @@ ${opts.knowledgeBase.slice(0, 4000)}
   return {
     ok: true,
     extracted,
-    reply: reply && isProtocolJunk(reply) ? '' : reply,
+    reply: reply && isCustomerUnfitReply(reply) ? '' : reply,
     action,
     error: null,
   }

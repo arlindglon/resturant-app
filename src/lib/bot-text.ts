@@ -76,6 +76,10 @@ const bn: Pack = {
     '🎁 আসসালামু আলাইকুম{name}! এই সপ্তাহের স্পেশাল অফার এসে গেছে — সাথে জন্মদিনের সারপ্রাইজও অপেক্ষা করছে! 🍔🎉{base}',
   rnOrderLink: '\n\nঅর্ডার দিতে: {url}',
   rnTitleDefault: 'সাপ্তাহিক অফার ও জন্মদিনের সারপ্রাইজ',
+  // ── Rich-UI অ্যাকশন (bot-ui.ts) ──
+  orderHelp: '🛒 অর্ডার দিতে রেস্তোরাঁর টেবিলের QR কোড স্ক্যান করুন — মেনু দেখে টেবিল থেকেই অর্ডার হয়ে যাবে! বিল পেজে অফার দাবি করতে "🎉 Claim on Messenger" বাটন আছে।',
+  askLocationSynthetic: 'আমাদের রেস্টুরেন্টের ঠিকানা/লোকেশন জানতে চাই — কোথায় অবস্থিত, কীভাবে আসব।',
+  askHelplineSynthetic: 'হেল্পলাইন/যোগাযোগ নম্বর ও খোলার সময় জানতে চাই।',
 }
 
 /* ───────────────────────── Banglish (Latin-script Bangla) ───────────────────────── */
@@ -131,6 +135,10 @@ const banglish: Pack = {
     '🎁 Assalamu alaikum{name}! Ei shoptaher special offer eshe geche — shathe jonmodiner surprise-o opekkha korche! 🍔🎉{base}',
   rnOrderLink: '\n\nOrder dite: {url}',
   rnTitleDefault: 'Shoptahik offer o jonmodiner surprise',
+  // ── Rich-UI action (bot-ui.ts) ──
+  orderHelp: '🛒 Order dite restaurant er table er QR code scan korun — menu dekhe table theke-i order hoye jabe! Bill page e offer claim korte "🎉 Claim on Messenger" button ache.',
+  askLocationSynthetic: 'Amader restaurant er location/thikana jante chai — kothay obosthito, kivabe ashbo.',
+  askHelplineSynthetic: 'Helpline/contact number o kholar shomoy jante chai.',
 }
 
 /* ───────────────────────────────── English ───────────────────────────────── */
@@ -187,6 +195,10 @@ const en: Pack = {
     "🎁 Hello{name}! This week's special offer is here — plus a birthday surprise is waiting! 🍔🎉{base}",
   rnOrderLink: '\n\nTo order: {url}',
   rnTitleDefault: 'Weekly offers & birthday surprises',
+  // ── Rich-UI actions (bot-ui.ts) ──
+  orderHelp: '🛒 To order, scan the QR code on your restaurant table — browse the menu and order right from the table! The bill page has a "🎉 Claim on Messenger" button for offers.',
+  askLocationSynthetic: "I'd like to know the restaurant's location/address — where is it and how do I get there?",
+  askHelplineSynthetic: "I'd like the helpline/contact number and opening hours.",
 }
 
 /* ───────────────────────────────── Hindi ───────────────────────────────── */
@@ -242,6 +254,10 @@ const hi: Pack = {
     '🎁 नमस्ते{name}! इस हफ़्ते का स्पेशल ऑफ़र आ गया है — साथ में बर्थडे सरप्राइज़ भी इंतज़ार कर रहा है! 🍔🎉{base}',
   rnOrderLink: '\n\nऑर्डर देने के लिए: {url}',
   rnTitleDefault: 'साप्ताहिक ऑफ़र और बर्थडे सरप्राइज़',
+  // ── Rich-UI actions (bot-ui.ts) ──
+  orderHelp: '🛒 ऑर्डर देने के लिए रेस्टोरेंट की मेज़ पर मौजूद QR कोड स्कैन करें — मेनू देखकर सीधे मेज़ से ऑर्डर हो जाएगा! बिल पेज पर ऑफ़र के लिए "🎉 Claim on Messenger" बटन है।',
+  askLocationSynthetic: 'मुझे रेस्टोरेंट का पता/लोकेशन जानना है — कहाँ स्थित है और कैसे पहुँचूँ।',
+  askHelplineSynthetic: 'हेल्पलाइन/संपर्क नंबर और खुलने का समय जानना चाहता हूँ।',
 }
 
 const PACKS: Record<BotLang, Pack> = { bn, banglish, en, hi }

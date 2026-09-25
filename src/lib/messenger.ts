@@ -226,6 +226,139 @@ export async function askPhoneQuickReply(psid: string, text: string): Promise<bo
   }
 }
 
+/* ═══════════ Rich UI: Quick Replies / Carousel / Persistent Menu ═══════════ */
+
+export interface QuickReply {
+  title: string // ≤20 chars, shown as a tappable chip
+  payload: string // our deterministic action key (bot-ui.ts)
+}
+
+/**
+ * টেক্সট + নিচে ট্যাপযোগ্য কুইক-রিপ্লাই বাটন (সর্বোচ্চ ১১টা; Meta নিয়ম ≤20 অক্ষর টাইটেল)।
+ * কাস্টমার টাইপ না করেই এক ট্যাপে মেনু/অফার/লোকেশন পায় — বট পেলোড দেখে
+ * ডিটারমিনিস্টিক উত্তর দেয় (AI লেটেন্সি নেই)।
+ */
+export async function sendQuickReplies(psid: string, text: string, replies: QuickReply[]): Promise<boolean> {
+  const token = pageToken()
+  if (!token) return false
+  const chips = replies
+    .slice(0, 11)
+    .map((r) => ({ content_type: 'text', title: r.title.slice(0, 20), payload: r.payload.slice(0, 1000) }))
+  try {
+    const res = await fetch(`${GRAPH}/me/messages?access_token=${token}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        recipient: { id: psid },
+        message: { text, quick_replies: chips },
+      }),
+      signal: AbortSignal.timeout(10_000),
+    })
+    if (!res.ok) {
+      // quick_replies ফিল্ড কোনো কারণে রিজেক্ট হলে খালি টেক্সট দিয়ে আরেকবার —
+      // মেসেজ কখনো হারায় না
+      return sendText(psid, text)
+    }
+    const j = (await res.json().catch(() => ({}))) as { error?: unknown }
+    if (j.error) return sendText(psid, text)
+    return true
+  } catch {
+    return sendText(psid, text)
+  }
+}
+
+export interface CarouselCard {
+  title: string // ≤80 chars
+  subtitle?: string // ≤80 chars
+  imageUrl?: string | null
+  buttonTitle?: string // ≤20 chars
+  buttonUrl?: string // web_url button (when a public site URL is known)
+  buttonPayload?: string // postback fallback (no URL configured)
+}
+
+/**
+ * সোয়াইপ-করা যায় এমন খাবারের কার্ড-গ্যালারি (generic template) — ছবি + নাম +
+ * দাম + [অর্ডার করুন] বাটন। ছবি-শেষ টেমপ্লেটে কুইক-রিপ্লাইও জুড়ে দেওয়া যায়।
+ */
+export async function sendGenericCarousel(psid: string, cards: CarouselCard[], replies: QuickReply[] = []): Promise<boolean> {
+  const token = pageToken()
+  if (!token) return false
+  const elements = cards.slice(0, 10).map((c) => {
+    const buttons = [
+      c.buttonUrl
+        ? { type: 'web_url', url: c.buttonUrl, title: (c.buttonTitle || 'অর্ডার করুন').slice(0, 20) }
+        : { type: 'postback', payload: (c.buttonPayload || '__ORDER__').slice(0, 1000), title: (c.buttonTitle || 'অর্ডার করুন').slice(0, 20) },
+    ]
+    const el: Record<string, unknown> = {
+      title: c.title.slice(0, 80),
+      buttons,
+    }
+    if (c.subtitle) el.subtitle = c.subtitle.slice(0, 80)
+    if (c.imageUrl && /^https?:\/\//i.test(c.imageUrl)) el.image_url = c.imageUrl
+    return el
+  })
+  const message: Record<string, unknown> = {
+    attachment: {
+      type: 'template',
+      payload: { template_type: 'generic', elements },
+    },
+  }
+  if (replies.length) {
+    message.quick_replies = replies
+      .slice(0, 11)
+      .map((r) => ({ content_type: 'text', title: r.title.slice(0, 20), payload: r.payload.slice(0, 1000) }))
+  }
+  try {
+    const res = await fetch(`${GRAPH}/me/messages?access_token=${token}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ recipient: { id: psid }, message }),
+      signal: AbortSignal.timeout(10_000),
+    })
+    if (!res.ok) return false
+    const j = (await res.json().catch(() => ({}))) as { error?: unknown }
+    return !j.error
+  } catch {
+    return false
+  }
+}
+
+export interface MenuEntry {
+  title: string // ≤20 chars
+  payload: string
+}
+
+/**
+ * Persistent Menu — চ্যাটবক্সের নিচে সবসময় থাকা ফিক্সড হ্যামবার্গার মেনু।
+ * Meta নিয়ম: সর্বোচ্চ ৩টা টপ-লেভেল এন্ট্রি; ৩টার বেশি চাইলে নেস্টেড (≤৫ nested)।
+ * POST /me/messenger_profile — পেজ-লেভেল সেটিং, একবার সেট করলেই সবার জন্য।
+ */
+export async function setPersistentMenu(entries: MenuEntry[]): Promise<GraphSendResult> {
+  // টপ-লেভেল ৩টার বেশি হলে বাকিগুলো একটা "আরও" নেস্টেড গ্রুপে ঢোকানো হয়
+  const top = entries.slice(0, 3).map((e) => ({ type: 'postback', title: e.title.slice(0, 20), payload: e.payload.slice(0, 1000) }))
+  const rest = entries.slice(3)
+  const callToActions = rest.length
+    ? [
+        ...top.slice(0, 2),
+        {
+          type: 'nested',
+          title: 'ℹ️ আরও',
+          call_to_actions: rest.slice(0, 5).map((e) => ({ type: 'postback', title: e.title.slice(0, 20), payload: e.payload.slice(0, 1000) })),
+        },
+      ]
+    : top
+  const r = await graphPost('/me/messenger_profile', {
+    persistent_menu: [
+      {
+        locale: 'default',
+        composer_input_disabled: false, // কাস্টমার এখনো স্বাধীনে টাইপ করতে পারে
+        call_to_actions: callToActions,
+      },
+    ],
+  })
+  return { ok: r.ok, error: r.error }
+}
+
 /** Digital receipt message */
 export async function sendReceipt(
   psid: string,
