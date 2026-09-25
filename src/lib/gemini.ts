@@ -418,6 +418,11 @@ export function sanitizeCustomerReply(text: string): string {
   let out = text
     .replace(/(^|[\n\r])\s*(?:[*•‣▪–—-]\s*)?(?:INFO|DATA|ACTION)\s*:[^\n]*/gi, '\n')
     .replace(/(?:INFO|DATA|ACTION):[^\n]*/g, '')
+    // টেমপ্লেট-ইকো টোকেন (ভাষা=bn, language=en, নাম=<…, ফোন=<…, <bn|banglish…>) —
+    // বৈধ কাস্টমার-উত্তরে কখনো থাকে না; শুধু ওই টোকেনটাই বাদ, পুরো উত্তর নয়
+    .replace(/\s*(?:ভাষা|language)\s*=\s*(?:bn|banglish|en|hi|other)\b/gi, '')
+    .replace(/\s*(?:নাম|ফোন|name|phone)\s*=\s*<[^>\n>]*>?/gi, '')
+    .replace(/<bn\s*\|[^>\n]*>/gi, '')
     .replace(/\n{3,}/g, '\n\n')
     .trim()
 
@@ -450,7 +455,16 @@ export function sanitizeCustomerReply(text: string): string {
     }
     kept.push(p)
   }
-  return kept.join('\n\n').trim()
+  let result = kept.join('\n\n').trim()
+
+  // ৪) আঠালো echo: একই উত্তর স্পেস/নিউলাইন ছাড়াই ২-৩ বার জুড়ে গেলে
+  //    ("…হবে।আমাদের *Set B…হবে।আমাদের *Set B…" — লাইভ প্রমাণ) একবারই রাখা হয়
+  const flat = result.replace(/\s+/g, ' ').trim()
+  if (flat.length >= 80 && flat.length % 2 === 0) {
+    const unit = flat.slice(0, flat.length / 2)
+    if (unit === flat.slice(flat.length / 2)) result = unit
+  }
+  return result
 }
 
 /**
