@@ -258,8 +258,12 @@ function gemmaOutputRule(sysFull: string): string {
   if (/আউটপুট JSON:\s*\{"text"/.test(sysFull)) {
     return 'শুধু মেসেজটাই লিখো — কোনো ভূমিকা/ব্যাখ্যা/বিশ্লেষণ নয়।'
   }
-  // চ্যাট ফ্লো — CRM তথ্য ঐচ্ছিক INFO লাইনে (থাকলে পার্স হবে, না থাকলে বাদ)
-  return 'উত্তর: কেবল কাস্টমারকে পাঠানোর মতো কথাটাই লিখো (কাস্টমারের ভাষায়) — কোনো ব্যাখ্যা/বিশ্লেষণ/বুলেট নয়। তবে কাস্টমার এই মেসেজে নিজের নাম/ফোন/ঠিকানা/ভাষা বললে উত্তরের পরের লাইনে লিখবে:\nINFO: নাম=<নাম> | ফোন=<নম্বর> | ভাষা=<bn|banglish|en|hi|other>\n(যেগুলো বলেনি বাদ দেবে; কিছুই না বললে INFO লাইন থাকবে না।)'
+  // চ্যাট ফ্লো — CRM তথ্য ঐচ্ছিক INFO লাইনে (থাকলে পার্স হবে, না থাকলে বাদ)।
+  // লাইভ-শিক্ষা: "ভাষা=" টেমপ্লেটে দিলে মডেল সেটা নিয়েই দর্শন করে ("the user
+  // didn't provide the language… If I include ভাষা=bn it's safer") — আর সেই
+  // reasoning-ই রিপ্লাই হয়ে কাস্টমারে যায়। তাই ভাষা টেমপ্লেট থেকেই বাদ —
+  // ভাষা-মিল পার্সোনার নিয়মেই হয়; INFO-তে শুধু কাস্টমারের নিজের বলা তথ্য।
+  return 'তোমার আউটপুটের প্রথম অক্ষর থেকেই কাস্টমারের উত্তর — "Actually", "Let\'s", "Hmm", ব্যাখ্যা, বিশ্লেষণ, ফরম্যাট-আলোচনা, ব্যাকটিক কিছুই না; শুধু কথাটা (কাস্টমারের ভাষায়)। তারপর — শুধু যদি কাস্টমার এই মেসেজে নিজের নাম/ফোন/ঠিকানা বলে থাকে — একদম শেষ লাইনে:\nINFO: নাম=<নাম> | ফোন=<নম্বর>\n(যেটা বলেনি বাদ; কিছুই না বললে INFO লাইন হবেই না। এটা ১ সেকেন্ডের সিদ্ধান্ত — এ নিয়ে কিছু লিখবে না।)'
 }
 
 function bodyForModel(body: Record<string, unknown>, model: string): Record<string, unknown> {
@@ -347,11 +351,12 @@ function bodyForModel(body: Record<string, unknown>, model: string): Record<stri
  * উত্তর ৩-৮ সেকেন্ডে নামে, আর রিপ্লাই কাস্টমার-উপযোগী থাকে।
  */
 const DIRECT_ANSWER_RULE =
-  'CRITICAL OUTPUT RULE: Answer DIRECTLY with the final reply/JSON only. Do NOT write any analysis, reasoning steps, bullet-point breakdowns, explanations of the request, or thinking aloud. Your entire output = the final answer itself.'
+  'CRITICAL OUTPUT RULE: Your very first character must be the customer-facing answer itself. Answer DIRECTLY with the final reply/JSON only. Do NOT write any analysis, reasoning steps, bullet-point breakdowns, explanations of the request, or thinking aloud. Your entire output = the final answer itself.'
 
 /**
  * Reasoning-leak detector: Gemma মডেল মাঝে মাঝে রিপ্লাই-এর জায়গায় ভেতরের
- * বিশ্লেষণ-টেক্সট লিখে দেয় ("* User's message: …", "Constraint 1: …")। এটা
+ * বিশ্লেষণ-টেক্সট লিখে দেয় (লাইভ প্রোডাকশন-প্রমাণ: "Actually, let's look at the
+ * "INFO" line format again… If I include ভাষা=bn, it's safer…")। এটা
  * JSON হিসেবে পার্স হয় না — আর কাস্টমারকে কখনোই এই গার্বেজ যেতে পারে না;
  * ধরা পড়লে ব্যর্থ ধরে static fallback-এ যাওয়া হয়।
  */
@@ -361,7 +366,24 @@ function looksLikeReasoning(text: string): boolean {
   // "* লেবেল:" স্টাইলের reasoning-বুলেট ধরা হয় (asterisk + স্পেস)
   if (s.startsWith('* ') || s.startsWith('1.') || s.startsWith('Step')) return true
   if (/<think[\s>]/i.test(text)) return true
-  return /user'?s? (message|request)|constraint \d|analysis of|let me |the customer (is|wants)|step \d:/i.test(s)
+  if (/user'?s? (message|request)|constraint \d|analysis of|let me |the customer (is|wants)|step \d:/i.test(s)) return true
+  // লাইভ-প্রমাণিত meta-চিন্তার ভঙ্গি — আসল কাস্টমার-উত্তরে কখনো থাকে না
+  if (/actually,\s*(?:let'?s|i\s)|(?:let'?s|let us)\s+see\.|\bhmm\b/i.test(s)) return true
+  if (/\bif i (?:include|provide|add|write|use|put)|i should (?:include|add|provide|write|use)|sounds? (?:safer|better)|it'?s safer/i.test(s)) return true
+  // আউটপুট-ফরম্যাটের টেমপ্লেট-ইকো ("INFO line", "ভাষা=bn", "নাম=<…") — কখনোই বৈধ নয়
+  if (/\b(?:info|data|action)\s*(?:line|ফরম্যাট|format)\b/i.test(s)) return true
+  if (/ভাষা=\s*(?:bn|banglish|en|hi|other)|নাম=\s*<|ফোন=\s*<|<bn\s*\||language=\s*(?:bn|banglish|en|hi)/i.test(s)) return true
+  return false
+}
+
+/**
+ * চূড়ান্ত রিপ্লাই-গার্ড: পরিষ্কার-পাইপলাইন পেরিয়েও যদি রিপ্লাইয়ের ভেতরে
+ * প্রোটোকল-কোলন (UPPERCASE INFO:/DATA:/ACTION:) বা টেমপ্লেট-ইকো (ভাষা=bn,
+ * নাম=<…) থাকে — এটা উত্তর নয়, মডেলের ভেতরের জিনিস; বাতিল করে static
+ * fallback-এ যাওয়া হয়।
+ */
+function isProtocolJunk(text: string): boolean {
+  return /\b(?:INFO|DATA|ACTION)\s*:|ভাষা=\s*(?:bn|banglish|en|hi|other)|নাম=\s*<|ফোন=\s*<|<bn\s*\||language=\s*(?:bn|banglish|en|hi)/.test(text)
 }
 
 /**
@@ -798,7 +820,7 @@ ${opts.formatting !== false ? MESSENGER_FORMAT_RULES + '\n- এটা একট�
   // নেতৃত্ব-লেবেল ("Final Answer:") সরানো হয়
   const rawText = str(j?.text) || (cleanPlainReply(res.text, 800) ? res.text.trim() : salvageFinalAnswer(res.text) || '')
   const text = sanitizeCustomerReply(rawText)
-  if (!text || looksLikePromptEcho(text)) return { ok: false, text: null, error: 'আউটপুট প্রম্পট-ইকো/খালি' }
+  if (!text || looksLikePromptEcho(text) || isProtocolJunk(text)) return { ok: false, text: null, error: 'আউটপুট প্রম্পট-ইকো/খালি' }
   return { ok: true, text, error: null }
 }
 
@@ -1012,7 +1034,7 @@ export async function chatWithCustomer(opts: {
   }
   return {
     ok: true,
-    reply,
+    reply: reply && isProtocolJunk(reply) ? '' : reply,
     extracted: extractedData,
     error: null,
   }
@@ -1157,7 +1179,7 @@ ${opts.knowledgeBase.slice(0, 4000)}
   return {
     ok: true,
     extracted,
-    reply,
+    reply: reply && isProtocolJunk(reply) ? '' : reply,
     action,
     error: null,
   }

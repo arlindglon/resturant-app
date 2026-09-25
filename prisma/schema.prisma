@@ -280,6 +280,7 @@ model Customer {
   rnAskedAt       DateTime?              // last time we sent an opt-in request card (14-day no-nag cooldown)
   notes           CustomerNote[]
   lastSeenAt      DateTime?
+  typingUntil     DateTime?     // "লিখছে…" — bot এই মুহূর্তে AI-উত্তর তৈরি করছে (admin live badge; ≤৩ মিনিট নষ্ট হয়)
   discountClaimed Boolean        @default(false) // lifetime lock after birthday discount
   claimedAt       DateTime?
   createdAt       DateTime       @default(now())

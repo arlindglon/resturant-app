@@ -83,6 +83,7 @@ export async function GET() {
       noteCount: noteCountMap.get(c.id) || 0,
       lastClaimAt: lastClaimAt.get(c.psid) || null,
       lastSeenAt: c.lastSeenAt,
+      typing: !!c.typingUntil && c.typingUntil > new Date(),
       createdAt: c.createdAt,
       daysUntilEvent: daysLeft,
     }

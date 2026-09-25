@@ -135,6 +135,30 @@ export async function fetchProfilePhoto(psid: string): Promise<string | null> {
   return p.profilePic
 }
 
+/**
+ * "typing…" indicator — AI চিন্তা করার পুরো সময়টায় কাস্টমার যেন বুঝতে পারে
+ * পেজ লিখছে (নইলে ৬০-৯০ সেকেন্ড নীরবতায় কাস্টমার ভাবে বট মরে গেছে)।
+ * Meta-র নিয়ম: এক কলে ইন্ডিকেটর সর্বোচ্চ ~২০ সেকেন্ড থাকে — কলার ১২ সেকেন্ড
+ * পরপর আবার পাঠায়; মেসেজ গেলে নিজে থেকেই মুছে যায়।
+ */
+export async function sendTypingOn(psid: string): Promise<boolean> {
+  const token = pageToken()
+  if (!token) return false
+  try {
+    const res = await fetch(`${GRAPH}/me/messages?access_token=${token}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ recipient: { id: psid }, sender_action: 'typing_on' }),
+      signal: AbortSignal.timeout(5_000),
+    })
+    if (!res.ok) return false
+    const j = (await res.json().catch(() => ({}))) as { error?: unknown }
+    return !j.error
+  } catch {
+    return false
+  }
+}
+
 /** Send a plain text message to a PSID — returns REAL success (Graph errors count as failure) */
 export async function sendText(psid: string, text: string, opts?: { markdown?: boolean }): Promise<boolean> {
   const token = pageToken()

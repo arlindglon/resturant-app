@@ -2929,6 +2929,7 @@ interface CustomerRow {
   noteCount: number
   lastClaimAt: string | null
   lastSeenAt: string | null
+  typing: boolean // bot এই মুহূর্তে এই কাস্টমারকে AI-উত্তর লিখছে ("✍️ লিখছে…" ব্যাজ)
   createdAt: string
   daysUntilEvent: number | null
 }
@@ -3083,7 +3084,12 @@ function CustomersTab({ onAuthRequired }: TabProps) {
 
   useEffect(() => {
     const t = setTimeout(load, 0)
-    return () => clearTimeout(t)
+    // লাইভ "✍️ লিখছে…" ব্যাজ — ৮ সেকেন্ড পরপর রিফ্রেশ (bot কখন কার উত্তর লিখছে)
+    const iv = setInterval(load, 8000)
+    return () => {
+      clearTimeout(t)
+      clearInterval(iv)
+    }
   }, [load])
 
   if (err) return <LoadError msg={err} onRetry={load} />
@@ -3256,6 +3262,11 @@ function CustomersTab({ onAuthRequired }: TabProps) {
                     >
                       🆔 {psidDisplay(c.psid)}
                     </button>
+                    {c.typing && (
+                      <span className="shrink-0 animate-pulse rounded border border-emerald-200 bg-emerald-50 px-1.5 py-0.5 text-[10px] font-black text-emerald-700">
+                        ✍️ লিখছে…
+                      </span>
+                    )}
                   </p>
                   <p className="truncate text-[11px] text-stone-500">
                     {c.eventLabel ? `${c.eventLabel}: ${bnDateOnly(c.birthday)}` : bnDateOnly(c.birthday)}

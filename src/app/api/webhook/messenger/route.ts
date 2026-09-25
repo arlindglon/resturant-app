@@ -19,7 +19,7 @@ import { NextRequest, after } from 'next/server'
 import crypto from 'crypto'
 import { db } from '@/lib/db'
 import { fail, ok } from '@/lib/api'
-import { fetchMessengerProfile, askPhoneQuickReply, sendReceipt, sendText, sendRnOptInRequest, markdownEnabled } from '@/lib/messenger'
+import { fetchMessengerProfile, askPhoneQuickReply, sendReceipt, sendText, sendTypingOn, sendRnOptInRequest, markdownEnabled } from '@/lib/messenger'
 import { applyBirthdayDiscount } from '@/lib/birthday'
 import { setSettings, getSetting } from '@/lib/settings'
 import { SETTING_KEYS } from '@/lib/constants'
@@ -344,6 +344,26 @@ async function sendBillReceipt(
 /* ───────────────────────── AI chatbot (Gemini) ───────────────────────── */
 
 /**
+ * "typing…" সিস্টেম — AI ভাবার পুরো সময়টায়:
+ *  ১) কাস্টমার Messenger-এ পেজের "typing…" দেখে (Meta এক কলে ~২০ সেকেন্ড রাখে —
+ *     ১২ সেকেন্ড পরপর রিফ্রেশ; মেসেজ গেলে নিজেই মুছে যায়) — ৬০-৯০ সেকেন্ডের
+ *     নীরবতায় আর মনে হয় না বট মরে গেছে
+ *  ২) admin প্যানেলের কাস্টমার লিস্টে ওই কাস্টমারের পাশে "✍️ লিখছে…" ব্যাজ জ্বলে
+ *     (Customer.typingUntil — রিটার্ন করা stopper কল করলেই নেমে যায়)
+ */
+function startBotTyping(psid: string): () => void {
+  void sendTypingOn(psid)
+  void db.customer
+    .updateMany({ where: { psid }, data: { typingUntil: new Date(Date.now() + 180_000) } })
+    .catch(() => {})
+  const timer = setInterval(() => void sendTypingOn(psid), 12_000)
+  return () => {
+    clearInterval(timer)
+    void db.customer.updateMany({ where: { psid }, data: { typingUntil: null } }).catch(() => {})
+  }
+}
+
+/**
  * General conversation path (no pending offer claim): the customer just talked
  * to the page. Gemini answers in the customer's own language (বাংলা/বাংলিশ/
  * English/Hindi…) using the live knowledge base, and any customer data that
@@ -392,15 +412,18 @@ async function aiGeneralReply(psid: string, profileName: string, customerMessage
   }
   // রোটেশন ইঞ্জিনেই বহু key × বহু মডেল × রিট্রাই-রাউন্ড আছে — এখানে আর দ্বিতীয়
   // পুরো চেষ্টা নয় (আগের ডাবল-রিট্রাই ফ্রি-কোটা দ্রুত শেষ করে দিত)
+  const stopTyping = startBotTyping(psid)
   const ai = await chatWithCustomer(chatOpts)
   if (!ai.ok || !ai.reply) {
     console.error('[webhook:ai]', ai.error)
     // ডায়াগনস্টিকস: শেষ AI ব্যর্থতার কারণ admin প্যানেলে দেখা যাবে (১ মিনিট থ্রটল)
     recordAiError(ai.error || 'unknown')
+    stopTyping()
     return false
   }
 
   await sendText(psid, ai.reply)
+  stopTyping()
 
   // history + CRM writes are best-effort — never block the conversation
   // (the customer turn was already saved by the caller before routing)
@@ -671,6 +694,7 @@ async function handleEvent(event: MessagingEvent) {
       const askCount = tokenRow.askCount || 0
       // admin-marked / global language → the verify conversation respects it too
       const markedLang = await db.customer.findUnique({ where: { psid }, select: { language: true } })
+      const stopTyping = startBotTyping(psid)
       const ai = await verificationChat({
         fieldType: fieldType as 'DATE' | 'PHONE' | 'TEXT',
         offerName: offer?.name || 'বিশেষ অফার',
@@ -684,6 +708,7 @@ async function handleEvent(event: MessagingEvent) {
         formatting: await markdownEnabled(),
         cfg,
       })
+      stopTyping()
 
       // customer said the occasion doesn't apply (not married / not my birthday…)
       // → close the claim gracefully, pivot warmly to offers that DO fit them
