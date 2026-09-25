@@ -25,5 +25,5 @@ export async function POST() {
     greeting: GREETING,
   })
   if (!r.ok) return ok({ ok: false, error: r.error || 'Meta প্রোফাইল আপডেট ব্যর্থ' })
-  return ok({ ok: true })
+  return ok({ ok: true, buttons: r.buttons })
 }

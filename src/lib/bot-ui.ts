@@ -86,12 +86,13 @@ export function botQuickReplies(lang: BotLang): QuickReply[] {
 
 export interface BotMenuEntry {
   title: string // ≤20 chars (Meta নিয়ম)
-  payload: string // BOT_ACTIONS বা __CAT__:<id>
+  payload: string // BOT_ACTIONS বা __CAT__:<id> / __ACT__:<id>
 }
 
 /**
  * ডিফল্ট পার্সিস্টেন্ট মেনু — admin নিজের মতো বদলানোর আগে এটাই চলে।
- * Meta ক্যাপাসিটি: ৩ টপ-লেভেল + নেস্টেড "আরও"-তে ৫ = সর্বোচ্চ ৮ বাটন।
+ * Meta নতুন নিয়ম (২০২৫): call_to_actions = flat লিস্ট, সর্বোচ্চ ২০ বাটন
+ * (পুরনো "৩ টপ-লেভেল + nested" স্কিমা বাতিল — nested টাইপ আর বৈধ নয়)।
  */
 export const DEFAULT_MENU_ENTRIES: BotMenuEntry[] = [
   { title: '🍕 মেনু', payload: BOT_ACTIONS.MENU },
@@ -119,7 +120,7 @@ export async function botPersistentMenuEntries(): Promise<BotMenuEntry[]> {
           )
           .map((e) => ({ title: e.title.trim().slice(0, 20), payload: e.payload.trim() }))
           .filter((e) => e.title && isValidMenuPayload(e.payload))
-          .slice(0, 8)
+          .slice(0, 20)
         if (cleaned.length) return cleaned
       }
     }

@@ -2,6 +2,7 @@
 //   + প্রতিটা অ্যাকশনের desc (ব্যাখ্যা-mark: ট্যাপ করলে কী হয়) + লাইভ ক্যাটাগরি + কাস্টম অ্যাকশন
 // PUT  /api/admin/messenger-menu-config — বাটন add/edit/delete/save
 //   + সঙ্গে সঙ্গে Meta পেজে সিঙ্ক (get_started + greeting সহ — setPersistentMenu)
+// Meta নতুন স্কিমা: call_to_actions = flat লিস্ট সর্বোচ্চ ২০ বাটন (nested টাইপ বাতিল)।
 // বাটন payload: __MENU__/__OFFERS__/__LOCATION__/__HELPLINE__/__TEXTMENU__ /
 // __CAT__:<categoryId> (ক্যাটাগরি-কার্ড) / __ACT__:<botActionId> (কাস্টম অ্যাকশন)।
 import { ok } from '@/lib/api'
@@ -75,7 +76,7 @@ export async function PUT(req: Request) {
     return ok({ ok: false, error: 'ভাঙা রিকোয়েস্ট (JSON নয়)' })
   }
   if (!Array.isArray(body.entries)) return ok({ ok: false, error: 'বাটন-তালিকা অ্যারে নয়' })
-  if (body.entries.length > 8) return ok({ ok: false, error: 'সর্বোচ্চ ৮টা বাটন রাখা যায় (Meta নিয়ম)' })
+  if (body.entries.length > 20) return ok({ ok: false, error: 'সর্বোচ্চ ২০টা বাটন রাখা যায় (Meta নিয়ম)' })
 
   const cleaned: BotMenuEntry[] = []
   for (const raw of body.entries) {
@@ -94,5 +95,5 @@ export async function PUT(req: Request) {
   // সঙ্গে সঙ্গে Meta-তে সিঙ্ক (get_started + greeting সহ)
   const r = await setPersistentMenu(cleaned, { getStartedPayload: BOT_ACTIONS.MENU, greeting: GREETING })
   if (!r.ok) return ok({ ok: true, synced: false, error: r.error || 'সেভ হয়েছে, কিন্তু Meta-তে সিঙ্ক ব্যর্থ' })
-  return ok({ ok: true, synced: true })
+  return ok({ ok: true, synced: true, buttons: r.buttons })
 }

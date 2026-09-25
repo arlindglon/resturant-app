@@ -4684,10 +4684,10 @@ function SettingsTab({ onAuthRequired }: TabProps) {
   // পার্সিস্টেন্ট মেনু Meta-তে সেট করা — চ্যাটবক্সের নিচে সবসময় ফিক্সড মেনু
   const syncPersistentMenu = async () => {
     setMenuSyncing(true)
-    const res = await api.post<{ ok: boolean; error?: string }>('/api/admin/messenger-menu')
+    const res = await api.post<{ ok: boolean; error?: string; buttons?: number }>('/api/admin/messenger-menu')
     setMenuSyncing(false)
     if (!res.ok || !res.data) return toast.error(res.error || 'মেনু সেট করা যায়নি')
-    if (res.data.ok) toast.success('✅ পার্সিস্টেন্ট মেনু + শুরু করুন (Get Started) বাটন সেট হয়েছে — Messenger খুলে নিচের ☰ আইকনে দেখুন')
+    if (res.data.ok) toast.success(`✅ পার্সিস্টেন্ট মেনু + শুরু করুন (Get Started) বাটন সেট হয়েছে${res.data.buttons ? ` — ${res.data.buttons}টা বাটন` : ''} — Messenger খুলে নিচের ☰ আইকনে দেখুন`)
     else toast.error(`Meta রিজেক্ট করেছে: ${res.data.error || 'অজানা ত্রুটি'}`)
   }
 
@@ -6695,7 +6695,7 @@ function MessengerMenuManager({ onChanged }: { onChanged?: () => void }) {
   const add = () => {
     const title = newTitle.trim()
     if (!title || !newPayload) return toast.error('বাটনের নাম ও অ্যাকশন — দুটোই দিন')
-    if ((entries?.length || 0) >= 8) return toast.error('সর্বোচ্চ ৮টা বাটন রাখা যায় (Meta নিয়ম)')
+    if ((entries?.length || 0) >= 20) return toast.error('সর্বোচ্চ ২০টা বাটন রাখা যায় (Meta নিয়ম)')
     setEntries((prev) => [...(prev || []), { title: title.slice(0, 20), payload: newPayload }])
     setNewTitle('')
     setNewPayload('')
@@ -6703,13 +6703,13 @@ function MessengerMenuManager({ onChanged }: { onChanged?: () => void }) {
 
   const save = async () => {
     setSaving(true)
-    const res = await api.put<{ ok: boolean; synced?: boolean; error?: string }>('/api/admin/messenger-menu-config', {
+    const res = await api.put<{ ok: boolean; synced?: boolean; error?: string; buttons?: number }>('/api/admin/messenger-menu-config', {
       entries: entries || [],
     })
     setSaving(false)
     if (!res.ok || !res.data?.ok) return toast.error(res.data?.error || res.error || 'সেভ করা যায়নি')
     if (res.data.synced === false) toast.warning(`💾 সেভ হয়েছে — কিন্তু Meta-তে সিঙ্ক হয়নি: ${res.data.error || ''}`)
-    else toast.success('✅ সেভ হয়েছে ও Meta পেজে সিঙ্ক হয়েছে — Messenger-এ নিচের ☰ আইকনে দেখুন')
+    else toast.success(`✅ সেভ হয়েছে ও Meta পেজে সিঙ্ক হয়েছে${res.data.buttons ? ` — ${res.data.buttons}টা বাটন` : ''} — Messenger-এ নিচের ☰ আইকনে দেখুন`)
     onChanged?.()
   }
 
@@ -7059,10 +7059,10 @@ function MessengerBotTab() {
 
   const syncNow = async () => {
     setSyncing(true)
-    const res = await api.post<{ ok: boolean; error?: string }>('/api/admin/messenger-menu')
+    const res = await api.post<{ ok: boolean; error?: string; buttons?: number }>('/api/admin/messenger-menu')
     setSyncing(false)
     if (!res.ok || !res.data) return toast.error(res.error || 'সিঙ্ক করা যায়নি')
-    if (res.data.ok) toast.success('✅ মেনু + "শুরু করুন" বাটন Meta পেজে সেট হয়েছে')
+    if (res.data.ok) toast.success(`✅ মেনু + "শুরু করুন" বাটন Meta পেজে সেট হয়েছে${res.data.buttons ? ` — ${res.data.buttons}টা বাটন` : ''} — Messenger-এ নিচের ☰ আইকনে দেখুন`)
     else toast.error(`Meta রিজেক্ট করেছে: ${res.data.error || 'অজানা ত্রুটি'}`)
   }
 

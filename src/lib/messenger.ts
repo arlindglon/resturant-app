@@ -324,27 +324,60 @@ export async function sendGenericCarousel(psid: string, cards: CarouselCard[], r
 }
 
 export interface MenuEntry {
-  title: string // ≤20 chars
+  title: string // ≤20 chars (Meta এখন ৩০ পর্যন্ত দেয় — আমরা ২০-তেই ধরে রাখি)
   payload: string
 }
 
 /**
+ * টাইটেল হাইজিন — control chars / variation selectors (☎️-এর U+FE0F) /
+ * zero-width অক্ষর বাদ দিয়ে ≤২০ অক্ষর। Meta-র validator এসব অদৃশ্য অক্ষরে
+ * কখনো কখনো অযৌক্তিকভাবে আটকে দেয়।
+ */
+function sanitizeMenuTitle(raw: string): string {
+  return (raw || '')
+    .replace(/[\u0000-\u001F\u007F-\u009F]/g, ' ') // control/newline → স্পেস (শব্দ জোড়া না লেগে যায়)
+    .replace(/[\uFE0E\uFE0F\u200B-\u200D\u2060\uFEFF]/g, '')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, 20)
+}
+
+/** persistent_menu মুছে ফেলা (আটকে-থাকা পুরনো মেনু থেকে মুক্তি — retry-র আগে) */
+export async function deletePersistentMenu(): Promise<boolean> {
+  const token = pageToken()
+  if (!token) return false
+  try {
+    const res = await fetch(
+      `${GRAPH}/me/messenger_profile?params=${encodeURIComponent('["persistent_menu"]')}&access_token=${encodeURIComponent(token)}`,
+      { method: 'DELETE', signal: AbortSignal.timeout(10_000) }
+    )
+    return res.ok
+  } catch {
+    return false
+  }
+}
+
+/**
  * Persistent Menu — চ্যাটবক্সের নিচে সবসময় থাকা ফিক্সড হ্যামবার্গার মেনু।
- * Meta নিয়ম: সর্বোচ্চ ৩টা টপ-লেভেল এন্ট্রি; ৩টার বেশি চাইলে নেস্টেড (≤৫ nested)।
- * POST /me/messenger_profile — পেজ-লেভেল সেটিং, একবার সেট করলেই সবার জন্য।
  *
- * ⚠️ Meta বাধ্যতামূলক নিয়ম: persistent_menu সেট করতে হলে আগে Get Started
- * বাটন (get_started) পেজ প্রোফাইলে থাকতেই হবে — নইলে Graph (#100)
- * "You must set a Get started button if you also wish to use persistent menu"
- * দিয়ে রিজেক্ট করে। তাই এই ফাংশন আগে get_started (+ greeting) সেট করে
- * (idempotent — আগে থেকে থাকলে শুধু আপডেট হয়), তারপর মেনু পাঠায়।
+ * ⚠️ Meta-র নতুন স্কিমা (২০২৫): `call_to_actions` এখন **সমতল (flat) অ্যারে —
+ * সর্বোচ্চ ২০টা বাটন**, টাইপ শুধু `postback` / `web_url`। পুরনো "৩ টপ-লেভেল +
+ * nested" নিয়ম বাতিল — `type:"nested"` পাঠালেই Graph রিজেক্ট করে
+ * "(#100) Invalid button type"। তাই সব বাটন সরাসরি flat লিস্টে যায়।
+ *
+ * ⚠️ Meta বাধ্যতামূলক নিয়ম (এখনো বলবৎ): persistent_menu সেট করতে হলে আগে
+ * Get Started বাটন (get_started) পেজ প্রোফাইলে থাকতেই হবে — নইলে Graph (#100)
+ * "You must set a Get started button..." দেয়। তাই আগে get_started (+ greeting)
+ * সেট হয় (idempotent), তারপর মেনু। গ্রাফ কোনো কারণে মেনু রিজেক্ট করলে
+ * পুরনো মেনু DELETE করে একবার আরও চেষ্টা করা হয় — এবং প্রতিটা ব্যর্থতা
+ * request-body সহ log-এ যায় (Vercel logs-এ দেখা যাবে)।
  * নতুন কাস্টমার "শুরু করুন" চাপলে getStartedPayload postback যায় → webhook
  * সেটাকে Rich-UI অ্যাকশন হিসেবে সামলায় (bot-ui.ts handleBotUiAction)।
  */
 export async function setPersistentMenu(
   entries: MenuEntry[],
   opts?: { getStartedPayload?: string; greeting?: string }
-): Promise<GraphSendResult> {
+): Promise<GraphSendResult & { buttons?: number }> {
   // ধাপ ১: Get Started বাটন (+ স্বাগতম গ্রিটিং) — মেনুর পূর্বশর্ত
   const pre: Record<string, unknown> = {}
   if (opts?.getStartedPayload) pre.get_started = { payload: opts.getStartedPayload.slice(0, 1000) }
@@ -355,29 +388,36 @@ export async function setPersistentMenu(
     if (!preRes.ok && opts?.getStartedPayload) return { ok: false, error: preRes.error }
   }
 
-  // ধাপ ২: টপ-লেভেল ৩টার বেশি হলে বাকিগুলো একটা "আরও" নেস্টেড গ্রুপে ঢোকানো হয়
-  const top = entries.slice(0, 3).map((e) => ({ type: 'postback', title: e.title.slice(0, 20), payload: e.payload.slice(0, 1000) }))
-  const rest = entries.slice(3)
-  const callToActions = rest.length
-    ? [
-        ...top.slice(0, 2),
-        {
-          type: 'nested',
-          title: 'ℹ️ আরও',
-          call_to_actions: rest.slice(0, 5).map((e) => ({ type: 'postback', title: e.title.slice(0, 20), payload: e.payload.slice(0, 1000) })),
-        },
-      ]
-    : top
-  const r = await graphPost('/me/messenger_profile', {
+  // ধাপ ২: সব বাটন flat লিস্টে (Meta নতুন নিয়ম — nested টাইপ আর নেই)
+  const buttons = entries
+    .map((e) => ({
+      type: 'postback',
+      title: sanitizeMenuTitle(e.title),
+      payload: (e.payload || '').trim().slice(0, 1000),
+    }))
+    .filter((e) => e.title && e.payload)
+    .slice(0, 20)
+  if (!buttons.length) return { ok: false, error: 'মেনু-বাটন কোনোটাই বৈধ নয় (নাম/অ্যাকশন ফাঁকা)' }
+
+  const menuBody: Record<string, unknown> = {
     persistent_menu: [
       {
         locale: 'default',
         composer_input_disabled: false, // কাস্টমার এখনো স্বাধীনে টাইপ করতে পারে
-        call_to_actions: callToActions,
+        call_to_actions: buttons,
       },
     ],
-  })
-  return { ok: r.ok, error: r.error }
+  }
+  let r = await graphPost('/me/messenger_profile', menuBody)
+  if (!r.ok) {
+    // রিজেক্ট হলে: পুরনো/আটকে-থাকা মেনু মুছে আবার — বেশিরভাগ stale-state কেস এতেই ভাঙে
+    console.error('[messenger:menu] persistent_menu rejected:', r.error, 'body=', JSON.stringify(menuBody))
+    await deletePersistentMenu()
+    r = await graphPost('/me/messenger_profile', menuBody)
+    if (!r.ok) console.error('[messenger:menu] retry after delete also rejected:', r.error)
+  }
+  if (!r.ok) return { ok: false, error: r.error }
+  return { ok: true, buttons: buttons.length }
 }
 
 /** Digital receipt message */
