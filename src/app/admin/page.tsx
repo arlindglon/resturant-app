@@ -240,10 +240,12 @@ interface MessengerTestResult {
     error: string | null
   }
   profileTest: { ok: boolean; name: string | null; error: string | null } | null
+  sendProbe: { psid: string | null; ok: boolean; error: string | null; hint: string | null } | null
   env: { pageToken: boolean; pageId: boolean; verifyToken: boolean; appSecret: boolean }
   lastWebhookAt: string
   lastWebhookInfo: string
   lastVerifyAt: string
+  lastSendError: string | null
 }
 
 interface GeminiTestResult {
@@ -3070,6 +3072,7 @@ function CustomersTab({ onAuthRequired }: TabProps) {
   const [notesTarget, setNotesTarget] = useState<CustomerRow | null>(null)
   const [blastOpen, setBlastOpen] = useState(false)
   const [query, setQuery] = useState('')
+  const [deletingId, setDeletingId] = useState<string | null>(null)
 
   const load = useCallback(async () => {
     const res = await api.get<{ customers: CustomerRow[]; upcoming: CustomerRow[] }>('/api/admin/customers')
@@ -3128,6 +3131,18 @@ function CustomersTab({ onAuthRequired }: TabProps) {
 
   /** short display of a long PSID (full value goes to the clipboard) */
   const psidDisplay = (psid: string) => (psid.length > 24 ? `${psid.slice(0, 12)}…${psid.slice(-6)}` : psid)
+
+  /** কাস্টমার সম্পূর্ণ মুছে ফেলা — একই মানুষ আবার মেসেঞ্জারে এলে নতুন কাস্টমারের মতো সেটআপ */
+  const deleteCustomer = async (c: CustomerRow) => {
+    if (deletingId) return
+    setDeletingId(c.id)
+    const res = await api.del<{ deleted: boolean }>(`/api/admin/customers/${c.id}`)
+    setDeletingId(null)
+    if (isAuthError(res)) return onAuthRequired()
+    if (!res.ok) return toast.error(res.error || 'ডিলিট হয়নি')
+    toast.success(`${customerName(c)} সম্পূর্ণ মুছে ফেলা হয়েছে — আবার মেসেঞ্জারে এলে নতুন কাস্টমারের মতো সেটআপ শুরু হবে`)
+    load()
+  }
 
   return (
     <div className="space-y-4">
@@ -3341,6 +3356,24 @@ function CustomersTab({ onAuthRequired }: TabProps) {
                 >
                   <Pencil className="h-4 w-4" />
                 </Button>
+                <ConfirmAction
+                  title={`${customerName(c)}-কে সম্পূর্ণ মুছে ফেলবেন?`}
+                  description="প্রোফাইল, চ্যাট মেমরি, নোট ও অফার-ক্লেইম হিস্টরিসহ সব মুছে যাবে। এই মানুষটি আবার মেসেঞ্জারে মেসেজ দিলে সে একদম নতুন কাস্টমার হিসেবে যুক্ত হবে — নতুন কোড, নাম যাচাই থেকে শুরু (নাম/জন্মদিন/ফোন আবার শেখা হবে)।"
+                  confirmLabel="হ্যাঁ, মুছে ফেলুন"
+                  onConfirm={() => {
+                    void deleteCustomer(c)
+                  }}
+                >
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    disabled={deletingId === c.id}
+                    className="text-stone-400 hover:bg-red-50 hover:text-red-600"
+                    title="কাস্টমার ডিলিট (নতুন কাস্টমারের মতো নতুন করে সেটআপ)"
+                  >
+                    {deletingId === c.id ? <Loader2 className="h-4 w-4 animate-spin" /> : <Trash2 className="h-4 w-4" />}
+                  </Button>
+                </ConfirmAction>
               </div>
               {c.dataText && (
                 <p className="mt-2 truncate rounded bg-white px-2 py-1.5 text-[11px] text-stone-600">
@@ -4679,6 +4712,11 @@ function SettingsTab({ onAuthRequired }: TabProps) {
     )
     if (res.data.tokenTest.ok) toast.success(`টোকেন ঠিক আছে — পেজ: ${res.data.tokenTest.pageName}`)
     else toast.error('টোকেন কাজ করছে না — নিচে বিস্তারিত দেখুন')
+    if (res.data.sendProbe && !res.data.sendProbe.ok) {
+      toast.error(`লাইভ পাঠানো-টেস্ট ব্যর্থ — ${res.data.sendProbe.hint || res.data.sendProbe.error || 'কারণ নিচে দেখুন'}`)
+    } else if (res.data.sendProbe?.ok) {
+      toast.success('লাইভ পাঠানো-টেস্ট সফল — মেসেজ যাচ্ছে ✅')
+    }
   }
 
   // পার্সিস্টেন্ট মেনু Meta-তে সেট করা — চ্যাটবক্সের নিচে সবসময় ফিক্সড মেনু
@@ -5278,7 +5316,29 @@ function SettingsTab({ onAuthRequired }: TabProps) {
                     )}
                   </p>
                 )}
+                {metaTest.sendProbe && (
+                  <p className="mt-1">
+                    লাইভ পাঠানো-টেস্ট (সর্বশেষ কাস্টমারকে ছোট মেসেজ):{' '}
+                    {metaTest.sendProbe.ok ? (
+                      <>✅ মেসেজ গেছে — কাস্টমারের Messenger-এ এসেছে কি না দেখুন</>
+                    ) : (
+                      <>
+                        ❌ মেসেজ যায়নি — {metaTest.sendProbe.error}
+                        {metaTest.sendProbe.hint && (
+                          <span className="mt-1 block rounded bg-amber-100 px-2 py-1 font-semibold text-amber-900">
+                            💡 {metaTest.sendProbe.hint}
+                          </span>
+                        )}
+                      </>
+                    )}
+                  </p>
+                )}
                 {metaTest.lastVerifyAt && <p>Meta webhook ভেরিফিকেশন: {bnAgo(metaTest.lastVerifyAt)} সফল হয়েছিল ✅</p>}
+                {metaTest.lastSendError && (
+                  <p className="mt-1 rounded bg-red-50 px-2 py-1 font-semibold text-red-800">
+                    শেষ ব্যর্থ পাঠানো: {metaTest.lastSendError}
+                  </p>
+                )}
               </div>
             )}
           </div>

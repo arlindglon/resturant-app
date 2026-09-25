@@ -37,6 +37,7 @@ import {
   getGeminiConfig,
   loadChatHistory,
   saveChatTurn,
+  sanitizeExtractedName,
 } from '@/lib/gemini'
 
 
@@ -442,23 +443,26 @@ async function saveAiCrmData(
   const has = extracted.name || extracted.phone || extracted.address || extracted.specialDay || extracted.note || extracted.language
   if (!has) return
   try {
+    // নাম-হাইজিন (লাইভ-প্রমাণিত বাগ: CRM-এ Ridoy" এর মতো উদ্ধৃতি-লেগে যেত) —
+    // জাংক/meta-টেক্সট হলে নাম বাতিল, পরিষ্কার হলে ডবল-কোট ছাড়া নাম
+    const cleanName = sanitizeExtractedName(extracted.name || '')
     // a stated phone only counts when it parses; a special day only when it parses as a date
     const phone = extracted.phone ? parsePhoneLoose(extracted.phone) : null
     const day = extracted.specialDay ? parseDateLoose(extracted.specialDay) : null
     // a learned name also fills a placeholder profile name ("নাম যাচাই বাকি" / "Customer")
     // so the admin sees the real name on the CRM card right away
-    const current = extracted.name || extracted.language
+    const current = cleanName || extracted.language
       ? await db.customer.findUnique({ where: { psid }, select: { firstName: true, language: true } })
       : null
-    const fillsName = !!extracted.name && isPlaceholderName(current?.firstName)
+    const fillsName = !!cleanName && isPlaceholderName(current?.firstName)
     // detected language only fills an EMPTY preference — the admin's manual
     // mark always wins and is never overwritten by the AI
     const fillsLanguage = !!extracted.language && !current?.language
     await db.customer.updateMany({
       where: { psid },
       data: {
-        ...(extracted.name ? { statedName: extracted.name.slice(0, 120) } : {}),
-        ...(fillsName ? { firstName: extracted.name!.slice(0, 60), lastName: '' } : {}),
+        ...(cleanName ? { statedName: cleanName.slice(0, 120) } : {}),
+        ...(fillsName ? { firstName: cleanName!.slice(0, 60), lastName: '' } : {}),
         ...(phone ? { phone } : {}),
         ...(extracted.address ? { address: extracted.address.slice(0, 500) } : {}),
         ...(day ? { birthday: day.date } : {}),
@@ -641,6 +645,14 @@ async function handleEvent(event: MessagingEvent) {
 
     // 2a. no pending claim → AI chat (AI down → লাইভ নলেজ বেস থেকে সঠিক উত্তর)
     if (!tokenRow) {
+      // 2a-empty: sticker/GIF/ছবি/শুধু-স্পেস (কোনো টেক্সট নেই) — আগে এখানে চুপ
+      // করে ফিরত যেত ("কাস্টমার মেসেজ দিলে উত্তর হয় না" কেসের একটা রূপ)।
+      // এখন উষ্ণ হোম-মেনু যায় — কাস্টমার বাটন থেকেই এগোতে পারে।
+      if (!dataTextIn) {
+        await sendQuickReplies(psid, t(lang, 'homeMenuText'), botQuickReplies(lang))
+        await saveChatTurn(psid, 'bot', '🏠 হোম-মেনু (sticker/attachment-এর উত্তর)')
+        return
+      }
       // 2a-quick: কুইক-রিপ্লাই বাটনে ট্যাপ (payload) — ডিটারমিনিস্টিক Rich-UI অ্যাকশন
       const qrAction = botActionFromPayload(event.message?.quick_reply?.payload)
       if (qrAction) {
@@ -774,6 +786,9 @@ async function handleEvent(event: MessagingEvent) {
         if (ai.reply) {
           await sendText(psid, ai.reply)
           await saveChatTurn(psid, 'bot', ai.reply)
+        } else if (askCount < 2) {
+          // AI ok কিন্তু রিপ্লাই ফাঁকা — আগে এখানে নীরবতা যেত; এখন স্ট্যাটিক রি-আস্ক
+          await sendText(psid, retryAsk(fieldType, lang))
         }
         if (askCount < 2) {
           await db.referralToken.update({

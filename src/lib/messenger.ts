@@ -1,8 +1,65 @@
 // Meta Messenger Graph API helpers (CRM)
-import { getSetting } from '@/lib/settings'
+import { getSetting, setSettings } from '@/lib/settings'
 import { SETTING_KEYS } from '@/lib/constants'
 
 const GRAPH = 'https://graph.facebook.com/v21.0'
+
+// ── send-error diagnostics ─────────────────────────────────────────────────
+// আগে প্রতিটা পাঠানো ব্যর্থতা নিঃশব্দে false রিটার্ন করত — মালিক শুধু দেখতেন
+// "মেসেজ যায়নি" কিন্তু কেন যায়নি জানতেন না। এখন প্রতিটা Graph-রিজেকশনের
+// হুবহু error মেসেজ এই সেটিং-এ জমা হয় — admin সেটিংস/টেস্ট প্যানেলে দেখা যায়।
+export const KEY_LAST_SEND_ERROR = 'messenger_last_send_error'
+let lastSendErrWrite = 0
+let lastSendErrText = ''
+function recordSendError(msg: string, psid?: string) {
+  const text = `${new Date().toISOString()} — ${msg}${psid ? ` (psid: ${psid})` : ''}`.slice(0, 500)
+  if (text === lastSendErrText && Date.now() - lastSendErrWrite < 30_000) return
+  lastSendErrWrite = Date.now()
+  lastSendErrText = text
+  setSettings({ [KEY_LAST_SEND_ERROR]: text }).catch(() => {})
+}
+
+/** রিপ্লাই/টেস্টে ব্যবহারের জন্য হুবহু Graph error → মানব-পাঠযোগ্য বাংলা ইঙ্গিত */
+export function sendErrorHint(msg: string): string {
+  const m = (msg || '').toLowerCase()
+  if (/not admins, developers or testers|not authorized to.*message|cannot message users/.test(m))
+    return 'Meta App এখন Development Mode-এ আছে — শুধু app admin/developer/tester-রা মেসেজ পান। Meta App Dashboard → App Settings → অ্যাপটি Live করুন (Privacy Policy URL দিতে হয়)।'
+  if (/pages_messaging|does not have permission|requires.*permission|permission.*required/.test(m))
+    return 'টোকেনে pages_messaging পারমিশন নেই — Meta Dashboard → App Review → Permissions-এ pages_messaging (Advanced Access) চান, অথবা টোকেন আবার Generate করুন।'
+  if (/outside.*window|24.?hour|window.*expired|messaging window/.test(m))
+    return '২৪ ঘণ্টার মেসেজিং-উইন্ডো শেষ — কাস্টমার শেষ মেসেজ করার ২৪ ঘণ্টার ভেতরেই খোলা টেক্সট যায়। এর বাইরে পাঠাতে হলে কাস্টমারকে 🔔 RN অপট-ইন করান (ব্রডকাস্ট ট্যাব)।'
+  if (/recipient|no matching user|invalid.*recipient/.test(m))
+    return 'এই PSID-এ কেউ নেই — কাস্টমার অন্য পেজে কথা বলছিল বা PSID ভুল।'
+  if (/token|session|expired|invalid oauth/i.test(m))
+    return 'পেজ টোকেন মেয়াদোত্তীর্ণ/অবৈধ — Meta Dashboard-এ নতুন Page Access Token বানিয়ে Vercel env-এ META_PAGE_TOKEN আপডেট করুন।'
+  return ''
+}
+
+/**
+ * লাইভ পাঠানো-প্রোব: বাস্তবে একটা ছোট মেসেজ পাঠিয়ে হুবহু Graph error ধরা —
+ * admin messenger-test প্যানেল এটা দেখায়; নইলে "যায়নি" ছাড়া কারণ জানা যেত না।
+ */
+export async function probeSend(psid: string, text = '✅ মেসেঞ্জার সংযোগ পরীক্ষা — সিস্টেম ঠিকঠাক কাজ করছে।'): Promise<{ ok: boolean; error: string | null; hint: string | null }> {
+  const token = pageToken()
+  if (!token) return { ok: false, error: 'META_PAGE_TOKEN সেট করা নেই (Vercel env)', hint: null }
+  try {
+    const res = await fetch(`${GRAPH}/me/messages?access_token=${encodeURIComponent(token)}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ recipient: { id: psid }, message: { text } }),
+      signal: AbortSignal.timeout(10_000),
+    })
+    const j = (await res.json().catch(() => ({}))) as { error?: { message?: string; code?: number } }
+    if (!res.ok || j.error) {
+      const msg = j.error?.message || `Graph API HTTP ${res.status}`
+      recordSendError(msg, psid)
+      return { ok: false, error: msg, hint: sendErrorHint(msg) || null }
+    }
+    return { ok: true, error: null, hint: null }
+  } catch (e) {
+    return { ok: false, error: e instanceof Error ? e.message : 'সংযোগ ব্যর্থ', hint: null }
+  }
+}
 
 function pageToken(): string {
   return process.env.META_PAGE_TOKEN || ''
@@ -172,10 +229,15 @@ export async function sendText(psid: string, text: string, opts?: { markdown?: b
         body: JSON.stringify(body),
         signal: AbortSignal.timeout(10_000),
       })
-      if (!res.ok) return false
       const j = (await res.json().catch(() => ({}))) as { error?: { message?: string } }
+      if (j.error?.message) recordSendError(j.error.message, psid)
+      if (!res.ok) {
+        if (!j.error?.message) recordSendError(`Graph API HTTP ${res.status}`, psid)
+        return false
+      }
       return !j.error
-    } catch {
+    } catch (e) {
+      recordSendError(e instanceof Error ? e.message : 'সংযোগ ব্যর্থ', psid)
       return false
     }
   }
@@ -204,7 +266,7 @@ export async function askPhoneQuickReply(psid: string, text: string): Promise<bo
   const token = pageToken()
   if (!token) return false
   try {
-    await fetch(`${GRAPH}/me/messages?access_token=${token}`, {
+    const res = await fetch(`${GRAPH}/me/messages?access_token=${token}`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -220,8 +282,15 @@ export async function askPhoneQuickReply(psid: string, text: string): Promise<bo
       }),
       signal: AbortSignal.timeout(10_000),
     })
-    return true
-  } catch {
+    const j = (await res.json().catch(() => ({}))) as { error?: { message?: string } }
+    if (j.error?.message) recordSendError(j.error.message, psid)
+    if (!res.ok) {
+      if (!j.error?.message) recordSendError(`Graph API HTTP ${res.status}`, psid)
+      return false
+    }
+    return !j.error
+  } catch (e) {
+    recordSendError(e instanceof Error ? e.message : 'সংযোগ ব্যর্থ', psid)
     return false
   }
 }
@@ -259,8 +328,11 @@ export async function sendQuickReplies(psid: string, text: string, replies: Quic
       // মেসেজ কখনো হারায় না
       return sendText(psid, text)
     }
-    const j = (await res.json().catch(() => ({}))) as { error?: unknown }
-    if (j.error) return sendText(psid, text)
+    const j = (await res.json().catch(() => ({}))) as { error?: { message?: string } }
+    if (j.error?.message) {
+      recordSendError(j.error.message, psid)
+      return sendText(psid, text)
+    }
     return true
   } catch {
     return sendText(psid, text)
@@ -315,10 +387,15 @@ export async function sendGenericCarousel(psid: string, cards: CarouselCard[], r
       body: JSON.stringify({ recipient: { id: psid }, message }),
       signal: AbortSignal.timeout(10_000),
     })
-    if (!res.ok) return false
-    const j = (await res.json().catch(() => ({}))) as { error?: unknown }
+    const j = (await res.json().catch(() => ({}))) as { error?: { message?: string } }
+    if (j.error?.message) recordSendError(j.error.message, psid)
+    if (!res.ok) {
+      if (!j.error?.message) recordSendError(`Graph API HTTP ${res.status} (carousel)`, psid)
+      return false
+    }
     return !j.error
-  } catch {
+  } catch (e) {
+    recordSendError(e instanceof Error ? e.message : 'সংযোগ ব্যর্থ (carousel)', psid)
     return false
   }
 }
@@ -516,7 +593,11 @@ async function graphPost<T>(path: string, body: unknown): Promise<{ ok: boolean;
       signal: AbortSignal.timeout(15_000),
     })
     const j = (await res.json()) as T & { error?: { message?: string } }
-    if (!res.ok || j.error) return { ok: false, error: j.error?.message || `Graph API HTTP ${res.status}` }
+    if (!res.ok || j.error) {
+      const msg = j.error?.message || `Graph API HTTP ${res.status}`
+      recordSendError(msg)
+      return { ok: false, error: msg }
+    }
     return { ok: true, data: j }
   } catch (e) {
     return { ok: false, error: e instanceof Error ? e.message : 'সংযোগ ব্যর্থ' }

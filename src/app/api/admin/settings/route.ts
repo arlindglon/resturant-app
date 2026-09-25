@@ -34,6 +34,7 @@ export async function GET(req: NextRequest) {
       lastWebhookAt: await getSetting('messenger_last_event_at'),
       lastWebhookInfo: await getSetting('messenger_last_event_info'),
       lastVerifyAt: await getSetting('messenger_last_verify_at'),
+      lastSendError: await getSetting('messenger_last_send_error'),
     },
   })
 }

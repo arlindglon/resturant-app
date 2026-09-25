@@ -509,6 +509,32 @@ export function sanitizeCustomerReply(text: string): string {
 }
 
 /**
+ * AI-এক্সট্র্যাক্টেড নাম-হাইজিন — লাইভ-প্রমাণিত বাগ: CRM-এ "Ridoy\"" জাতীয়
+ * অতিরিক্ত উদ্ধৃতি-চিহ্নসহ নাম ঢুকে গিয়েছিল। নামের আশে-পাশের উদ্ধৃতি/ব্যাকটিক/
+ * bold-তারকা, শেষের যতিচিহ্ন, কন্ট্রোল-অক্ষর বাদ দেওয়া হয়; narration/meta-
+ * টেক্সট বা প্রটোকল-ইকো ধরা পড়লে নামটা পুরো বাতিল (null) — CRM পরিষ্কার থাকে।
+ */
+export function sanitizeExtractedName(raw: string | null | undefined): string | null {
+  let n = (raw || '').trim()
+  if (!n) return null
+  n = n
+    .replace(/[\u0000-\u001F\u007F-\u009F]/g, ' ') // control/newline → স্পেস
+    .replace(/^[\s"'`*“”‘’«»„]+/, '') // শুরুর উদ্ধৃতি/বোল্ড
+    .replace(/[\s"'`*“”‘’«»„]+$/, '') // শেষের উদ্ধৃতি/বোল্ড
+    .replace(/\s*[।,;:!?–—.\-]+$/, '') // শেষের যতিচিহ্ন
+    .replace(/\s+/g, ' ')
+    .trim()
+  if (!n || n.length > 60) return null // নাম এত বড় হয় না — narration-চাঙ্ক
+  // মডেলের meta-কথা নাম হিসেবে এলে বাতিল
+  if (/^(?:wait|hmm|okay|ok|so|and|but|let'?s|lets|draft(?:ing)?|note|info|action|final|reply|response|answer|the\s+(?:user|customer)|customer|unknown|n\/a)$/i.test(n)) return null
+  // প্রটোকল/টেমপ্লেট-ইকো (নাম=…, INFO:…, JSON ব্রেস, পাইপ)
+  if (/[=<>{}[\]|]/.test(n) || /^(?:INFO|DATA|ACTION)\s*:/i.test(n) || /^(?:ভাষা|language|নাম|name|phone|ফোন)\s*=/i.test(n)) return null
+  // অন্তত ২ অক্ষরের আসল অক্ষর-ক্রম থাকতে হবে (যেকোনো লিপি — বাংলা কার-চিহ্ন \p{M} সহ)
+  if (!/[\p{L}\p{M}]{2,}/u.test(n)) return null
+  return n
+}
+
+/**
  * Narration-লেবেল স্ট্রিপার: মডেল আসল উত্তরের আগে "Final Output Construction:",
  * "Final Answer:", "উত্তর:" জাতীয় হেডিং লেখে (লাইভ টেস্ট-প্রমাণ) — লেবেলটা
  * সরিয়ে পরিষ্কার উত্তরটাই কাস্টমারকে যায়।
@@ -1041,7 +1067,7 @@ export async function chatWithCustomer(opts: {
   // raw আউটপুট থেকে পরিষ্কার উত্তর খোঁজে (salvage), নাহলে static fallback
   if (reply && isCustomerUnfitReply(reply)) reply = ''
   let extractedData = {
-    name: str(j?.customerName) || null,
+    name: sanitizeExtractedName(str(j?.customerName)),
     phone: str(j?.phone) || null,
     address: str(j?.address) || null,
     specialDay: str(j?.specialDay) || null,
@@ -1081,7 +1107,7 @@ export async function chatWithCustomer(opts: {
     }
     const langRaw = (pick('language', 'ভাষা') || '').toLowerCase()
     extractedData = {
-      name: pick('name', 'নাম'),
+      name: sanitizeExtractedName(pick('name', 'নাম')),
       phone: pick('phone', 'ফোন', 'মোবাইল'),
       address: pick('address', 'ঠিকানা'),
       specialDay: pick('day', 'date', 'দিন', 'তারিখ'),
