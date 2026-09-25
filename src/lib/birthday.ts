@@ -3,6 +3,7 @@ import { db } from '@/lib/db'
 import { getSetting, getSettingNumber } from '@/lib/settings'
 import { SETTING_KEYS } from '@/lib/constants'
 import { sendText, sendRnToToken } from '@/lib/messenger'
+import { botQuickReplies } from '@/lib/bot-ui'
 import { emitEvent } from '@/lib/emit'
 import { appendLedger, LEDGER_TYPES } from '@/lib/ledger'
 import { deviceMatch } from '@/lib/device'
@@ -252,7 +253,10 @@ export async function runBirthdayCron(): Promise<{ sent: number; skipped: boolea
       }
       console.error('[cron:rn-birthday]', c.psid, rn.error) // fall through to text
     }
-    const ok = await sendText(c.psid, wish)
+    // টেক্সট-পথেও নিচে মেনু-বাটন যায় (সবসময়-বাটন নিয়ম)
+    const ok = await sendText(c.psid, wish, {
+      quickReplies: botQuickReplies(pickBotLang(c.language, globalLang)),
+    })
     if (ok) sent++
   }
   return { sent, skipped: false }

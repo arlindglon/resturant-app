@@ -87,6 +87,7 @@ export const SETTING_KEYS = {
   ITEM_SPECIAL_NOTE_ENABLED: 'item_special_note_enabled',
   MESSENGER_AUTO_REPLY_ENABLED: 'messenger_auto_reply_enabled',
   MESSENGER_MARKDOWN: 'messenger_markdown', // Messenger মার্কডাউন ফরম্যাট (*bold*, _italic_, ~strike~, `কোড`) — 'false' হলে প্লেইন টেক্সট
+  MESSENGER_PAGE_TOKEN: 'messenger_page_token', // Page Access Token (admin সেটিং-ওভাররাইড) — মেয়াদ শেষ হলে Vercel env ছোঁয়া ছাড়াই এখান থেকে নতুন টোকেন; ফাঁকা = env META_PAGE_TOKEN
   MESSENGER_MENU_JSON: 'messenger_menu_json', // পার্সিস্টেন্ট-মেনু বাটন (admin-সম্পাদনযোগ্য) — JSON [{title,payload}]; ফাঁকা = ডিফল্ট
   BOT_LANGUAGE: 'bot_language', // বটের গ্লোবাল ভাষা — ফাঁকা = অটো (AI কাস্টমারের ভাষা শিখে নেয়); bn/banglish/en/hi = সব মেসেজ ওই ভাষায়
   META_RN_TITLE: 'meta_rn_title', // opt-in কার্ডের টাইটেল — ২৪ঘ-উইন্ডো-বহির্ভূত notification messages (ফাঁকা = ডিফল্ট)

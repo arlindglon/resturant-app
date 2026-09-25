@@ -40,7 +40,7 @@ export function sendErrorHint(msg: string): string {
  * admin messenger-test প্যানেল এটা দেখায়; নইলে "যায়নি" ছাড়া কারণ জানা যেত না।
  */
 export async function probeSend(psid: string, text = '✅ মেসেঞ্জার সংযোগ পরীক্ষা — সিস্টেম ঠিকঠাক কাজ করছে।'): Promise<{ ok: boolean; error: string | null; hint: string | null }> {
-  const token = pageToken()
+  const token = await pageToken()
   if (!token) return { ok: false, error: 'META_PAGE_TOKEN সেট করা নেই (Vercel env)', hint: null }
   try {
     const res = await fetch(`${GRAPH}/me/messages?access_token=${encodeURIComponent(token)}`, {
@@ -61,14 +61,42 @@ export async function probeSend(psid: string, text = '✅ মেসেঞ্জ�
   }
 }
 
-function pageToken(): string {
+/**
+ * Page Access Token রেজোলিউশন (প্রতিটা Graph কলে ব্যবহৃত):
+ *  ১) admin সেটিং `messenger_page_token` — সেটিংস পেজ থেকে সেভ করা। মেয়াদ শেষ
+ *     হলে (টোকেন রিজেনারেট) Vercel env ছোঁয়া/রিডিপ্লয় ছাড়াই এখান থেকে সঙ্গে
+ *     সঙ্গে নতুন টোকেন কার্যকর হয় (৩০ সেকেন্ড ক্যাশ; সেভ করলেই ক্যাশ রিফ্রেশ)।
+ *  ২) না থাকলে Vercel env META_PAGE_TOKEN (পুরনো পথ — backward compatible)।
+ * DB-blip হলেও env-এ ফেরা — বট কখনো টোকেন-শূন্য হয়ে চুপ করে থাকে না।
+ */
+async function pageToken(): Promise<string> {
+  try {
+    const adminTok = (await getSetting(SETTING_KEYS.MESSENGER_PAGE_TOKEN)).trim()
+    if (adminTok) return adminTok
+  } catch {
+    /* DB blip → env fallback */
+  }
   return process.env.META_PAGE_TOKEN || ''
 }
 
-export function messengerConfigured(): boolean {
+/** admin প্যানেলের টোকেন-সোর্স ডায়াগনস্টিকস — টোকেন কখনোই পুরো ফেরায় না (শেষ ৬ অক্ষর) */
+export async function pageTokenInfo(): Promise<{ source: 'admin' | 'env' | 'none'; tail: string }> {
+  let adminTok = ''
+  try {
+    adminTok = (await getSetting(SETTING_KEYS.MESSENGER_PAGE_TOKEN)).trim()
+  } catch {
+    /* ignore */
+  }
+  if (adminTok) return { source: 'admin', tail: adminTok.slice(-6) }
+  const envTok = (process.env.META_PAGE_TOKEN || '').trim()
+  if (envTok) return { source: 'env', tail: envTok.slice(-6) }
+  return { source: 'none', tail: '' }
+}
+
+export async function messengerConfigured(): Promise<boolean> {
   // Only the Page Token is functionally required: Graph /me/messages resolves
   // the page from the token itself. META_PAGE_ID is optional (informational).
-  return Boolean(process.env.META_PAGE_TOKEN)
+  return Boolean(await pageToken())
 }
 
 export interface PageTokenTest {
@@ -81,7 +109,7 @@ export interface PageTokenTest {
 
 /** Live-check the configured META_PAGE_TOKEN against Graph /me — tells WHICH page it belongs to */
 export async function testPageToken(): Promise<PageTokenTest> {
-  const token = pageToken()
+  const token = await pageToken()
   if (!token)
     return { ok: false, pageName: null, pageId: null, pageUsername: null, error: 'META_PAGE_TOKEN সেট করা নেই (Vercel env)' }
   try {
@@ -135,7 +163,7 @@ export interface MessengerProfile {
  * (also logged) — callers fall back gracefully (no fake "Customer" name).
  */
 export async function fetchMessengerProfile(psid: string): Promise<MessengerProfile> {
-  const token = pageToken()
+  const token = await pageToken()
   if (!token) {
     return { firstName: '', lastName: '', profilePic: null, ok: false, error: 'META_PAGE_TOKEN সেট করা নেই' }
   }
@@ -199,7 +227,7 @@ export async function fetchProfilePhoto(psid: string): Promise<string | null> {
  * পরপর আবার পাঠায়; মেসেজ গেলে নিজে থেকেই মুছে যায়।
  */
 export async function sendTypingOn(psid: string): Promise<boolean> {
-  const token = pageToken()
+  const token = await pageToken()
   if (!token) return false
   try {
     const res = await fetch(`${GRAPH}/me/messages?access_token=${token}`, {
@@ -216,10 +244,25 @@ export async function sendTypingOn(psid: string): Promise<boolean> {
   }
 }
 
-/** Send a plain text message to a PSID — returns REAL success (Graph errors count as failure) */
-export async function sendText(psid: string, text: string, opts?: { markdown?: boolean }): Promise<boolean> {
-  const token = pageToken()
+/**
+ * Send a plain text message to a PSID — returns REAL success (Graph errors count as failure).
+ * opts.quickReplies দিলে মেসেজের নিচে মেনু-বাটন যুক্ত হয় (মালিকের নিয়ম: বটের প্রতিটা
+ * উত্তরের নিচে বাটন সবসময় থাকবে)। চিপসহ রিজেক্ট হলে চিপ ছাড়া আরেকবার —
+ * মেসেজ কখনো হারায় না।
+ */
+export async function sendText(
+  psid: string,
+  text: string,
+  opts?: { markdown?: boolean; quickReplies?: QuickReply[] }
+): Promise<boolean> {
+  const token = await pageToken()
   if (!token) return false
+
+  const chips = opts?.quickReplies?.length
+    ? opts.quickReplies
+        .slice(0, 11)
+        .map((r) => ({ content_type: 'text', title: r.title.slice(0, 20), payload: r.payload.slice(0, 1000) }))
+    : null
 
   const post = async (body: Record<string, unknown>): Promise<boolean> => {
     try {
@@ -246,10 +289,14 @@ export async function sendText(psid: string, text: string, opts?: { markdown?: b
   // text_format:markdown দিয়ে যায় — Graph কোনো কারণে রিজেক্ট করলে (নতুন ফিল্ড
   // না-মানা / ২৪ঘ উইন্ডো / যা-ই হোক) প্লেইন টেক্সট দিয়ে আরেকবার — মেসেজ কখনো হারায় না।
   const wantMd = opts?.markdown !== false && (await markdownEnabled())
-  if (wantMd && (await post({ recipient: { id: psid }, message: { text, text_format: 'markdown' } }))) {
+  if (wantMd && (await post({ recipient: { id: psid }, message: { text, text_format: 'markdown', ...(chips ? { quick_replies: chips } : {}) } }))) {
     return true
   }
-  return post({ recipient: { id: psid }, message: { text } })
+  if (await post({ recipient: { id: psid }, message: { text, ...(chips ? { quick_replies: chips } : {}) } })) {
+    return true
+  }
+  // চিপসহ রিজেক্ট হলে চিপ ছাড়া শেষ চেষ্টা (quick_replies ফিল্ডই কোনো কারণে অগ্রাহ্য হলে)
+  return chips ? post({ recipient: { id: psid }, message: { text } }) : false
 }
 
 /** Messenger markdown চালু আছে কি না (admin সেটিং; ৩০ সেকেন্ড ক্যাশ) */
@@ -263,7 +310,7 @@ export async function markdownEnabled(): Promise<boolean> {
 
 /** 1-tap phone number quick reply (Messenger shows SIM number above keyboard) */
 export async function askPhoneQuickReply(psid: string, text: string): Promise<boolean> {
-  const token = pageToken()
+  const token = await pageToken()
   if (!token) return false
   try {
     const res = await fetch(`${GRAPH}/me/messages?access_token=${token}`, {
@@ -308,7 +355,7 @@ export interface QuickReply {
  * ডিটারমিনিস্টিক উত্তর দেয় (AI লেটেন্সি নেই)।
  */
 export async function sendQuickReplies(psid: string, text: string, replies: QuickReply[]): Promise<boolean> {
-  const token = pageToken()
+  const token = await pageToken()
   if (!token) return false
   const chips = replies
     .slice(0, 11)
@@ -353,7 +400,7 @@ export interface CarouselCard {
  * দাম + [অর্ডার করুন] বাটন। ছবি-শেষ টেমপ্লেটে কুইক-রিপ্লাইও জুড়ে দেওয়া যায়।
  */
 export async function sendGenericCarousel(psid: string, cards: CarouselCard[], replies: QuickReply[] = []): Promise<boolean> {
-  const token = pageToken()
+  const token = await pageToken()
   if (!token) return false
   const elements = cards.slice(0, 10).map((c) => {
     const buttons = [
@@ -422,7 +469,7 @@ export function sanitizeMenuTitle(raw: string): string {
 
 /** persistent_menu মুছে ফেলা (আটকে-থাকা পুরনো মেনু থেকে মুক্তি — retry-র আগে) */
 export async function deletePersistentMenu(): Promise<boolean> {
-  const token = pageToken()
+  const token = await pageToken()
   if (!token) return false
   try {
     const res = await fetch(
@@ -511,7 +558,7 @@ export interface PersistentMenuStatus {
 }
 
 export async function fetchPersistentMenuStatus(): Promise<PersistentMenuStatus> {
-  const token = pageToken()
+  const token = await pageToken()
   if (!token)
     return { ok: false, error: 'META_PAGE_TOKEN সেট করা নেই (Vercel env)', buttons: [], hasGetStarted: false }
   try {
@@ -548,20 +595,22 @@ export async function fetchPersistentMenuStatus(): Promise<PersistentMenuStatus>
   }
 }
 
-/** Digital receipt message */
+/** Digital receipt message — replies দিলে রসিদের নিচেও মেনু-বাটন যায় (সবসময়-বাটন নিয়ম) */
 export async function sendReceipt(
   psid: string,
-  lines: { text: string }[]
+  lines: { text: string }[],
+  replies?: QuickReply[]
 ): Promise<boolean> {
   const text = lines.map((l) => l.text).join('\n')
-  return sendText(psid, text)
+  return sendText(psid, text, replies?.length ? { quickReplies: replies } : undefined)
 }
 
-/** Birthday greeting + voucher (কুপন কোড বক্সে + ছাড় মোটা) */
-export async function sendBirthdayGreeting(psid: string, name: string, voucherCode: string, percent: number) {
+/** Birthday greeting + voucher (কুপন কোড বক্সে + ছাড় মোটা) — replies দিলে নিচে মেনু-বাটনও */
+export async function sendBirthdayGreeting(psid: string, name: string, voucherCode: string, percent: number, replies?: QuickReply[]) {
   return sendText(
     psid,
-    `🎂 শুভ জন্মদিন *${name}*!\n\nআপনার জন্য বিশেষ উপহার — কুপন \`${voucherCode}\` : *${percent}% ছাড়*!\nআজই ভিজিট করুন এবং উপভোগ করুন। 🎉`
+    `🎂 শুভ জন্মদিন *${name}*!\n\nআপনার জন্য বিশেষ উপহার — কুপন \`${voucherCode}\` : *${percent}% ছাড়*!\nআজই ভিজিট করুন এবং উপভোগ করুন। 🎉`,
+    replies?.length ? { quickReplies: replies } : undefined
   )
 }
 
@@ -583,7 +632,7 @@ interface GraphSendResult {
 
 /** POST to the Graph API with the page token (shared by the RN helpers) */
 async function graphPost<T>(path: string, body: unknown): Promise<{ ok: boolean; data?: T; error?: string }> {
-  const token = pageToken()
+  const token = await pageToken()
   if (!token) return { ok: false, error: 'META_PAGE_TOKEN সেট করা নেই (Vercel env)' }
   try {
     const res = await fetch(`${GRAPH}${path}?access_token=${encodeURIComponent(token)}`, {

@@ -4,7 +4,7 @@ import { ok, fail } from '@/lib/api'
 import { getAllSettings, getSetting, setSettings } from '@/lib/settings'
 import { SETTING_KEYS } from '@/lib/constants'
 import { requirePerm } from '@/lib/staff-auth'
-import { messengerConfigured } from '@/lib/messenger'
+import { messengerConfigured, pageTokenInfo } from '@/lib/messenger'
 
 /** Public origin of this deployment (Vercel or local) — for webhook URL display */
 function baseUrl(req: NextRequest): string {
@@ -19,11 +19,16 @@ export async function GET(req: NextRequest) {
   const denied = await requirePerm('settings')
   if (denied) return denied
   const settings = await getAllSettings()
+  // SECURITY: Page Access Token কখনোই প্লেইন-টেক্সটে ব্রাউজারে যাবে না —
+  // মাস্কড মার্কার-ই যথেষ্ট (UI শুধু সোর্স/শেষ-৬-অক্ষর দেখায়)
+  const adminToken = (settings[SETTING_KEYS.MESSENGER_PAGE_TOKEN] || '').trim()
+  if (adminToken) settings[SETTING_KEYS.MESSENGER_PAGE_TOKEN] = '__SET__'
   return ok({
     settings,
     meta: {
       sessionDurationHint: 'QR স্ক্যানে তৈরি HMAC সেশন কুকির মেয়াদ (মিনিট)। নতুন স্ক্যান থেকে কার্যকর হবে।',
-      messengerConfigured: messengerConfigured(),
+      messengerConfigured: await messengerConfigured(),
+      tokenInfo: await pageTokenInfo(),
       metaEnv: {
         pageToken: Boolean(process.env.META_PAGE_TOKEN),
         pageId: Boolean(process.env.META_PAGE_ID),
@@ -69,6 +74,13 @@ export async function PUT(req: NextRequest) {
       updates[k] = String(v).slice(0, 20000)
     } else if (k === SETTING_KEYS.GEMINI_PERSONA || k === SETTING_KEYS.AI_DELIVERY_RULES || k === SETTING_KEYS.AI_EXTRA_INFO) {
       updates[k] = String(v).slice(0, 8000)
+    } else if (k === SETTING_KEYS.MESSENGER_PAGE_TOKEN) {
+      // Page Access Token — ফাঁকা মানে env-এ ফেরা; অবৈধ অক্ষর (স্পেস/নতুন লাইন) ছাঁটাই
+      const tok = String(v).trim().replace(/[\s\u200B-\u200D]/g, '')
+      if (tok && !/^EAA[a-zA-Z0-9_-]{20,}$/.test(tok)) {
+        return fail('টোকেনটি দেখতে Page Access Token-এর মতো নয় (EAA… দিয়ে শুরু হয়) — আবার কপি করুন।', 400)
+      }
+      updates[k] = tok
     } else {
       updates[k] = String(v).slice(0, 2000)
     }
@@ -78,5 +90,9 @@ export async function PUT(req: NextRequest) {
 
   await setSettings(updates)
   const settings = await getAllSettings()
+  // রেসপন্সেও টোকেন প্লেইন-টেক্সটে ফেরবে না
+  if ((settings[SETTING_KEYS.MESSENGER_PAGE_TOKEN] || '').trim()) {
+    settings[SETTING_KEYS.MESSENGER_PAGE_TOKEN] = '__SET__'
+  }
   return ok({ settings, updated: Object.keys(updates) })
 }

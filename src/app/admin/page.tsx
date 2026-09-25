@@ -229,6 +229,7 @@ interface SettingsMeta {
   lastWebhookAt: string
   lastWebhookInfo: string
   lastVerifyAt: string
+  tokenInfo?: { source: 'admin' | 'env' | 'none'; tail: string }
 }
 
 interface MessengerTestResult {
@@ -242,6 +243,7 @@ interface MessengerTestResult {
   profileTest: { ok: boolean; name: string | null; error: string | null } | null
   sendProbe: { psid: string | null; ok: boolean; error: string | null; hint: string | null } | null
   env: { pageToken: boolean; pageId: boolean; verifyToken: boolean; appSecret: boolean }
+  tokenInfo?: { source: 'admin' | 'env' | 'none'; tail: string }
   lastWebhookAt: string
   lastWebhookInfo: string
   lastVerifyAt: string
@@ -4567,6 +4569,8 @@ function SettingsTab({ onAuthRequired }: TabProps) {
   const [rnBusy, setRnBusy] = useState<'ask' | 'broadcast' | null>(null)
   const [rnResult, setRnResult] = useState<{ total: number; sent: number; failed: number; errors: string[] } | null>(null)
   const [rnBroadcastText, setRnBroadcastText] = useState('')
+  const [tokenInput, setTokenInput] = useState('')
+  const [tokenSaving, setTokenSaving] = useState(false)
   const logoFileRef = useRef<HTMLInputElement>(null)
 
   const load = useCallback(async () => {
@@ -4704,6 +4708,7 @@ function SettingsTab({ onAuthRequired }: TabProps) {
         ? {
             ...prev,
             metaEnv: res.data!.env,
+            tokenInfo: res.data!.tokenInfo ?? prev.tokenInfo,
             lastWebhookAt: res.data!.lastWebhookAt,
             lastWebhookInfo: res.data!.lastWebhookInfo,
             lastVerifyAt: res.data!.lastVerifyAt,
@@ -4717,6 +4722,25 @@ function SettingsTab({ onAuthRequired }: TabProps) {
     } else if (res.data.sendProbe?.ok) {
       toast.success('লাইভ পাঠানো-টেস্ট সফল — মেসেজ যাচ্ছে ✅')
     }
+  }
+
+  // 🔑 Page Access Token — admin সেটিং হিসেবে সেভ (Vercel env ছোঁয়া/রিডিপ্লয় ছাড়াই
+  // মেয়াদ-শেষ টোকেন বদলানো যায়)। সেভ হলেই সব send-path-এ সঙ্গে সঙ্গে কার্যকর।
+  const savePageToken = async (clear = false) => {
+    const v = tokenInput.trim()
+    if (!clear && !v) return toast.error('আগে টোকেনটি পেস্ট করুন')
+    if (!clear && !/^EAA[a-zA-Z0-9_-]{20,}$/.test(v.replace(/\s+/g, ''))) {
+      return toast.error('টোকেনটি Page Access Token-এর মতো দেখাচ্ছে না (EAA… দিয়ে শুরু হয়) — পুরোটা কপি করুন')
+    }
+    setTokenSaving(true)
+    const res = await api.put<{ settings: Record<string, string> }>('/api/admin/settings', {
+      [SETTING_KEYS.MESSENGER_PAGE_TOKEN]: clear ? '' : v.replace(/\s+/g, ''),
+    })
+    setTokenSaving(false)
+    if (!res.ok) return toast.error(res.error || 'টোকেন সেভ হয়নি')
+    setTokenInput('')
+    toast.success(clear ? 'admin টোকেন মুছে ফেলা হয়েছে — এখন Vercel env-এর টোকেন চলছে' : '✅ নতুন Page Access Token সেভ হয়েছে — সঙ্গে সঙ্গে কার্যকর! নিচের টেস্ট বাটনে যাচাই করুন')
+    await load()
   }
 
   // পার্সিস্টেন্ট মেনু Meta-তে সেট করা — চ্যাটবক্সের নিচে সবসময় ফিক্সড মেনু
@@ -5059,14 +5083,14 @@ function SettingsTab({ onAuthRequired }: TabProps) {
             />
           </div>
           {form[SETTING_KEYS.MESSENGER_AUTO_REPLY_ENABLED] !== 'false' &&
-            (!meta.metaEnv?.pageToken || !meta.lastWebhookAt) && (
+            ((!meta.metaEnv?.pageToken && meta.tokenInfo?.source !== 'admin') || !meta.lastWebhookAt) && (
               <div className="rounded-lg border border-red-200 bg-red-50 p-3">
                 <p className="text-xs font-black leading-snug text-red-700">
                   ⚠️ মেসেঞ্জার অফার চালু আছে, কিন্তু Meta সংযোগ এখনো সম্পূর্ণ হয়নি
                 </p>
                 <p className="mt-1 text-xs leading-snug text-red-600">
-                  {!meta.metaEnv?.pageToken
-                    ? 'Vercel env-এ META_PAGE_TOKEN নেই — কাস্টমার চ্যাট করলেও কোনো উত্তর বা ছাড় পাবে না।'
+                  {!meta.metaEnv?.pageToken && meta.tokenInfo?.source !== 'admin'
+                    ? 'Page Access Token নেই — নিচের “মেসেঞ্জার ইন্টিগ্রেশন” কার্ডের 🔑 ফিল্ডে টোকেন দিন, নইলে কাস্টমার চ্যাট করলেও কোনো উত্তর বা ছাড় পাবে না।'
                     : 'Facebook থেকে এখনো কোনো ওয়েবহুক ইভেন্ট আসেনি — Meta অ্যাপে webhook + টোকেন সেটআপ বাকি। সেটআপ শেষ না হওয়া পর্যন্ত কাস্টমার চ্যাট করলেও ছাড় বসবে না। নিচের “মেসেঞ্জার ইন্টিগ্রেশন” কার্ডে ধাপে ধাপে গাইড আছে।'}
                 </p>
                 <p className="mt-1 text-xs leading-snug text-red-600">
@@ -5196,7 +5220,52 @@ function SettingsTab({ onAuthRequired }: TabProps) {
               ? 'Meta সংযোগ সম্পূর্ণ — চ্যাটে ছাড় কাজ করছে ✅'
               : meta.messengerConfigured
                 ? 'টোকেন আছে, কিন্তু Facebook অ্যাপে webhook সেটআপ বাকি'
-                : 'META_PAGE_TOKEN সেট করা হয়নি (Vercel env)'}
+                : 'Page Access Token সেট করা হয়নি — নিচের 🔑 ফিল্ডে টোকেন দিন'}
+          </div>
+
+          {/* 🔑 Page Access Token manager — মেয়াদ শেষ হলে Vercel ছাড়াই এখান থেকে বদলান */}
+          <div className="space-y-2 rounded-lg border border-stone-200 p-3">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <p className="text-sm font-black text-stone-800">🔑 Page Access Token</p>
+              <span
+                className={`rounded-full px-2 py-0.5 text-[10px] font-black ${
+                  meta.tokenInfo?.source === 'admin'
+                    ? 'bg-emerald-100 text-emerald-700'
+                    : meta.tokenInfo?.source === 'env'
+                      ? 'bg-sky-100 text-sky-700'
+                      : 'bg-red-100 text-red-700'
+                }`}
+              >
+                {meta.tokenInfo?.source === 'admin'
+                  ? `নিচের ফিল্ডের টোকেন চলছে (…${meta.tokenInfo?.tail || ''})`
+                  : meta.tokenInfo?.source === 'env'
+                    ? `Vercel env টোকেন চলছে (…${meta.tokenInfo?.tail || ''})`
+                    : 'কোনো টোকেন নেই ❌'}
+              </span>
+            </div>
+            <p className="text-xs leading-snug text-stone-500">
+              টোকেন মেয়াদ শেষ হলে (“… expired…” এরর) Meta Dashboard → Business Settings → Page-এর নতুন token Generate করে এখানে পেস্ট করুন — Vercel রিডিপ্লয় লাগবে না, সঙ্গে সঙ্গে কার্যকর হবে।
+            </p>
+            <div className="flex flex-col gap-2 sm:flex-row">
+              <Input
+                type="password"
+                value={tokenInput}
+                onChange={(e) => setTokenInput(e.target.value)}
+                placeholder="EAA… (পুরো Page Access Token পেস্ট করুন)"
+                className="flex-1 font-mono text-xs"
+                autoComplete="off"
+              />
+              <div className="flex gap-2">
+                <Button onClick={() => savePageToken(false)} disabled={tokenSaving} size="sm" className="flex-1 bg-amber-500 font-black text-white hover:bg-amber-600 sm:flex-none">
+                  {tokenSaving ? <Loader2 className="h-4 w-4 animate-spin" /> : '💾'} সেভ করুন
+                </Button>
+                {meta.tokenInfo?.source === 'admin' && (
+                  <Button onClick={() => savePageToken(true)} disabled={tokenSaving} size="sm" variant="outline" className="border-red-200 font-black text-red-600 hover:bg-red-50">
+                    🗑️ মুছুন
+                  </Button>
+                )}
+              </div>
+            </div>
           </div>
 
           {/* checklist: what is configured vs missing */}
@@ -5204,9 +5273,9 @@ function SettingsTab({ onAuthRequired }: TabProps) {
             <p className="text-[11px] font-black uppercase tracking-wide text-stone-400">কনফিগারেশন চেকলিস্ট</p>
             <MetaCheckRow
               label="পেজ টোকেন"
-              code="META_PAGE_TOKEN (Vercel env)"
-              ok={!!meta.metaEnv?.pageToken}
-              note="চ্যাটে রিপ্লাই, ফোন-শেয়ার ও ডিজিটাল রসিদ পাঠাতে এটি আবশ্যক।"
+              code="admin সেটিং / META_PAGE_TOKEN (env)"
+              ok={meta.tokenInfo ? meta.tokenInfo.source !== 'none' : !!meta.metaEnv?.pageToken}
+              note="চ্যাটে রিপ্লাই, ফোন-শেয়ার ও ডিজিটাল রসিদ পাঠাতে এটি আবশ্যক। মেয়াদ শেষ হলে উপরের 🔑 ফিল্ড থেকে নতুন টোকেন দিন।"
             />
             <MetaCheckRow
               label="ভেরিফাই টোকেন"

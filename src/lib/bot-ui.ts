@@ -504,3 +504,21 @@ export function botActionFromText(text: string): BotActionKey | null {
   for (const { action, re } of ACTION_TEXT_RE) if (re.test(msg)) return action
   return null
 }
+
+/* ───────────────── greeting fast-path (AI লেটেন্সি ছাড়া ইনস্ট্যান্ট উত্তর) ───────────────── */
+
+/**
+ * শুধু-শুভেচ্ছা মেসেজ ("hi", "hello", "salam", "হ্যালো", "kemon achen"…) —
+ * মালিকের নির্দেশ: এসব মেসেজে AI দিয়ে উত্তর দেওয়ার দরকার নেই (৩০-৯০ সেকেন্ড
+ * অপেক্ষা নয়) — সঙ্গে সঙ্গে উষ্ণ স্বাগতম + মেনু-বাটন যাবে।
+ * পুরো মেসেজটাই গ্রিটিং হতে হবে (শেষে বিরামচিহ্ন ছাড়া অন্য কিছু থাকলে —
+ * "hi menu den", "hi 5 er discount ache?" — সেটা AI/অন্য ইনটেন্টের জন্য যায়)।
+ */
+const GREETING_RE =
+  /^(?:h+i+|he?y+|he?l+o+|salam(?:u alaik(?:um|us))?|assalam(?:u|o)? ?alaik(?:um|us)|assalamualaik(?:um|us)|asalamualaik(?:um|us)|slam|namaste|nomoshkar|namskar|good ?(?:morning|afternoon|evening)|হাই+|হ্যালো|হেলো|হেলু+|আসসালাম(?:ু)? ?আলাইকুম|সালাম|নমস্কার|নমস্তে|কেমন আছ(?:েন|ো)|কি খবর|ki khobor|kemon a(?:ch|sh)(?:o|en)|assalamualaikum)[!।.,?]*$/i
+
+export function isGreetingText(text: string): boolean {
+  const msg = (text || '').trim()
+  if (!msg || msg.length > 30) return false
+  return GREETING_RE.test(msg)
+}

@@ -20,7 +20,7 @@ import crypto from 'crypto'
 import { db } from '@/lib/db'
 import { fail, ok } from '@/lib/api'
 import { fetchMessengerProfile, askPhoneQuickReply, sendReceipt, sendText, sendTypingOn, sendRnOptInRequest, sendQuickReplies, markdownEnabled } from '@/lib/messenger'
-import { botActionFromPayload, botActionFromText, handleBotUiAction, botQuickReplies, BOT_ACTIONS } from '@/lib/bot-ui'
+import { botActionFromPayload, botActionFromText, handleBotUiAction, botQuickReplies, isGreetingText, BOT_ACTIONS } from '@/lib/bot-ui'
 import { applyBirthdayDiscount } from '@/lib/birthday'
 import { setSettings, getSetting } from '@/lib/settings'
 import { SETTING_KEYS } from '@/lib/constants'
@@ -274,9 +274,10 @@ async function askVerificationData(
   const text = head + tail
 
   if (fieldType === 'PHONE') {
-    await askPhoneQuickReply(psid, text)
+    await askPhoneQuickReply(psid, text) // ফোন-শেয়ার বাটনই এখানে কার্যকরী বাটন
   } else {
-    await sendText(psid, text)
+    // মালিকের নিয়ম: বটের প্রতিটা উত্তরের নিচে মেনু-বাটন সবসময় থাকবে
+    await sendQuickReplies(psid, text, botQuickReplies(lang))
   }
 }
 
@@ -340,7 +341,8 @@ async function sendBillReceipt(
   lines.push(t(lang, 'receiptTotal', { amt: Math.round(payable * 100) / 100 }))
   lines.push(t(lang, 'receiptThanks', { name: nameVar(name) }))
   lines.push(await followNudge(lang))
-  await sendReceipt(psid, [{ text: lines.join('\n') }])
+  // রসিদের নিচেও মেনু-বাটন — টার্নের শেষ মেসেজেই বাটন থাকে (সবসময়-বাটন নিয়ম)
+  await sendReceipt(psid, [{ text: lines.join('\n') }], botQuickReplies(lang))
 }
 
 /* ───────────────────────── AI chatbot (Gemini) ───────────────────────── */
@@ -662,6 +664,16 @@ async function handleEvent(event: MessagingEvent) {
           return
         }
       }
+      // 2a-greet: "hi / hello / salam" জাতীয় শুধু-শুভেচ্ছা — AI-র ৩০-৯০ সেকেন্ড
+      // অপেক্ষা নয়; সঙ্গে সঙ্গে উষ্ণ স্বাগতম + মেনু-বাটন (মালিকের নির্দেশ: এসব
+      // মেসেজে AI দিয়ে উত্তর দেওয়ার দরকার নেই, বাটনই যাবে)
+      if (isGreetingText(dataTextIn)) {
+        const greetText = t(lang, 'greetMenuText', { name: nameVar(name) })
+        await sendQuickReplies(psid, greetText, botQuickReplies(lang))
+        await saveChatTurn(psid, 'bot', greetText)
+        await maybeAskRnOptIn(psid)
+        return
+      }
       // 2a-text: সরাসরি টেক্সটেও মেনু/অফার/হোম চাইলে একই কার্ড/বাটন-উত্তর
       const textAction = botActionFromText(dataTextIn)
       if (textAction && (textAction === BOT_ACTIONS.MENU || textAction === BOT_ACTIONS.OFFERS || textAction === BOT_ACTIONS.ORDER || textAction === BOT_ACTIONS.TEXTMENU || textAction === BOT_ACTIONS.HOME)) {
@@ -755,7 +767,7 @@ async function handleEvent(event: MessagingEvent) {
           data: { status: 'CANCELLED', dataText: dataText.slice(0, 300) },
         })
         const pivot = ai.reply || t(lang, 'cancelPivot')
-        await sendText(psid, pivot)
+        await sendQuickReplies(psid, pivot, botQuickReplies(lang))
         await saveChatTurn(psid, 'bot', pivot)
         return
       }
@@ -784,11 +796,11 @@ async function handleEvent(event: MessagingEvent) {
       // the offer silently.
       if (!validData && ai.ok) {
         if (ai.reply) {
-          await sendText(psid, ai.reply)
+          await sendQuickReplies(psid, ai.reply, botQuickReplies(lang))
           await saveChatTurn(psid, 'bot', ai.reply)
         } else if (askCount < 2) {
           // AI ok কিন্তু রিপ্লাই ফাঁকা — আগে এখানে নীরবতা যেত; এখন স্ট্যাটিক রি-আস্ক
-          await sendText(psid, retryAsk(fieldType, lang))
+          await sendQuickReplies(psid, retryAsk(fieldType, lang), botQuickReplies(lang))
         }
         if (askCount < 2) {
           await db.referralToken.update({
@@ -802,10 +814,10 @@ async function handleEvent(event: MessagingEvent) {
       // AI down (quota/network) → static retry while we haven't nagged, else soft
       if (!validData && !ai.ok) {
         if (askCount < 2) {
-          await sendText(psid, retryAsk(fieldType, lang))
+          await sendQuickReplies(psid, retryAsk(fieldType, lang), botQuickReplies(lang))
           await db.referralToken.update({ where: { id: tokenRow.id }, data: { askCount: askCount + 1 } })
         } else {
-          await sendText(psid, t(lang, 'softWait'))
+          await sendQuickReplies(psid, t(lang, 'softWait'), botQuickReplies(lang))
         }
         return
       }
@@ -816,12 +828,12 @@ async function handleEvent(event: MessagingEvent) {
     if (!validData) {
       const askCount = tokenRow.askCount || 0
       if (askCount < 2) {
-        await sendText(psid, retryAsk(fieldType, lang))
+        await sendQuickReplies(psid, retryAsk(fieldType, lang), botQuickReplies(lang))
         await db.referralToken.update({ where: { id: tokenRow.id }, data: { askCount: askCount + 1 } })
       } else {
         const handled = await aiGeneralReply(psid, name, dataText)
         if (!handled) {
-          await sendText(psid, t(lang, 'softWaitMore'))
+          await sendQuickReplies(psid, t(lang, 'softWaitMore'), botQuickReplies(lang))
         }
       }
       return
@@ -861,7 +873,7 @@ async function handleEvent(event: MessagingEvent) {
     }
 
     if (!result.ok) {
-      await sendText(psid, `😔 ${result.message}`)
+      await sendQuickReplies(psid, `😔 ${result.message}`, botQuickReplies(lang))
       return
     }
 

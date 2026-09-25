@@ -81,6 +81,8 @@ const bn: Pack = {
   askLocationSynthetic: 'আমাদের রেস্টুরেন্টের ঠিকানা/লোকেশন জানতে চাই — কোথায় অবস্থিত, কীভাবে আসব।',
   askHelplineSynthetic: 'হেল্পলাইন/যোগাযোগ নম্বর ও খোলার সময় জানতে চাই।',
   homeMenuText: '🏠 মূল মেনুতে ফিরে এসেছেন! নিচের বাটনগুলো থেকে যা খুশি বেছে নিন 👇',
+  // "hi/hello/salam" জাতীয় শুধু-শুভেচ্ছার ইনস্ট্যান্ট উত্তর (AI লেটেন্সি ছাড়া — মালিকের নির্দেশ)
+  greetMenuText: '👋 আসসালামু আলাইকুম{name}! স্বাগতম 🌟 নিচের বাটনগুলো থেকে মেনু, অফার বা যা জানতে চান — এক ট্যাপেই পেয়ে যাবেন 👇',
 }
 
 /* ───────────────────────── Banglish (Latin-script Bangla) ───────────────────────── */
@@ -141,6 +143,7 @@ const banglish: Pack = {
   askLocationSynthetic: 'Amader restaurant er location/thikana jante chai — kothay obosthito, kivabe ashbo.',
   askHelplineSynthetic: 'Helpline/contact number o kholar shomoy jante chai.',
   homeMenuText: '🏠 Home menu te fire eshechen! Nichher button gulo theke ja khushi beche nin 👇',
+  greetMenuText: '👋 Assalamualaikum{name}! Welcome 🌟 Nichher button gulo theke menu, offer ba j jante chan — ek tapei peye jaben 👇',
 }
 
 /* ───────────────────────────────── English ───────────────────────────────── */
@@ -202,6 +205,7 @@ const en: Pack = {
   askLocationSynthetic: "I'd like to know the restaurant's location/address — where is it and how do I get there?",
   askHelplineSynthetic: "I'd like the helpline/contact number and opening hours.",
   homeMenuText: '🏠 Back to the home menu! Pick anything from the buttons below 👇',
+  greetMenuText: '👋 Hello{name}! Welcome 🌟 Tap any button below — menu, offers, or anything you need 👇',
 }
 
 /* ───────────────────────────────── Hindi ───────────────────────────────── */
@@ -262,6 +266,7 @@ const hi: Pack = {
   askLocationSynthetic: 'मुझे रेस्टोरेंट का पता/लोकेशन जानना है — कहाँ स्थित है और कैसे पहुँचूँ।',
   askHelplineSynthetic: 'हेल्पलाइन/संपर्क नंबर और खुलने का समय जानना चाहता हूँ।',
   homeMenuText: '🏠 मुख्य मेनू पर वापस! नीचे के बटनों से जो चाहें चुनें 👇',
+  greetMenuText: '👋 नमस्ते{name}! स्वागत है 🌟 नीचे के बटनों से मेनू, ऑफ़र या जो जानना चाहें — एक टैप में 👇',
 }
 
 const PACKS: Record<BotLang, Pack> = { bn, banglish, en, hi }

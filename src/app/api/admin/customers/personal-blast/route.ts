@@ -10,10 +10,11 @@ import { NextRequest } from 'next/server'
 import { db } from '@/lib/db'
 import { ok, fail } from '@/lib/api'
 import { requirePerm } from '@/lib/staff-auth'
-import { sendText, sendRnToToken, markdownEnabled } from '@/lib/messenger'
+import { sendQuickReplies, sendRnToToken, markdownEnabled } from '@/lib/messenger'
+import { botQuickReplies } from '@/lib/bot-ui'
 import { getGeminiConfig, composePersonalBlast, loadChatHistory, saveChatTurn } from '@/lib/gemini'
 import { buildKnowledgeBase } from '@/lib/knowledge'
-import { aiLanguageFor } from '@/lib/bot-text'
+import { aiLanguageFor, globalBotLang, pickBotLang } from '@/lib/bot-text'
 import { usedVoucherIdsForPsid } from '@/lib/vouchers'
 
 export const maxDuration = 300
@@ -78,7 +79,10 @@ export async function POST(req: NextRequest) {
 
   const text = ai.text.slice(0, 1900)
   let via: 'messenger' | 'rn' | null = null
-  if (await sendText(customer.psid, text)) via = 'messenger'
+  // মালিকের নিয়ম: ব্রডকাস্টসহ প্রতিটা মেসেজের নিচে মেনু-বাটন সবসময় থাকবে —
+  // কাস্টমার সরাসরি 🍕 মেনু / 🔥 অফার ট্যাপ করে অর্ডারে যেতে পারে
+  const blastChips = botQuickReplies(pickBotLang(customer.language, await globalBotLang()))
+  if (await sendQuickReplies(customer.psid, text, blastChips)) via = 'messenger'
   else if (customer.rnToken && (await sendRnToToken(customer.rnToken, text)).ok) via = 'rn'
   if (!via) {
     return fail(

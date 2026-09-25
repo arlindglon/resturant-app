@@ -8,7 +8,7 @@
 import { db } from '@/lib/db'
 import { ok } from '@/lib/api'
 import { requirePerm } from '@/lib/staff-auth'
-import { testPageToken, fetchMessengerProfile, probeSend, KEY_LAST_SEND_ERROR } from '@/lib/messenger'
+import { testPageToken, fetchMessengerProfile, probeSend, pageTokenInfo, KEY_LAST_SEND_ERROR } from '@/lib/messenger'
 import { getSetting } from '@/lib/settings'
 
 export async function POST() {
@@ -49,6 +49,8 @@ export async function POST() {
       verifyToken: Boolean(process.env.META_VERIFY_TOKEN),
       appSecret: Boolean(process.env.META_APP_SECRET),
     },
+    // কোন টোকেন চলছে: admin সেটিং (messenger_page_token) নাকি Vercel env — শেষ ৬ অক্ষরসহ
+    tokenInfo: await pageTokenInfo(),
     lastWebhookAt: await getSetting('messenger_last_event_at'),
     lastWebhookInfo: await getSetting('messenger_last_event_info'),
     lastVerifyAt: await getSetting('messenger_last_verify_at'),
