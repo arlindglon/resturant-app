@@ -303,6 +303,7 @@ function bodyForModel(body: Record<string, unknown>, model: string): Record<stri
         persona = [
           'তুমি একটি রেস্টুরেন্টের বন্ধুত্বপূর্ণ, অভিজ্ঞ হোস্ট — স্বাভাবিক মানুষের মতো কথা বলো, কখনো রোবট বা কল-সেন্টার নয়।',
           'কাস্টমার যে ভাষায় লিখবে সেই ভাষায় ২-৫ বাক্যে উত্তর দাও। মেনু/দাম/অফার শুধু নিচের তথ্য থেকে — বাইরের কিছু বানাবে না। সুযোগে জনপ্রিয় আইটেম/চলমান অফার হালকাভাবে রিকমেন্ড করবে। একই কথা দুবার নয়।',
+          'স্টাইল: স্বাগতম খাবার-সামনে (শুধু "কীভাবে সাহায্য করব" নয় — স্পেশাল মেনু/অফার জিজ্ঞেস করবে); গান/জোকের মতো অপ্রাসঙ্গিক চাওয়ায় "পারব না/দুঃখিত" নয় — হাসিমুখে মেনে খাবার/অফারে ঘুরিয়ে দাও; বাংলিশে লিখলে বাংলিশেই (English অক্ষরে) উত্তর।',
           langLine,
         ].filter(Boolean).join('\n')
       }
@@ -380,16 +381,54 @@ function looksLikePromptEcho(text: string): boolean {
 }
 
 /**
- * প্রোটোকল-লাইন স্ট্রিপার: উত্তরের ভেতরে/সাথে আঠালো হয়ে লেগে থাকা
- * "INFO: ভাষা=bn…" / "DATA: …" / "ACTION: …" লাইন কাস্টমারকে যেতে পারে না —
- * এগুলো শুধু মেশিন-পার্সিং প্রোটোকল। লাইন-শুরুতে থাকলেই পুরো লাইন বাদ।
+ * চূড়ান্ত পরিষ্কার-পাইপলাইন — কাস্টমারকে যাওয়া প্রতিটি টেক্সট এর ভেতর দিয়ে যাবে।
+ * লাইভ-প্রমাণিত ৩ রকম লিক এখানেই ব্লক:
+ *  ১) প্রোটোকল-চাঙ্ক (INFO:/DATA:/ACTION:) — লাইন-শুরুতে হোক বা উত্তরের সাথে
+ *     আঠালো হয়ে ("…পারেন।INFO: ভাষা=enহ্যালো!…") — পুরো চাঙ্ক বাদ।
+ *  ২) narration-শুরু-লাইন ("Let's refine the reply one last time." জাতীয়) — বাদ।
+ *  ৩) মডেল echo — একই উত্তর দুবার লিখলে একবারই রাখা হয় (আঠালো INFO-র দুপাশে
+ *     একই উত্তর দুবার = কাস্টমারের কাছে দ্বিগুণ টেক্সট; লাইভ প্রমাণ)।
  */
-function stripProtocolLines(text: string): string {
-  return text
-    .split('\n')
-    .filter((l) => !/^\s*(?:[*•‣▪–—-]\s*)?(?:INFO|DATA|ACTION)\s*:/i.test(l))
-    .join('\n')
+export function sanitizeCustomerReply(text: string): string {
+  // ১) প্রোটোকল-চাঙ্ক: লাইন-শুরু (যেকোনো কেস) বা আঠালো মাঝ-লাইন (UPPERCASE)।
+  //    আঠালো কেসে INFO: থেকে লাইন-শেষ পর্যন্ত পুরোটাই echo/জাংক — বাদ দিলে
+  //    সামনের পরিষ্কার উত্তরটাই থাকে।
+  let out = text
+    .replace(/(^|[\n\r])\s*(?:[*•‣▪–—-]\s*)?(?:INFO|DATA|ACTION)\s*:[^\n]*/gi, '\n')
+    .replace(/(?:INFO|DATA|ACTION):[^\n]*/g, '')
+    .replace(/\n{3,}/g, '\n\n')
     .trim()
+
+  // ২) শুরুর narration/label — প্রথম লাইন নিছক মেটা-কথা হলে ফেলে দাও (২+ লাইন থাকলে)
+  for (let i = 0; i < 3; i++) {
+    out = stripLeadLabels(out)
+    const lines = out.split('\n')
+    if (lines.length < 2) break
+    const first = lines[0].trim()
+    const rest = lines.slice(1).join('\n').trim()
+    if (!rest) break
+    const narrationLead =
+      /^(?:let'?s|let us)\s+(?:refine|draft|polish|rewrite|compose|improve|finalize|craft)\b/i.test(first) ||
+      /^(?:sure|okay|ok|certainly|great)[!,.:]\s*(?:here'?s|here is|let'?s|i'?ll|the )/i.test(first) ||
+      /^(?:here'?s|here is)\s+(?:the|a|an)\s+(?:refined|polished|final|improved|reply|response|answer)/i.test(first) ||
+      /^(?:note|explanation|output|draft|polish)\s*:/i.test(first)
+    if (!narrationLead) break
+    out = rest
+  }
+
+  // ৩) echo-ডিডুপ: একই বড় প্যারাগ্রাফ (≥৪০ অক্ষর) দুবার এলে প্রথমবারটাই থাকে
+  const paras = out.split(/\n{2,}/).map((p) => p.trim()).filter(Boolean)
+  const seen = new Set<string>()
+  const kept: string[] = []
+  for (const p of paras) {
+    const norm = p.replace(/\s+/g, ' ')
+    if (norm.length >= 40) {
+      if (seen.has(norm)) continue
+      seen.add(norm)
+    }
+    kept.push(p)
+  }
+  return kept.join('\n\n').trim()
 }
 
 /**
@@ -750,7 +789,7 @@ ${opts.formatting !== false ? MESSENGER_FORMAT_RULES + '\n- এটা একট�
     // (বিশ্লেষণের শেষে পরিষ্কার উত্তর থাকলে সেটাই গ্রহণযোগ্য — মালিকের নির্দেশ;
     // persona-মিরর JSON-টেক্সট নয়)
     const j2 = extractJson(t)
-    const t2 = stripLeadLabels(str(j2?.text))
+    const t2 = sanitizeCustomerReply(str(j2?.text))
     return !!(j2 && t2 && !looksLikePromptEcho(t2)) || cleanPlainReply(t, 800) || !!salvageFinalAnswer(t)
   })
   if (!res.ok || !res.text) return { ok: false, text: null, error: res.error }
@@ -758,7 +797,7 @@ ${opts.formatting !== false ? MESSENGER_FORMAT_RULES + '\n- এটা একট�
   // বিশ্লেষণ-লিক হলেও শেষ প্যারাগ্রাফে আসল মেসেজ থাকলে সেটাই যাবে (salvage);
   // নেতৃত্ব-লেবেল ("Final Answer:") সরানো হয়
   const rawText = str(j?.text) || (cleanPlainReply(res.text, 800) ? res.text.trim() : salvageFinalAnswer(res.text) || '')
-  const text = stripLeadLabels(stripProtocolLines(rawText))
+  const text = sanitizeCustomerReply(rawText)
   if (!text || looksLikePromptEcho(text)) return { ok: false, text: null, error: 'আউটপুট প্রম্পট-ইকো/খালি' }
   return { ok: true, text, error: null }
 }
@@ -831,6 +870,11 @@ const BASE_PERSONA = `তুমি একটি রেস্টুরেন্�
 - কাস্টমার আগের মেসেজে কিছু জিজ্ঞেস/বলেছিল হলে সেটার স্বাভাবিক উত্তর দাও (খোঁজখবর, জোক, আসার কথা — সব আগে মেনে নাও, তারপর ব্যবসা)।
 - একই বাক্য/একই কথা দুবার কখনো বলবে না — প্রতি উত্তর একেক রকম, টাটকা।
 
+স্টাইল-উদাহরণ (মালিকের পছন্দ — ঠিক এমনই হবে):
+- নতুন কাস্টমারের স্বাগতম খাবার-সামনে: "হ্যালো! *Tea & Treat*-এ আপনাকে স্বাগতম! ☕🍰 আজ আপনার জন্য কী অর্ডার করব? আমাদের স্পেশাল মেনু বা রানিং অফারগুলো দেখতে চাইলে বলুন!" — শুধু "কীভাবে সাহায্য করতে পারি" লিখে থেমে যাবে না, সরাসরি অর্ডার/মেনুর কথায় নেবে।
+- অপ্রাসঙ্গিক চাওয়া (গান/সূরা শোনাও, জোক বলো) — কখনো "পারব না/দুঃখিত" দিয়ে শুরু নয়: মিষ্টি হাসি-ভঙ্গিতে মেনে নিয়ে সাথে সাথে খাবারে ঘুরিয়ে দাও: "গান শোনার সুযোগ তো আমার নেই 😄 তবে আপনার ক্ষুধা মেটাতে আমাদের *স্পেশাল সেট মেনু* আর ক্রিস্পি স্ন্যাকস দারুণ সঙ্গ দেবে! 😋 আজকের স্পেশালগুলো দেখবেন?"
+- বাংলিশে লিখলে বাংলিশেই উত্তর (English অক্ষরে, বাংলা স্ক্রিপ্টে নয়): "amk akta song sunaw tahole ami kinbo" → "Song sunar shujog to amar nai 😄 tobe khudha metate amader special set menu ar crispy snacks darun shong debe! Ajker special gulo dekhben?"
+
 বিক্রয় ও আতিথেয়তার নিয়ম (pro):
 - মেনু, দাম, অফার, ডেলিভারি রুলস — সব উত্তর শুধু নিচের KNOWLEDGE BASE থেকে দাও; বাইরের কিছু বানিয়ে বলবে না।
 - সুযোগ বুঝে হালকাভাবে আগ্রহ তৈরি করো: জনপ্রিয় আইটেম, চলমান অফার/কুপন উল্লেখ করো — তবে জোর-জবরদস্তি নয়, বন্ধুর মতো রিকমেন্ড।
@@ -899,7 +943,7 @@ export async function chatWithCustomer(opts: {
     // প্লেইন উত্তর + INFO লাইনও গ্রহণযোগ্য, বিশ্লেষণের শেষের পরিষ্কার উত্তরও (salvage);
     // persona-মিরর JSON-রিপ্লাই গ্রহণযোগ্য নয় — স্কিপ করে পরের মডেল সুযোগ পায়
     const j2 = extractJson(t)
-    const r2 = stripLeadLabels(str(j2?.reply))
+    const r2 = sanitizeCustomerReply(str(j2?.reply))
     return !!(j2 && r2 && !looksLikePromptEcho(r2)) || cleanPlainReply(t, 900) || !!salvageFinalAnswer(t)
   })
 
@@ -914,7 +958,7 @@ export async function chatWithCustomer(opts: {
   // JSON ভাঙা/অনুপস্থিত (gemma প্লেইন মোড) — INFO লাইন থাকলে পার্স করে CRM-এ যাবে,
   // বাকিটা ছোট পরিষ্কার plain উত্তর হলে রিপ্লাই; নাহলে static fallback-এ (লাইভ KB)
   const replyParsed = str(j?.reply)
-  let reply = stripLeadLabels(stripProtocolLines(replyParsed))
+  let reply = sanitizeCustomerReply(replyParsed)
   if (reply && looksLikePromptEcho(reply)) reply = '' // persona-মিরর JSON-রিপ্লাই — বাতিল
   let extractedData = {
     name: str(j?.customerName) || null,
@@ -949,7 +993,7 @@ export async function chatWithCustomer(opts: {
       }
       reply = salvaged
     } else {
-      reply = stripLeadLabels(stripProtocolLines(bodyText))
+      reply = sanitizeCustomerReply(bodyText)
     }
     const pick = (...keys: string[]): string | null => {
       for (const k of keys) if (info[k]) return info[k]
@@ -1086,7 +1130,7 @@ ${opts.knowledgeBase.slice(0, 4000)}
   let action: 'ASK' | 'CANCEL' = str(j?.action) === 'CANCEL' ? 'CANCEL' : 'ASK'
   // JSON রিপ্লাইতেও নেতৃত্ব-লেবেল ("Final Output Construction:") থাকতে পারে — সরানো;
   // persona-মিরর রিপ্লাই হলে বাতিল (deterministic ফ্লো সামলায়)
-  let reply = stripLeadLabels(stripProtocolLines(str(j?.reply)))
+  let reply = sanitizeCustomerReply(str(j?.reply))
   if (reply && looksLikePromptEcho(reply)) reply = ''
   if (!j || (!reply && !extracted)) {
     const raw = res.text.trim()
@@ -1098,7 +1142,7 @@ ${opts.knowledgeBase.slice(0, 4000)}
         if (m[2]) action = m[2].toUpperCase() as 'ASK' | 'CANCEL'
         const bodyText = lines.slice(0, i).join('\n').trim()
         if (bodyText) {
-          if (cleanPlainReply(bodyText, 900)) reply = stripLeadLabels(stripProtocolLines(bodyText))
+          if (cleanPlainReply(bodyText, 900)) reply = sanitizeCustomerReply(bodyText)
           else {
             // বিশ্লেষণের শেষে পরিষ্কার উত্তর থাকলে সেটাই (মালিকের নির্দেশ)
             const salvaged = salvageFinalAnswer(bodyText)
@@ -1108,7 +1152,7 @@ ${opts.knowledgeBase.slice(0, 4000)}
         break
       }
     }
-    if (!reply && !j && !extracted && cleanPlainReply(raw, 900)) reply = stripLeadLabels(stripProtocolLines(raw))
+    if (!reply && !j && !extracted && cleanPlainReply(raw, 900)) reply = sanitizeCustomerReply(raw)
   }
   return {
     ok: true,
