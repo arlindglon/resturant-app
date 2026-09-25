@@ -36,6 +36,8 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
     }
   }
   if (typeof body.eventLabel === 'string') data.eventLabel = body.eventLabel.trim().slice(0, 60) || null
+  // admin can clear / fix the AI-learned name ("Ridoy\"" জাতীয় জাংক মুছে পরিষ্কার নাম)
+  if (typeof body.statedName === 'string') data.statedName = body.statedName.trim().slice(0, 120) || null
   // admin marks the language the bot must always use with this customer
   // ("" / null clears the mark → the bot mirrors the customer again)
   if (body.language === null || body.language === '') data.language = null
