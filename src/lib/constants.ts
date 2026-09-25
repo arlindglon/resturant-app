@@ -87,6 +87,7 @@ export const SETTING_KEYS = {
   ITEM_SPECIAL_NOTE_ENABLED: 'item_special_note_enabled',
   MESSENGER_AUTO_REPLY_ENABLED: 'messenger_auto_reply_enabled',
   MESSENGER_MARKDOWN: 'messenger_markdown', // Messenger মার্কডাউন ফরম্যাট (*bold*, _italic_, ~strike~, `কোড`) — 'false' হলে প্লেইন টেক্সট
+  MESSENGER_MENU_JSON: 'messenger_menu_json', // পার্সিস্টেন্ট-মেনু বাটন (admin-সম্পাদনযোগ্য) — JSON [{title,payload}]; ফাঁকা = ডিফল্ট
   BOT_LANGUAGE: 'bot_language', // বটের গ্লোবাল ভাষা — ফাঁকা = অটো (AI কাস্টমারের ভাষা শিখে নেয়); bn/banglish/en/hi = সব মেসেজ ওই ভাষায়
   META_RN_TITLE: 'meta_rn_title', // opt-in কার্ডের টাইটেল — ২৪ঘ-উইন্ডো-বহির্ভূত notification messages (ফাঁকা = ডিফল্ট)
   GEMINI_ENABLED: 'gemini_enabled',
@@ -131,6 +132,7 @@ export const SETTING_DEFAULTS: Record<string, string> = {
   [SETTING_KEYS.ITEM_SPECIAL_NOTE_ENABLED]: 'true',
   [SETTING_KEYS.MESSENGER_AUTO_REPLY_ENABLED]: 'true',
   [SETTING_KEYS.MESSENGER_MARKDOWN]: 'true',
+  [SETTING_KEYS.MESSENGER_MENU_JSON]: '',
   [SETTING_KEYS.BOT_LANGUAGE]: '',
   [SETTING_KEYS.META_RN_TITLE]: '',
   [SETTING_KEYS.GEMINI_ENABLED]: 'false',

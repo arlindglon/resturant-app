@@ -5217,6 +5217,7 @@ function SettingsTab({ onAuthRequired }: TabProps) {
             <p className="text-xs leading-snug text-stone-500">
               📋 পার্সিস্টেন্ট মেনু = কাস্টমারের চ্যাটবক্সের নিচে সবসময় থাকা ফিক্সড মেনু (🍕 মেনু · 🔥 অফার · 📍 লোকেশন · ☎️ হেল্পলাইন) — একসাথে "শুরু করুন" বাটন ও স্বাগতম গ্রিটিংও সেট হয় (Meta-র নিয়ম: মেনুর আগে Get Started লাগবেই)। একবার সেট করলেই সব কাস্টমারের জন্য চালু হয়।
             </p>
+            <MessengerMenuManager />
             {metaTest && (
               <div
                 className={`rounded-lg border p-3 text-xs leading-snug ${
@@ -6608,6 +6609,169 @@ export default function AdminPage() {
 
       {/* AI ব্রডকাস্ট ব্যাকগ্রাউন্ডে চলাকালীন ভাসমান প্রগ্রেস পিল (সব ট্যাবে) */}
       <BlastProgressPill />
+    </div>
+  )
+}
+
+/* ═════════ পার্সিস্টেন্ট-মেনু বাটন ম্যানেজার — add/edit/delete + Meta sync ═════════
+ * কাস্টমারের চ্যাটবক্সের নিচের ফিক্সড মেনুর বাটনগুলো এখান থেকে বদলানো যায়:
+ * বাটনের নাম, ক্রম, অ্যাকশন (মেনু/অফার/লোকেশন/হেল্পলাইন/টেক্সট-মেনু/যেকোনো ক্যাটাগরি)।
+ * সেভ করলেই DB + Meta পেজ — দুটোতেই সঙ্গে সঙ্গে আপডেট হয়। */
+interface MenuConfigEntry {
+  title: string
+  payload: string
+}
+interface MenuConfigAction {
+  payload: string
+  title: string
+}
+
+function MessengerMenuManager() {
+  const [entries, setEntries] = useState<MenuConfigEntry[] | null>(null)
+  const [actions, setActions] = useState<MenuConfigAction[]>([])
+  const [saving, setSaving] = useState(false)
+  const [newTitle, setNewTitle] = useState('')
+  const [newPayload, setNewPayload] = useState('')
+
+  const load = useCallback(async () => {
+    const res = await api.get<{ entries: MenuConfigEntry[]; actions: MenuConfigAction[]; categories: MenuConfigAction[] }>(
+      '/api/admin/messenger-menu-config'
+    )
+    if (res.ok && res.data) {
+      setEntries(res.data.entries)
+      setActions([...res.data.actions, ...res.data.categories])
+    } else {
+      setEntries([])
+    }
+  }, [])
+
+  useEffect(() => {
+    const t = setTimeout(load, 0)
+    return () => clearTimeout(t)
+  }, [load])
+
+  const update = (i: number, patch: Partial<MenuConfigEntry>) =>
+    setEntries((prev) => (prev ? prev.map((e, idx) => (idx === i ? { ...e, ...patch } : e)) : prev))
+
+  const move = (i: number, dir: -1 | 1) =>
+    setEntries((prev) => {
+      if (!prev) return prev
+      const j = i + dir
+      if (j < 0 || j >= prev.length) return prev
+      const next = [...prev]
+      ;[next[i], next[j]] = [next[j], next[i]]
+      return next
+    })
+
+  const remove = (i: number) => setEntries((prev) => (prev ? prev.filter((_, idx) => idx !== i) : prev))
+
+  const add = () => {
+    const title = newTitle.trim()
+    if (!title || !newPayload) return toast.error('বাটনের নাম ও অ্যাকশন — দুটোই দিন')
+    if ((entries?.length || 0) >= 8) return toast.error('সর্বোচ্চ ৮টা বাটন রাখা যায় (Meta নিয়ম)')
+    setEntries((prev) => [...(prev || []), { title: title.slice(0, 20), payload: newPayload }])
+    setNewTitle('')
+    setNewPayload('')
+  }
+
+  const save = async () => {
+    setSaving(true)
+    const res = await api.put<{ ok: boolean; synced?: boolean; error?: string }>('/api/admin/messenger-menu-config', {
+      entries: entries || [],
+    })
+    setSaving(false)
+    if (!res.ok || !res.data?.ok) return toast.error(res.data?.error || res.error || 'সেভ করা যায়নি')
+    if (res.data.synced === false) toast.warning(`💾 সেভ হয়েছে — কিন্তু Meta-তে সিঙ্ক হয়নি: ${res.data.error || ''}`)
+    else toast.success('✅ সেভ হয়েছে ও Meta পেজে সিঙ্ক হয়েছে — Messenger-এ নিচের ☰ আইকনে দেখুন')
+  }
+
+  if (!entries) return <p className="mt-3 text-xs text-stone-400">মেনু বাটন লোড হচ্ছে…</p>
+
+  return (
+    <div className="mt-3 space-y-2 rounded-xl border border-stone-200 bg-stone-50/60 p-3">
+      <p className="text-xs font-black text-stone-700">
+        🧩 মেনু বাটন ম্যানেজার — বাটন যোগ / এডিট / ডিলিট করুন (সেভ = সঙ্গে সঙ্গে Meta-তে)
+      </p>
+      {entries.map((e, i) => (
+        <div key={`${i}-${e.payload}`} className="flex items-center gap-1.5">
+          <Input
+            value={e.title}
+            onChange={(ev) => update(i, { title: ev.target.value })}
+            maxLength={20}
+            aria-label={`বাটন ${i + 1} নাম`}
+            className="h-8 w-28 shrink-0 text-xs font-bold"
+          />
+          <select
+            value={e.payload}
+            onChange={(ev) => update(i, { payload: ev.target.value })}
+            aria-label={`বাটন ${i + 1} অ্যাকশন`}
+            className="h-8 min-w-0 flex-1 rounded-md border border-stone-300 bg-white px-2 text-xs"
+          >
+            {actions.some((a) => a.payload === e.payload) ? null : <option value={e.payload}>⚠️ পুরনো/অজানা অ্যাকশন</option>}
+            {actions.map((a) => (
+              <option key={a.payload} value={a.payload}>
+                {a.title}
+              </option>
+            ))}
+          </select>
+          <Button size="sm" variant="outline" onClick={() => move(i, -1)} disabled={i === 0} aria-label="উপরে" className="h-8 px-2">
+            ▲
+          </Button>
+          <Button
+            size="sm"
+            variant="outline"
+            onClick={() => move(i, 1)}
+            disabled={i === entries.length - 1}
+            aria-label="নিচে"
+            className="h-8 px-2"
+          >
+            ▼
+          </Button>
+          <Button
+            size="sm"
+            variant="outline"
+            onClick={() => remove(i)}
+            aria-label="ডিলিট"
+            className="h-8 px-2 font-black text-red-600 hover:bg-red-50"
+          >
+            🗑
+          </Button>
+        </div>
+      ))}
+      {/* নতুন বাটন যোগ */}
+      <div className="flex items-center gap-1.5 border-t border-dashed border-stone-300 pt-2">
+        <Input
+          placeholder="নতুন বাটনের নাম"
+          value={newTitle}
+          onChange={(ev) => setNewTitle(ev.target.value)}
+          maxLength={20}
+          aria-label="নতুন বাটনের নাম"
+          className="h-8 w-28 shrink-0 text-xs"
+        />
+        <select
+          value={newPayload}
+          onChange={(ev) => setNewPayload(ev.target.value)}
+          aria-label="নতুন বাটনের অ্যাকশন"
+          className="h-8 min-w-0 flex-1 rounded-md border border-stone-300 bg-white px-2 text-xs"
+        >
+          <option value="">— অ্যাকশন বাছুন —</option>
+          {actions.map((a) => (
+            <option key={a.payload} value={a.payload}>
+              {a.title}
+            </option>
+          ))}
+        </select>
+        <Button size="sm" onClick={add} className="h-8 shrink-0 px-3 font-black">
+          ➕ যোগ
+        </Button>
+      </div>
+      <Button onClick={save} disabled={saving} className="w-full font-black">
+        {saving ? <Loader2 className="h-4 w-4 animate-spin" /> : '💾'} সেভ করুন ও Meta-তে সিঙ্ক করুন
+      </Button>
+      <p className="text-[11px] leading-snug text-stone-500">
+        টিপ: ক্যাটাগরি বাটন (যেমন 🍔 বার্গার) যোগ করলে কাস্টমার এক ট্যাপেই সেই ক্যাটাগরির খাবারের কার্ড-স্লাইডার পাবে — মেনু থেকে
+        অটো, নতুন করে কিছু লিখতে হবে না।
+      </p>
     </div>
   )
 }

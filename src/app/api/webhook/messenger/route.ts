@@ -640,7 +640,7 @@ async function handleEvent(event: MessagingEvent) {
       // 2a-quick: কুইক-রিপ্লাই বাটনে ট্যাপ (payload) — ডিটারমিনিস্টিক Rich-UI অ্যাকশন
       const qrAction = botActionFromPayload(event.message?.quick_reply?.payload)
       if (qrAction) {
-        const r = await handleBotUiAction(psid, lang, qrAction, (msg) => aiGeneralReply(psid, name, msg))
+        const r = await handleBotUiAction(psid, lang, qrAction, (msg) => aiGeneralReply(psid, name, msg), event.message?.quick_reply?.payload)
         if (r.handled) {
           if (r.echo) await saveChatTurn(psid, 'bot', r.echo)
           return
@@ -648,7 +648,7 @@ async function handleEvent(event: MessagingEvent) {
       }
       // 2a-text: সরাসরি টেক্সটেও মেনু/অফার চাইলে একই কার্ড/বাটন-উত্তর
       const textAction = botActionFromText(dataTextIn)
-      if (textAction && (textAction === BOT_ACTIONS.MENU || textAction === BOT_ACTIONS.OFFERS || textAction === BOT_ACTIONS.ORDER)) {
+      if (textAction && (textAction === BOT_ACTIONS.MENU || textAction === BOT_ACTIONS.OFFERS || textAction === BOT_ACTIONS.ORDER || textAction === BOT_ACTIONS.TEXTMENU)) {
         const r = await handleBotUiAction(psid, lang, textAction)
         if (r.handled) {
           if (r.echo) await saveChatTurn(psid, 'bot', r.echo)
@@ -877,7 +877,7 @@ async function handleEvent(event: MessagingEvent) {
   if (event.postback && pbAction) {
     const cust = await upsertCustomer(psid)
     const lang = pickBotLang(cust.language, await globalBotLang())
-    await handleBotUiAction(psid, lang, pbAction, (msg) => aiGeneralReply(psid, cust.name, msg))
+    await handleBotUiAction(psid, lang, pbAction, (msg) => aiGeneralReply(psid, cust.name, msg), event.postback?.payload)
     return
   }
   if (event.postback) return
