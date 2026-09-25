@@ -6650,6 +6650,18 @@ interface BotActionRow {
   cards: BotCardRow[]
   active: boolean
 }
+interface MetaMenuStatus {
+  ok: boolean
+  error: string | null
+  buttons: { title: string; type: string }[]
+  hasGetStarted: boolean
+}
+interface MenuStatusResp {
+  dbEntries: MenuConfigEntry[]
+  meta: MetaMenuStatus
+  inSync: boolean
+  hint: string
+}
 
 function MessengerMenuManager({ onChanged }: { onChanged?: () => void }) {
   const [entries, setEntries] = useState<MenuConfigEntry[] | null>(null)
@@ -6657,6 +6669,15 @@ function MessengerMenuManager({ onChanged }: { onChanged?: () => void }) {
   const [saving, setSaving] = useState(false)
   const [newTitle, setNewTitle] = useState('')
   const [newPayload, setNewPayload] = useState('')
+  const [metaStatus, setMetaStatus] = useState<MenuStatusResp | null>(null)
+  const [checkingMeta, setCheckingMeta] = useState(false)
+
+  const checkMeta = useCallback(async () => {
+    setCheckingMeta(true)
+    const res = await api.get<MenuStatusResp>('/api/admin/messenger-menu-status')
+    setCheckingMeta(false)
+    if (res.ok && res.data) setMetaStatus(res.data)
+  }, [])
 
   const load = useCallback(async () => {
     const res = await api.get<{ entries: MenuConfigEntry[]; actions: MenuConfigAction[]; categories: MenuConfigAction[]; customActions: MenuConfigAction[] }>(
@@ -6674,6 +6695,10 @@ function MessengerMenuManager({ onChanged }: { onChanged?: () => void }) {
     const t = setTimeout(load, 0)
     return () => clearTimeout(t)
   }, [load])
+  useEffect(() => {
+    const t = setTimeout(checkMeta, 300)
+    return () => clearTimeout(t)
+  }, [checkMeta])
 
   const descOf = (payload: string) => actions.find((a) => a.payload === payload)?.desc || ''
 
@@ -6710,6 +6735,7 @@ function MessengerMenuManager({ onChanged }: { onChanged?: () => void }) {
     if (!res.ok || !res.data?.ok) return toast.error(res.data?.error || res.error || 'সেভ করা যায়নি')
     if (res.data.synced === false) toast.warning(`💾 সেভ হয়েছে — কিন্তু Meta-তে সিঙ্ক হয়নি: ${res.data.error || ''}`)
     else toast.success(`✅ সেভ হয়েছে ও Meta পেজে সিঙ্ক হয়েছে${res.data.buttons ? ` — ${res.data.buttons}টা বাটন` : ''} — Messenger-এ নিচের ☰ আইকনে দেখুন`)
+    void checkMeta() // সেভের সাথে সাথে Meta-র লাইভ অবস্থা আবার দেখাই
     onChanged?.()
   }
 
@@ -6722,8 +6748,76 @@ function MessengerMenuManager({ onChanged }: { onChanged?: () => void }) {
       </p>
       <p className="text-xs leading-snug text-stone-500">
         এগুলোই কাস্টমারের চ্যাটবক্সের নিচে সবসময় থাকা ☰ মেনুর বাটন। প্রতিটা বাটনের নিচে <b>ট্যাপ করলে কী হয়</b> লেখা থাকে।
-        সেভ করলেই Meta পেজে সিঙ্ক হয় ("শুরু করুন" বাটন + স্বাগতম গ্রিটিং সহ)।
+        সেভ করলেই Meta পেজে সিঙ্ক হয় (&quot;শুরু করুন&quot; বাটন + স্বাগতম গ্রিটিং সহ)।
       </p>
+      {/* 🔍 Meta-তে এখন যা আছে — লাইভ স্ট্যাটাস (sync সত্যিই হলো কি না এক নজরে) */}
+      <div
+        className={`rounded-lg border p-3 text-xs leading-relaxed ${
+          !metaStatus
+            ? 'border-stone-200 bg-stone-100 text-stone-500'
+            : !metaStatus.meta.ok
+              ? 'border-red-200 bg-red-50 text-red-900'
+              : metaStatus.inSync
+                ? 'border-emerald-200 bg-emerald-50 text-emerald-900'
+                : 'border-amber-200 bg-amber-50 text-amber-900'
+        }`}
+      >
+        <div className="flex items-center gap-2">
+          <p className="font-black">🔍 Meta পেজে এখন যা আছে:</p>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={checkMeta}
+            disabled={checkingMeta}
+            className="ml-auto h-7 border-stone-300 px-2 text-[11px] font-black text-stone-700 hover:bg-white"
+          >
+            {checkingMeta ? <Loader2 className="h-3 w-3 animate-spin" /> : '🔄'} আবার চেক
+          </Button>
+        </div>
+        {!metaStatus ? (
+          <p className="mt-1">Meta-র সাথে যোগাযোগ করা হচ্ছে…</p>
+        ) : !metaStatus.meta.ok ? (
+          <>
+            <p className="mt-1 font-bold">⚠️ Meta থেকে মেনু পড়া গেল না:</p>
+            <p className="mt-0.5 break-words font-mono text-[11px]">{metaStatus.meta.error}</p>
+            <p className="mt-1">{metaStatus.hint}</p>
+          </>
+        ) : metaStatus.inSync ? (
+          <>
+            <p className="mt-1">
+              ✅ <b>আপনার এডিট করা {metaStatus.meta.buttons.length}টা বাটনই Meta পেজে আছে</b>
+              {metaStatus.meta.hasGetStarted ? ' + "শুরু করুন" বাটন চালু ✅' : ' — কিন্তু "শুরু করুন" বাটন নেই ⚠️'}
+            </p>
+            <p className="mt-1 flex flex-wrap gap-1">
+              {metaStatus.meta.buttons.map((b, i) => (
+                <span key={`${i}-${b.title}`} className="rounded border border-emerald-300 bg-white px-1.5 py-0.5 text-[11px] font-bold">
+                  {b.title}
+                </span>
+              ))}
+            </p>
+            <p className="mt-1.5">
+              💡 Messenger অ্যাপ পুরনো মেনু কিছুক্ষণ ক্যাশে রাখে — <b>চ্যাট বন্ধ করে আবার খুলুন</b> (বা Messenger অ্যাপ বন্ধ করে চালু করুন), তারপর নিচের ☰ আইকনে নতুন মেনু দেখবেন।
+            </p>
+          </>
+        ) : (
+          <>
+            <p className="mt-1 font-bold">
+              ⚠️ Meta-তে এখনও পুরনো মেনু ({metaStatus.meta.buttons.length}টা বাটন) — আপনার নতুন তালিকা সেখানে যায়নি।
+            </p>
+            <p className="mt-0.5">Meta-তে এখন এগুলো আছে:</p>
+            <p className="mt-1 flex flex-wrap gap-1">
+              {metaStatus.meta.buttons.map((b, i) => (
+                <span key={`${i}-${b.title}`} className="rounded border border-amber-300 bg-white px-1.5 py-0.5 text-[11px] font-bold">
+                  {b.title}
+                </span>
+              ))}
+            </p>
+            <p className="mt-1.5 font-bold">
+              👉 নিচের &quot;💾 সেভ করুন ও Meta-তে সিঙ্ক করুন&quot; বাটনে চাপুন — সিঙ্ক হওয়ার পর এই ঘরটা সবুজ হবে।
+            </p>
+          </>
+        )}
+      </div>
       {entries.map((e, i) => (
         <div key={`${i}-${e.payload}`} className="rounded-lg border border-stone-200 bg-white p-2">
           <div className="flex items-center gap-1.5">
