@@ -629,9 +629,13 @@ async function handleEvent(event: MessagingEvent) {
     const lang = pickBotLang(cust.language, await globalBotLang())
     const tokenRow = await pendingToken(psid)
     const dataTextIn = (text || sharedPhone || '').trim()
+    // quick-reply বাটনের ট্যাপ = ইচ্ছাকৃত নেভিগেশন — একই বাটন ৬০ সেকেন্ডে আবার
+    // চাপলেও উত্তর যাবেই। dup-suppression শুধু ফ্রি-টেক্সটে (নইলে ⬅️ পেছনে
+    // বারবার চাপলে মাঝে মাঝে নীরবতা — কাস্টমারের সবচেয়ে বিরক্তিকর কেস)।
+    const isButtonTap = Boolean((event.message?.quick_reply?.payload || '').trim())
     if (dataTextIn) {
-      // ক্রস-ইনস্ট্যান্স ডুপ্লিকেট — একই প্রশ্নে দ্বিতীয় উত্তর কখনো যাবে না
-      if (await isDuplicateCustomerMessage(psid, dataTextIn)) return
+      // ক্রস-ইনস্ট্যান্স ডুপ্লিকেট — একই প্রশ্নে দ্বিতীয় উত্তর কখনো যাবে না (শুধু ফ্রি-টেক্সটে)
+      if (!isButtonTap && (await isDuplicateCustomerMessage(psid, dataTextIn))) return
       await saveChatTurn(psid, 'customer', dataTextIn)
     }
 
@@ -646,9 +650,9 @@ async function handleEvent(event: MessagingEvent) {
           return
         }
       }
-      // 2a-text: সরাসরি টেক্সটেও মেনু/অফার চাইলে একই কার্ড/বাটন-উত্তর
+      // 2a-text: সরাসরি টেক্সটেও মেনু/অফার/হোম চাইলে একই কার্ড/বাটন-উত্তর
       const textAction = botActionFromText(dataTextIn)
-      if (textAction && (textAction === BOT_ACTIONS.MENU || textAction === BOT_ACTIONS.OFFERS || textAction === BOT_ACTIONS.ORDER || textAction === BOT_ACTIONS.TEXTMENU)) {
+      if (textAction && (textAction === BOT_ACTIONS.MENU || textAction === BOT_ACTIONS.OFFERS || textAction === BOT_ACTIONS.ORDER || textAction === BOT_ACTIONS.TEXTMENU || textAction === BOT_ACTIONS.HOME)) {
         const r = await handleBotUiAction(psid, lang, textAction)
         if (r.handled) {
           if (r.echo) await saveChatTurn(psid, 'bot', r.echo)

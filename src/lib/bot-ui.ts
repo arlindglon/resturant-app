@@ -34,6 +34,7 @@ export const BOT_ACTIONS = {
   TEXTMENU: '__TEXTMENU__',
   CAT: '__CAT__', // prefix-form: __CAT__:<categoryId> বা __CAT__:all
   ACT: '__ACT__', // prefix-form: __ACT__:<botActionId> — admin-এর কাস্টম অ্যাকশন
+  HOME: '__HOME__', // ⬅️ পেছনে → বটের হোম-মেনু (৫টা মূল বাটনের স্ক্রিন)
 } as const
 
 export type BotActionKey = (typeof BOT_ACTIONS)[keyof typeof BOT_ACTIONS]
@@ -144,8 +145,12 @@ function priceBn(price: number): string {
   return `${bnNum(p)}৳`
 }
 
-/** ⬅️ পেছনে — মেনু-হোমে ফেরা (কার্ড-ভিউতে থাকা কাস্টমারের back-button) */
-export const BACK_CHIP: QuickReply = { title: '⬅️ পেছনে', payload: BOT_ACTIONS.MENU }
+/**
+ * ⬅️ পেছনে — বটের হোম-মেনুতে ফেরা (payload __HOME__)। আগে এটা __MENU__ ছিল —
+ * ফলে পেছনে চাপলে আবার সেই মেনু-কার্ড + একই ক্যাটাগরি-চিপ এসে কাস্টমার
+ * একই জায়গায় ঘুরপাক খেত। এখন পেছনে = হোম-স্ক্রিন (৫টা মূল বাটন)।
+ */
+export const BACK_CHIP: QuickReply = { title: '⬅️ পেছনে', payload: BOT_ACTIONS.HOME }
 
 /** মেনু-উত্তরের নিচের ক্যাটাগরি-চিপ: [🍽️ সব] + ক্যাটাগরিগুলো + [📄 টেক্সট মেনু] */
 async function menuChips(lang: BotLang): Promise<QuickReply[]> {
@@ -255,17 +260,28 @@ async function sendTextMenuAction(psid: string, lang: BotLang): Promise<void> {
 /* ───────────────────── action handlers (deterministic, no AI wait) ───────────────────── */
 
 /**
+ * 🏠 হোম-মেনু অ্যাকশন (__HOME__) — ⬅️ পেছনে / "home" লিখলে বটের হোম-স্ক্রিন:
+ * উষ্ণ স্বাগতম + ৫টা মূল বাটন (মেনু/অফার/লোকেশন/হেল্পলাইন/টেক্সট মেনু)।
+ * কার্ড-ভিউ/ক্যাটাগরি/অফার থেকে এক ট্যাপে শুরুর জায়গায় — ঘুরপাক নেই।
+ */
+async function sendHomeAction(psid: string, lang: BotLang): Promise<void> {
+  await sendQuickReplies(psid, t(lang, 'homeMenuText'), botQuickReplies(lang))
+}
+
+/**
  * 🍕 মেনু অ্যাকশন — জনপ্রিয় আইটেমের কার্ড-ক্যারোসেল + নিচে ক্যাটাগরি-চিপ।
  * ক্যাটাগরি চিপে ট্যাপ → সেই ক্যাটাগরির কার্ড (__CAT__ অ্যাকশন) — সবই ইনস্ট্যান্ট।
  */
 async function sendMenuAction(psid: string, lang: BotLang): Promise<void> {
   const [items, baseUrl] = await Promise.all([
-    db.menuItem.findMany({
-      where: { isAvailable: true },
-      orderBy: [{ sortOrder: 'asc' as const }, { createdAt: 'asc' as const }],
-      include: { category: { select: { name: true } } },
-      take: 24,
-    }),
+    db.menuItem
+      .findMany({
+        where: { isAvailable: true },
+        orderBy: [{ sortOrder: 'asc' as const }, { createdAt: 'asc' as const }],
+        include: { category: { select: { name: true } } },
+        take: 24,
+      })
+      .catch(() => []), // DB-blip হলেও নীরবতা নয় — fallback টেক্সট-মেনু যাবে
     getSetting(SETTING_KEYS.PUBLIC_BASE_URL),
   ])
   await sendItemsCarouselOrText(psid, lang, items, baseUrl)
@@ -274,12 +290,14 @@ async function sendMenuAction(psid: string, lang: BotLang): Promise<void> {
 /** __CAT__:<id> — নির্দিষ্ট ক্যাটাগরির আইটেম-ক্যারোসেল (id 'all'/অজানা → সব) */
 async function sendCategoryAction(psid: string, lang: BotLang, categoryId: string): Promise<void> {
   const [items, baseUrl] = await Promise.all([
-    db.menuItem.findMany({
-      where: { isAvailable: true, ...(categoryId && categoryId !== 'all' ? { categoryId } : {}) },
-      orderBy: [{ sortOrder: 'asc' as const }, { createdAt: 'asc' as const }],
-      include: { category: { select: { name: true } } },
-      take: 24,
-    }),
+    db.menuItem
+      .findMany({
+        where: { isAvailable: true, ...(categoryId && categoryId !== 'all' ? { categoryId } : {}) },
+        orderBy: [{ sortOrder: 'asc' as const }, { createdAt: 'asc' as const }],
+        include: { category: { select: { name: true } } },
+        take: 24,
+      })
+      .catch(() => []), // DB-blip হলেও fallback উত্তর যাবে
     getSetting(SETTING_KEYS.PUBLIC_BASE_URL),
   ])
   await sendItemsCarouselOrText(psid, lang, items, baseUrl)
@@ -301,8 +319,12 @@ async function sendOrderHelp(psid: string, lang: BotLang): Promise<void> {
  */
 async function sendOffersAction(psid: string, lang: BotLang): Promise<void> {
   const [offers, vouchers, baseUrl] = await Promise.all([
-    db.occasionOffer.findMany({ where: { active: true }, orderBy: [{ sortOrder: 'asc' as const }, { createdAt: 'asc' as const }], take: 6 }),
-    db.voucher.findMany({ where: { active: true }, orderBy: { createdAt: 'desc' as const }, take: 6 }),
+    db.occasionOffer
+      .findMany({ where: { active: true }, orderBy: [{ sortOrder: 'asc' as const }, { createdAt: 'asc' as const }], take: 6 })
+      .catch(() => []),
+    db.voucher
+      .findMany({ where: { active: true }, orderBy: { createdAt: 'desc' as const }, take: 6 })
+      .catch(() => []),
     getSetting(SETTING_KEYS.PUBLIC_BASE_URL),
   ])
   const chips = [BACK_CHIP, ...botQuickReplies(lang)].slice(0, 11)
@@ -443,6 +465,10 @@ export async function handleBotUiAction(
       await sendOrderHelp(psid, lang)
       return { handled: true, echo: t(lang, 'orderHelp').slice(0, 200) }
     }
+    case BOT_ACTIONS.HOME: {
+      await sendHomeAction(psid, lang)
+      return { handled: true, echo: '🏠 হোম-মেনু পাঠানো হয়েছে' }
+    }
     case BOT_ACTIONS.LOCATION:
     case BOT_ACTIONS.HELPLINE: {
       if (aiReply) {
@@ -457,12 +483,19 @@ export async function handleBotUiAction(
 }
 
 /** টেক্সট ইন্টেন্ট ম্যাচার — কাস্টমার টাইপ করলেও একই কার্ড/বাটন-উত্তর পাক */
+// শব্দের শেষ সীমা: \b বাংলা অক্ষরে কাজ করে না (ASCII-only boundary) — তাই
+// সেপারেটর/শেষ-অবস্থান lookahead দিয়ে। ASCII শব্দেও "menu s"/"home page e"
+// জাতীয় মিস-ম্যাচ আটকায়, আগের \b-এর মতোই কড়া।
+const INTENT_TAIL = '(?=[\\s\\d,!?।,.;:—–-]|$)'
+const re = (src: string) => new RegExp(`^(?:${src})${INTENT_TAIL}`, 'i')
 const ACTION_TEXT_RE: { action: BotActionKey; re: RegExp }[] = [
-  { action: BOT_ACTIONS.TEXTMENU, re: /^(?:text menu|full menu|লিখিত মেনু|সাধারণ মেনু|পুরো মেনু|সব মেনু)\b/i },
-  { action: BOT_ACTIONS.MENU, re: /^(?:menu|মেনু|food menu|menu dekhaw|menu dekao|মেনু দেখাও|মেনু দেখুন|খাবার(?:ের)? (?:তালিকা|লিস্ট|menu)|khabar(?:er)? list|what(?:'s| is) on the menu|show me the menu)\b/i },
-  { action: BOT_ACTIONS.OFFERS, re: /^(?:offer|offers|অফার|অফারস|ki ki offer|offer ki ki|offer gul?[oa]?(?: dew| deaw| dekhaw)?|discount|discou?nt|কুপন|coupon)\b/i },
-  { action: BOT_ACTIONS.LOCATION, re: /^(?:location|লোকেশন|ঠিকানা|address|kothay|কোথায়|where are you(?: located)?|map)\b/i },
-  { action: BOT_ACTIONS.HELPLINE, re: /^(?:helpline|হেল্পলাইন|যোগাযোগ|contact|phone number|ফোন নম্বর|hotline|হটলাইন)\b/i },
+  // ⬅️ পেছনে/home লিখলেও হোম-মেনু
+  { action: BOT_ACTIONS.HOME, re: re('back|home(?: menu| page)?|shuru|start(?: over)?|হোম|পেছনে|পিছনে|মূল মেনু|শুরু') },
+  { action: BOT_ACTIONS.TEXTMENU, re: re('text menu|full menu|লিখিত মেনু|সাধারণ মেনু|পুরো মেনু|সব মেনু') },
+  { action: BOT_ACTIONS.MENU, re: re("menu|মেনু|food menu|menu dekhaw|menu dekao|মেনু দেখাও|মেনু দেখুন|খাবার(?:ের)? (?:তালিকা|লিস্ট|menu)|khabar(?:er)? list|what(?:'s| is) on the menu|show me the menu") },
+  { action: BOT_ACTIONS.OFFERS, re: re('offer|offers|অফার|অফারস|ki ki offer|offer ki ki|offer gul?[oa]?(?: dew| deaw| dekhaw)?|discount|discou?nt|কুপন|coupon') },
+  { action: BOT_ACTIONS.LOCATION, re: re('location|লোকেশন|ঠিকানা|address|kothay|কোথায়|where are you(?: located)?|map') },
+  { action: BOT_ACTIONS.HELPLINE, re: re('helpline|হেল্পলাইন|যোগাযোগ|contact|phone number|ফোন নম্বর|hotline|হটলাইন') },
 ]
 
 export function botActionFromText(text: string): BotActionKey | null {

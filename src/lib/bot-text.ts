@@ -80,6 +80,7 @@ const bn: Pack = {
   orderHelp: '🛒 অর্ডার দিতে রেস্তোরাঁর টেবিলের QR কোড স্ক্যান করুন — মেনু দেখে টেবিল থেকেই অর্ডার হয়ে যাবে! বিল পেজে অফার দাবি করতে "🎉 Claim on Messenger" বাটন আছে।',
   askLocationSynthetic: 'আমাদের রেস্টুরেন্টের ঠিকানা/লোকেশন জানতে চাই — কোথায় অবস্থিত, কীভাবে আসব।',
   askHelplineSynthetic: 'হেল্পলাইন/যোগাযোগ নম্বর ও খোলার সময় জানতে চাই।',
+  homeMenuText: '🏠 মূল মেনুতে ফিরে এসেছেন! নিচের বাটনগুলো থেকে যা খুশি বেছে নিন 👇',
 }
 
 /* ───────────────────────── Banglish (Latin-script Bangla) ───────────────────────── */
@@ -139,6 +140,7 @@ const banglish: Pack = {
   orderHelp: '🛒 Order dite restaurant er table er QR code scan korun — menu dekhe table theke-i order hoye jabe! Bill page e offer claim korte "🎉 Claim on Messenger" button ache.',
   askLocationSynthetic: 'Amader restaurant er location/thikana jante chai — kothay obosthito, kivabe ashbo.',
   askHelplineSynthetic: 'Helpline/contact number o kholar shomoy jante chai.',
+  homeMenuText: '🏠 Home menu te fire eshechen! Nichher button gulo theke ja khushi beche nin 👇',
 }
 
 /* ───────────────────────────────── English ───────────────────────────────── */
@@ -199,6 +201,7 @@ const en: Pack = {
   orderHelp: '🛒 To order, scan the QR code on your restaurant table — browse the menu and order right from the table! The bill page has a "🎉 Claim on Messenger" button for offers.',
   askLocationSynthetic: "I'd like to know the restaurant's location/address — where is it and how do I get there?",
   askHelplineSynthetic: "I'd like the helpline/contact number and opening hours.",
+  homeMenuText: '🏠 Back to the home menu! Pick anything from the buttons below 👇',
 }
 
 /* ───────────────────────────────── Hindi ───────────────────────────────── */
@@ -258,6 +261,7 @@ const hi: Pack = {
   orderHelp: '🛒 ऑर्डर देने के लिए रेस्टोरेंट की मेज़ पर मौजूद QR कोड स्कैन करें — मेनू देखकर सीधे मेज़ से ऑर्डर हो जाएगा! बिल पेज पर ऑफ़र के लिए "🎉 Claim on Messenger" बटन है।',
   askLocationSynthetic: 'मुझे रेस्टोरेंट का पता/लोकेशन जानना है — कहाँ स्थित है और कैसे पहुँचूँ।',
   askHelplineSynthetic: 'हेल्पलाइन/संपर्क नंबर और खुलने का समय जानना चाहता हूँ।',
+  homeMenuText: '🏠 मुख्य मेनू पर वापस! नीचे के बटनों से जो चाहें चुनें 👇',
 }
 
 const PACKS: Record<BotLang, Pack> = { bn, banglish, en, hi }

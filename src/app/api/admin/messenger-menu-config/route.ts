@@ -30,6 +30,7 @@ const FIXED_ACTIONS = [
   { payload: BOT_ACTIONS.LOCATION, title: '📍 লোকেশন', desc: 'দোকানের ঠিকানা ও খোলার সময় (AI নলেজ-বেস থেকে; AI নিভে থাকলে স্ট্যাটিক ঠিকানা)' },
   { payload: BOT_ACTIONS.HELPLINE, title: '☎️ হেল্পলাইন', desc: 'ফোন নম্বর ও যোগাযোগের তথ্য (AI নলেজ-বেস থেকে)' },
   { payload: BOT_ACTIONS.TEXTMENU, title: '📄 টেক্সট মেনু', desc: 'ছবি ছাড়া পুরো মেনু টেক্সট আকারে — ফ্রি-ফেসবুক/ডাটা-ছাড়া কাস্টমারের জন্য' },
+  { payload: BOT_ACTIONS.HOME, title: '🏠 হোম', desc: 'বটের হোম-স্ক্রিন — উষ্ণ স্বাগতম + ৫টা মূল বাটন (মেনু/অফার/লোকেশন/হেল্পলাইন/টেক্সট মেনু); কার্ড-ভিউতে ⬅️ পেছনে চাপলেও এখানেই ফেরে' },
 ]
 
 export async function GET() {
