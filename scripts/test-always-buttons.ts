@@ -114,5 +114,14 @@ check('৫টা মূল চিপ', chips.length === 5)
 check('সব টাইটেল ≤20', chips.every((c) => c.title.length <= 20))
 check('সব payload বৈধ BOT_ACTIONS', chips.every((c) => Object.values(BOT_ACTIONS).includes(c.payload as never)))
 
+/* ── 8. sendErrorHint — Dev Mode এরর এখন সঠিক হিন্ট দেয় ── */
+console.log('\n[8] sendErrorHint — "Application does not have permission" → Development Mode হিন্ট')
+const { sendErrorHint } = await import('../src/lib/messenger')
+const devHint = sendErrorHint('Application does not have permission for this action')
+check('Dev-Mode এরর → Live করার হিন্ট', devHint.includes('Development Mode') && devHint.includes('Live'))
+check('আগের ভুল হিন্ট (pages_messaging) আর আসে না', !devHint.includes('Advanced Access'))
+check('"not admins" এরর এখনো Dev-Mode হিন্ট দেয়', sendErrorHint('Cannot message users who are not admins, developers or testers of your app').includes('Development Mode'))
+check('২৪ঘ উইন্ডো এরর → RN হিন্ট (অপরিবর্তিত)', sendErrorHint('This message is being sent outside the allowed window').includes('RN'))
+
 console.log(`\n═══ ফলাফল: ${passed} passed, ${failed} failed ═══`)
 if (failed > 0) process.exit(1)

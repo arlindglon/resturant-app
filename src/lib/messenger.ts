@@ -22,8 +22,8 @@ function recordSendError(msg: string, psid?: string) {
 /** রিপ্লাই/টেস্টে ব্যবহারের জন্য হুবহু Graph error → মানব-পাঠযোগ্য বাংলা ইঙ্গিত */
 export function sendErrorHint(msg: string): string {
   const m = (msg || '').toLowerCase()
-  if (/not admins, developers or testers|not authorized to.*message|cannot message users/.test(m))
-    return 'Meta App এখন Development Mode-এ আছে — শুধু app admin/developer/tester-রা মেসেজ পান। Meta App Dashboard → App Settings → অ্যাপটি Live করুন (Privacy Policy URL দিতে হয়)।'
+  if (/not admins, developers or testers|not authorized to.*message|cannot message users|application does not have permission for this action/.test(m))
+    return 'Meta App এখন Development Mode-এ আছে — শুধু app admin/developer/tester-রা মেসেজ পান (তাই মালিকের নিজের অ্যাকাউন্টে রিপ্লাই যায়, বাইরের কাস্টমারের কাছে যায় না)। Meta App Dashboard → App Settings-এ অ্যাপটি Live করুন (Privacy Policy URL দিতে হয়) — তাহলেই সব কাস্টমারের কাছে যাবে।'
   if (/pages_messaging|does not have permission|requires.*permission|permission.*required/.test(m))
     return 'টোকেনে pages_messaging পারমিশন নেই — Meta Dashboard → App Review → Permissions-এ pages_messaging (Advanced Access) চান, অথবা টোকেন আবার Generate করুন।'
   if (/outside.*window|24.?hour|window.*expired|messaging window/.test(m))
@@ -105,28 +105,67 @@ export interface PageTokenTest {
   pageId: string | null
   pageUsername: string | null
   error: string | null
+  isPageToken?: boolean // false = এটি Page-এর টোকেন নয় (User token) — পাঠানো কাজ করবে না
+  note?: string | null // মানব-পাঠযোগ্য বাংলা ব্যাখ্যা (admin প্যানেলে দেখানো হয়)
 }
 
-/** Live-check the configured META_PAGE_TOKEN against Graph /me — tells WHICH page it belongs to */
+/**
+ * Live-check the configured page token against Graph /me — tells WHICH page it belongs to.
+ * বোনাস: User-token ধরা পড়ে (owner একবার User token Page token ভেবে দিয়েছিল —
+ * /me = ইউজারের নাম, কিন্তু messenger_profile শুধু Page token-এই কাজ করে)।
+ */
 export async function testPageToken(): Promise<PageTokenTest> {
   const token = await pageToken()
   if (!token)
     return { ok: false, pageName: null, pageId: null, pageUsername: null, error: 'META_PAGE_TOKEN সেট করা নেই (Vercel env)' }
   try {
-    const res = await fetch(`${GRAPH}/me?fields=name,id,username&access_token=${encodeURIComponent(token)}`, {
+    // ধাপ ১: পরিচয় — name,id (username ফিল্ড User-token-এ DEPRECATED (#12) — আগে নয়)
+    const res = await fetch(`${GRAPH}/me?fields=name,id&access_token=${encodeURIComponent(token)}`, {
       signal: AbortSignal.timeout(10_000),
     })
     const j = (await res.json()) as {
       name?: string
       id?: string
-      username?: string
       error?: { message?: string; type?: string }
     }
     if (!res.ok || j.error) {
       const msg = j.error?.message || `Graph API HTTP ${res.status}`
       return { ok: false, pageName: null, pageId: null, pageUsername: null, error: msg }
     }
-    return { ok: true, pageName: j.name || null, pageId: j.id || null, pageUsername: j.username || null, error: null }
+    // ধাপ ২: এটা কি সত্যিই Page token? messenger_profile শুধু Page token-এ সাড়া দেয়
+    let isPageToken = false
+    let pageUsername: string | null = null
+    try {
+      const prof = await fetch(`${GRAPH}/me/messenger_profile?fields=get_started&access_token=${encodeURIComponent(token)}`, {
+        signal: AbortSignal.timeout(10_000),
+      })
+      isPageToken = prof.ok
+    } catch {
+      isPageToken = false
+    }
+    // ধাপ ৩: Page token হলে username (deprecated এররে চুপচাপ null)
+    if (isPageToken) {
+      try {
+        const uRes = await fetch(`${GRAPH}/me?fields=username&access_token=${encodeURIComponent(token)}`, {
+          signal: AbortSignal.timeout(10_000),
+        })
+        const uj = (await uRes.json().catch(() => ({}))) as { username?: string }
+        pageUsername = uj.username || null
+      } catch {
+        pageUsername = null
+      }
+    }
+    return {
+      ok: true,
+      pageName: j.name || null,
+      pageId: j.id || null,
+      pageUsername,
+      error: null,
+      isPageToken,
+      note: isPageToken
+        ? null
+        : `⚠️ এই টোকেনটি Page Access Token নয় — User token মনে হচ্ছে (${j.name || 'অজানা'} নামের ইউজার, পেজ নয়)। এই টোকেনে কাস্টমারকে মেসেজ যাবে না! Graph API Explorer-এ পেজ-অ্যাডমিন অ্যাকাউন্ট দিয়ে অ্যাপ সিলেক্ট করে পেজটি বেছে “Generate Access Token” নিন, অথবা /me/accounts রেসপন্সে পেজের access_token কপি করুন — তারপর সেটিংসের 🔑 ফিল্ডে পেস্ট করুন।`,
+    }
   } catch (e) {
     return {
       ok: false,

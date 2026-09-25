@@ -239,6 +239,8 @@ interface MessengerTestResult {
     pageId: string | null
     pageUsername: string | null
     error: string | null
+    isPageToken?: boolean
+    note?: string | null
   }
   profileTest: { ok: boolean; name: string | null; error: string | null } | null
   sendProbe: { psid: string | null; ok: boolean; error: string | null; hint: string | null } | null
@@ -5341,6 +5343,9 @@ function SettingsTab({ onAuthRequired }: TabProps) {
                     ✅ টোকেন সঠিক — এটি এই পেজের: <span className="underline">{metaTest.tokenTest.pageName}</span>
                     {metaTest.tokenTest.pageId ? ` (Page ID: ${metaTest.tokenTest.pageId})` : ''}
                   </p>
+                  {metaTest.tokenTest.note && (
+                    <p className="mt-1 rounded border border-red-200 bg-red-50 p-2 font-black text-red-700">{metaTest.tokenTest.note}</p>
+                  )}
                   {metaTest.tokenTest.pageUsername ? (
                     pageUserClean.toLowerCase() === metaTest.tokenTest.pageUsername.toLowerCase() ? (
                       <p className="mt-1">পেজ username মিলে গেছে ✅ (m.me/{metaTest.tokenTest.pageUsername})</p>
