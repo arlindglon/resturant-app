@@ -19,26 +19,16 @@ import { NextRequest, after } from 'next/server'
 import crypto from 'crypto'
 import { db } from '@/lib/db'
 import { fail, ok } from '@/lib/api'
-import { fetchMessengerProfile, askPhoneQuickReply, sendReceipt, sendText, sendTypingOn, sendRnOptInRequest, sendQuickReplies, markdownEnabled } from '@/lib/messenger'
+import { fetchMessengerProfile, askPhoneQuickReply, sendReceipt, sendText, sendRnOptInRequest, sendQuickReplies } from '@/lib/messenger'
 import { botActionFromPayload, botActionFromText, handleBotUiAction, botQuickReplies, isGreetingText, BOT_ACTIONS } from '@/lib/bot-ui'
 import { applyBirthdayDiscount } from '@/lib/birthday'
 import { setSettings, getSetting } from '@/lib/settings'
 import { SETTING_KEYS } from '@/lib/constants'
 import { parseDateLoose, parsePhoneLoose } from '@/lib/verify'
 import { nextCustomerCode } from '@/lib/customer-code'
-import { usedVoucherIdsForPsid } from '@/lib/vouchers'
-import { buildKnowledgeBase } from '@/lib/knowledge'
 import { buildStaticReply } from '@/lib/bot-static'
-import { t, pickBotLang, globalBotLang, aiLanguageFor, nameVar, type BotLang } from '@/lib/bot-text'
-import {
-  aiChatEnabled,
-  chatWithCustomer,
-  verificationChat,
-  getGeminiConfig,
-  loadChatHistory,
-  saveChatTurn,
-  sanitizeExtractedName,
-} from '@/lib/gemini'
+import { t, pickBotLang, globalBotLang, nameVar, type BotLang } from '@/lib/bot-text'
+import { saveChatTurn } from '@/lib/gemini'
 
 
 // ── diagnostics: record when Meta last called us (admin panel shows this) ──
@@ -70,13 +60,14 @@ async function recordEvent(info: string) {
 }
 
 function summarizeEvents(body: {
-  entry?: { messaging?: { referral?: unknown; postback?: unknown; message?: { quick_reply?: unknown; text?: string; attachments?: unknown[] } }[] }[]
+  entry?: { messaging?: { referral?: unknown; postback?: unknown; message_reactions?: unknown; message?: { quick_reply?: unknown; text?: string; attachments?: unknown[] } }[] }[]
 }): string {
   const kinds = new Set<string>()
   for (const entry of body.entry || []) {
     for (const ev of entry.messaging || []) {
       if (ev.referral) kinds.add('referral(m.me লিঙ্ক)')
       else if (ev.postback) kinds.add('postback')
+      else if (ev.message_reactions) kinds.add('reaction(লাইক/ইমোজি)')
       else if (ev.message?.quick_reply) kinds.add('quick_reply(ফোন শেয়ার)')
       else if (ev.message) kinds.add('message(সাধারণ টেক্সট)')
     }
@@ -138,12 +129,14 @@ interface MessagingEvent {
     quick_reply?: { payload?: string }
     attachments?: { type: string; payload?: unknown }[]
   }
+  /** ❤️/👍 reaction — লাইক দিলেও মেনু-বাটন যাবে (মালিকের নিয়ম: সবসময় বাটন) */
+  message_reactions?: { reaction?: string; emoji?: string; action?: string; mid?: string }[]
 }
 
-// AI + Messenger কল webhook-এর after()-ফেজে চলে — Meta সাথে সাথেই 200 পায়,
-// তাই টাইমআউট-জনিত একই মেসেজের বারবার re-delivery (একই fallback ৪ বার!) আর হয় না
-// মালিকের নির্দেশ: কৃত্রিম টাইমআউট নেই — AI যত ইচ্ছা সময় নিয়ে বিশ্লেষণ করুক।
-// ৩০০s = Vercel ফাংশনের সর্বোচ্চ (Fluid compute, Hobby)।
+// সব হ্যান্ডলিং webhook-এর after()-ফেজে চলে — Meta সাথে সাথেই 200 পায়, তাই
+// টাইমআউট-জনিত একই মেসেজের বারবার re-delivery আর হয় না।
+// মালিকের নির্দেশ: Messenger-এর সব উত্তর এখন ইনস্ট্যান্ট DB-নির্ভর (AI নেই) —
+// তবু ধীর DB-তেও re-delivery না হতে after()-ফেজ ও maxDuration অপরিবর্তিত।
 export const maxDuration = 300
 
 export async function POST(req: NextRequest) {
@@ -345,168 +338,6 @@ async function sendBillReceipt(
   await sendReceipt(psid, [{ text: lines.join('\n') }], botQuickReplies(lang))
 }
 
-/* ───────────────────────── AI chatbot (Gemini) ───────────────────────── */
-
-/**
- * "typing…" সিস্টেম — AI ভাবার পুরো সময়টায়:
- *  ১) কাস্টমার Messenger-এ পেজের "typing…" দেখে (Meta এক কলে ~২০ সেকেন্ড রাখে —
- *     ১২ সেকেন্ড পরপর রিফ্রেশ; মেসেজ গেলে নিজেই মুছে যায়) — ৬০-৯০ সেকেন্ডের
- *     নীরবতায় আর মনে হয় না বট মরে গেছে
- *  ২) admin প্যানেলের কাস্টমার লিস্টে ওই কাস্টমারের পাশে "✍️ লিখছে…" ব্যাজ জ্বলে
- *     (Customer.typingUntil — রিটার্ন করা stopper কল করলেই নেমে যায়)
- */
-function startBotTyping(psid: string): () => void {
-  void sendTypingOn(psid)
-  void db.customer
-    .updateMany({ where: { psid }, data: { typingUntil: new Date(Date.now() + 180_000) } })
-    .catch(() => {})
-  const timer = setInterval(() => void sendTypingOn(psid), 12_000)
-  return () => {
-    clearInterval(timer)
-    void db.customer.updateMany({ where: { psid }, data: { typingUntil: null } }).catch(() => {})
-  }
-}
-
-/**
- * General conversation path (no pending offer claim): the customer just talked
- * to the page. Gemini answers in the customer's own language (বাংলা/বাংলিশ/
- * English/Hindi…) using the live knowledge base, and any customer data that
- * appears naturally (name / phone / address / special day) lands in the CRM.
- */
-async function aiGeneralReply(psid: string, profileName: string, customerMessage: string): Promise<boolean> {
-  const cfg = await getGeminiConfig()
-  if (!cfg.enabled || !cfg.keys.length) return false
-
-  // CRM notes & tags → the bot genuinely remembers this customer
-  // ("আবার দেখা হলো রাকিব ভাই! গতবারের মতো বিরিয়ানি হবে?")
-  // admin-marked language → the bot always replies in it; no mark → the global
-  // bot_language setting; both empty → the AI mirrors the customer's language
-  let customerNotes: string | undefined
-  let customerLanguage: string | null | undefined
-  try {
-    const cust = await db.customer.findUnique({
-      where: { psid },
-      select: {
-        language: true,
-        notes: { orderBy: { createdAt: 'desc' as const }, take: 10, select: { kind: true, text: true } },
-      },
-    })
-    customerLanguage = await aiLanguageFor(cust?.language)
-    if (cust?.notes?.length) {
-      customerNotes = cust.notes.map((n) => `- ${n.text}`).join('\n')
-    }
-  } catch {
-    /* notes are optional — chat works without them */
-  }
-
-  const [kb, history] = await Promise.all([
-    buildKnowledgeBase({ excludeVoucherIds: await usedVoucherIdsForPsid(psid) }),
-    loadChatHistory(psid, 10),
-  ])
-  const chatOpts = {
-    knowledgeBase: kb.text,
-    history,
-    customerMessage,
-    customerName: profileName,
-    customerNotes,
-    customerLanguage,
-    extraPersona: cfg.persona,
-    formatting: await markdownEnabled(), // বন্ধ থাকলে AI মার্কডাউন চিহ্নই লিখবে না
-    cfg,
-  }
-  // রোটেশন ইঞ্জিনেই বহু key × বহু মডেল × রিট্রাই-রাউন্ড আছে — এখানে আর দ্বিতীয়
-  // পুরো চেষ্টা নয় (আগের ডাবল-রিট্রাই ফ্রি-কোটা দ্রুত শেষ করে দিত)
-  const stopTyping = startBotTyping(psid)
-  const ai = await chatWithCustomer(chatOpts)
-  if (!ai.ok || !ai.reply) {
-    console.error('[webhook:ai]', ai.error)
-    // ডায়াগনস্টিকস: শেষ AI ব্যর্থতার কারণ admin প্যানেলে দেখা যাবে (১ মিনিট থ্রটল)
-    recordAiError(ai.error || 'unknown')
-    stopTyping()
-    return false
-  }
-
-  // প্রতিটি AI উত্তরের নিচে কুইক-রিপ্লাই বাটন (🍕 মেনু / 🔥 অফার / 📍 লোকেশন / ☎️ হেল্পলাইন)
-  await sendQuickReplies(psid, ai.reply, botQuickReplies(pickBotLang(customerLanguage, await globalBotLang())))
-  stopTyping()
-
-  // history + CRM writes are best-effort — never block the conversation
-  // (the customer turn was already saved by the caller before routing)
-  await saveChatTurn(psid, 'bot', ai.reply)
-  await saveAiCrmData(psid, ai.extracted)
-  return true
-}
-
-/** persist the data the AI picked up during small talk (CRM enrichment) */
-async function saveAiCrmData(
-  psid: string,
-  extracted: { name: string | null; phone: string | null; address: string | null; specialDay: string | null; specialDayLabel: string | null; note: string | null; language?: string | null },
-): Promise<void> {
-  const has = extracted.name || extracted.phone || extracted.address || extracted.specialDay || extracted.note || extracted.language
-  if (!has) return
-  try {
-    // নাম-হাইজিন (লাইভ-প্রমাণিত বাগ: CRM-এ Ridoy" এর মতো উদ্ধৃতি-লেগে যেত) —
-    // জাংক/meta-টেক্সট হলে নাম বাতিল, পরিষ্কার হলে ডবল-কোট ছাড়া নাম
-    const cleanName = sanitizeExtractedName(extracted.name || '')
-    // a stated phone only counts when it parses; a special day only when it parses as a date
-    const phone = extracted.phone ? parsePhoneLoose(extracted.phone) : null
-    const day = extracted.specialDay ? parseDateLoose(extracted.specialDay) : null
-    // a learned name also fills a placeholder profile name ("নাম যাচাই বাকি" / "Customer")
-    // so the admin sees the real name on the CRM card right away
-    const current = cleanName || extracted.language
-      ? await db.customer.findUnique({ where: { psid }, select: { firstName: true, language: true } })
-      : null
-    const fillsName = !!cleanName && isPlaceholderName(current?.firstName)
-    // detected language only fills an EMPTY preference — the admin's manual
-    // mark always wins and is never overwritten by the AI
-    const fillsLanguage = !!extracted.language && !current?.language
-    await db.customer.updateMany({
-      where: { psid },
-      data: {
-        ...(cleanName ? { statedName: cleanName.slice(0, 120) } : {}),
-        ...(fillsName ? { firstName: cleanName!.slice(0, 60), lastName: '' } : {}),
-        ...(phone ? { phone } : {}),
-        ...(extracted.address ? { address: extracted.address.slice(0, 500) } : {}),
-        ...(day ? { birthday: day.date } : {}),
-        ...(day && extracted.specialDayLabel ? { eventLabel: extracted.specialDayLabel.slice(0, 80) } : {}),
-        ...(fillsLanguage ? { language: extracted.language } : {}),
-        lastSeenAt: new Date(),
-      },
-    })
-    // notable fact from the conversation → CRM note the admin can act on
-    if (extracted.note) {
-      const cust = await db.customer.findUnique({ where: { psid }, select: { id: true } })
-      if (cust) {
-        const text = extracted.note.slice(0, 500)
-        const dup = await db.customerNote.findFirst({
-          where: { customerId: cust.id, kind: 'AI', text, createdAt: { gte: new Date(Date.now() - 24 * 60 * 60 * 1000) } },
-        })
-        if (!dup) await db.customerNote.create({ data: { customerId: cust.id, kind: 'AI', text, createdBy: 'ai' } })
-      }
-    }
-  } catch {
-    /* pre-migration DB or phone unique-collision — never block the chat */
-  }
-}
-
-/** FB profile lookup can fail silently → placeholder names the webhook stores */
-function isPlaceholderName(name?: string | null): boolean {
-  const n = (name || '').trim()
-  return !n || n === 'Customer' || n === 'নাম যাচাই বাকি'
-}
-
-/** last AI failure (admin diagnostics) — written at most once a minute */
-const KEY_LAST_AI_ERR = 'gemini_last_error'
-let lastAiErrWrite = 0
-let lastAiErrText = ''
-function recordAiError(error: string) {
-  const text = `${new Date().toISOString()} — ${error}`.slice(0, 500)
-  if (text === lastAiErrText && Date.now() - lastAiErrWrite < 60_000) return
-  lastAiErrWrite = Date.now()
-  lastAiErrText = text
-  setSettings({ [KEY_LAST_AI_ERR]: text }).catch(() => {})
-}
-
 /* ───────────────────── Recurring Notifications (24h-বাইপাস মার্কেটিং) ───────────────────── */
 
 const RN_ASK_COOLDOWN_MS = 14 * 24 * 60 * 60 * 1000 // ask at most every 14 days — never nag
@@ -578,6 +409,16 @@ async function handleEvent(event: MessagingEvent) {
   if (!psid) return
   // our own outgoing messages are echoed back as messages — never self-reply
   if (event.message?.is_echo) return
+
+  // Case 0b: ❤️/👍 reaction (লাইক) — মালিকের নিয়ম: যেকোনো ইন্টারঅ্যাকশনেই
+  // মেনু-বাটন সঙ্গে সঙ্গে যাবে — reaction-ও কোনো ব্যতিক্রম নয়
+  if (event.message_reactions?.length) {
+    const cust = await upsertCustomer(psid)
+    const lang = pickBotLang(cust.language, await globalBotLang())
+    await sendQuickReplies(psid, t(lang, 'homeMenuText'), botQuickReplies(lang))
+    await saveChatTurn(psid, 'bot', '🏠 হোম-মেনু (reaction/লাইক-এর উত্তর)')
+    return
+  }
 
   // Case 1: customer opened m.me?ref=TOKEN (referral or postback)
   const ref = event.referral?.ref || event.postback?.referral?.ref
@@ -658,7 +499,7 @@ async function handleEvent(event: MessagingEvent) {
       // 2a-quick: কুইক-রিপ্লাই বাটনে ট্যাপ (payload) — ডিটারমিনিস্টিক Rich-UI অ্যাকশন
       const qrAction = botActionFromPayload(event.message?.quick_reply?.payload)
       if (qrAction) {
-        const r = await handleBotUiAction(psid, lang, qrAction, (msg) => aiGeneralReply(psid, name, msg), event.message?.quick_reply?.payload)
+        const r = await handleBotUiAction(psid, lang, qrAction, event.message?.quick_reply?.payload)
         if (r.handled) {
           if (r.echo) await saveChatTurn(psid, 'bot', r.echo)
           return
@@ -684,16 +525,12 @@ async function handleEvent(event: MessagingEvent) {
           return
         }
       }
-      const aiOn = dataTextIn ? await aiChatEnabled() : false
-      const aiHandled = aiOn ? await aiGeneralReply(psid, name, dataTextIn) : false
-      if (!aiHandled && dataTextIn) {
-        // AI চলেনি (কোটা/নেটওয়ার্ক) বা বন্ধ — কখনোই "সমস্যা হচ্ছে, পরে লিখুন"
-        // জাতীয় মেসেজ যায় না। লাইভ ডাটাবেস থেকে চলমান অফার/কুপন/মেনু সাজিয়ে
-        // কাস্টমারের প্রশ্নের সঠিক উত্তরই যায় (bot-static.ts)।
-        const staticReply = await buildStaticReply({ lang, message: dataTextIn, psid })
-        await sendQuickReplies(psid, staticReply, botQuickReplies(lang))
-        await saveChatTurn(psid, 'bot', staticReply)
-      }
+      // মালিকের নির্দেশ: Messenger-এ AI নেই — যেকোনো ফ্রি-টেক্সটের উত্তর লাইভ
+      // ডাটাবেস থেকেই সঙ্গে সঙ্গে যায় (চলমান অফার/কুপন/মেনু/ঠিকানা — bot-static.ts),
+      // সাথে মেনু-বাটন। AI-লেটেন্সি/ব্যর্থতার কোনো সুযোগই থাকে না।
+      const staticReply = await buildStaticReply({ lang, message: dataTextIn, psid })
+      await sendQuickReplies(psid, staticReply, botQuickReplies(lang))
+      await saveChatTurn(psid, 'bot', staticReply)
       // সরাসরি পেজে মেসেজ দেওয়া কাস্টমারও RN-এর সুযোগ পাক (একবারই, কুলডাউন গার্ড সহ)
       await maybeAskRnOptIn(psid)
       return
@@ -730,111 +567,16 @@ async function handleEvent(event: MessagingEvent) {
       if (dataText.length >= 2) validData = dataText.slice(0, 300)
     }
 
-    // 2c. parsers failed → AI verification CONVERSATION (human, sales-pro, never
-    // nagging): answers what the customer actually said, extracts the datum from
-    // ANY language, and gracefully cancels when the occasion doesn't apply.
-    // Every extracted datum is re-validated with the SAME deterministic parsers —
-    // the AI can never bypass verification or invent a discount.
-    if (!validData && dataText && (await aiChatEnabled())) {
-      const cfg = await getGeminiConfig()
-      const [kb, hist] = await Promise.all([buildKnowledgeBase(), loadChatHistory(psid, 8)])
-      // history already contains the current customer message (saved by the caller) — drop the duplicate
-      const history = hist.filter((h, i) => !(i === hist.length - 1 && h.role === 'user' && h.text === dataText))
-      const askCount = tokenRow.askCount || 0
-      // admin-marked / global language → the verify conversation respects it too
-      const markedLang = await db.customer.findUnique({ where: { psid }, select: { language: true } })
-      const stopTyping = startBotTyping(psid)
-      const ai = await verificationChat({
-        fieldType: fieldType as 'DATE' | 'PHONE' | 'TEXT',
-        offerName: offer?.name || 'বিশেষ অফার',
-        askText: offer?.askText?.trim() || defaultAsk(fieldType, lang),
-        lastAskSent: tokenRow.askedText,
-        askCount,
-        knowledgeBase: kb.text,
-        history,
-        customerMessage: dataText,
-        customerLanguage: await aiLanguageFor(markedLang?.language),
-        formatting: await markdownEnabled(),
-        cfg,
-      })
-      stopTyping()
-
-      // customer said the occasion doesn't apply (not married / not my birthday…)
-      // → close the claim gracefully, pivot warmly to offers that DO fit them
-      if (ai.ok && ai.action === 'CANCEL') {
-        await db.referralToken.update({
-          where: { id: tokenRow.id },
-          data: { status: 'CANCELLED', dataText: dataText.slice(0, 300) },
-        })
-        const pivot = ai.reply || t(lang, 'cancelPivot')
-        await sendQuickReplies(psid, pivot, botQuickReplies(lang))
-        await saveChatTurn(psid, 'bot', pivot)
-        return
-      }
-
-      if (ai.ok && ai.extracted) {
-        if (fieldType === 'PHONE') {
-          const p = parsePhoneLoose(ai.extracted)
-          if (p) {
-            validData = p
-            parsedPhone = p
-          }
-        } else if (fieldType === 'DATE') {
-          const d = parseDateLoose(ai.extracted)
-          if (d) {
-            validData = d.normalized
-            parsedBirthday = d.date
-          }
-        } else if (ai.extracted.length >= 2) {
-          validData = ai.extracted.slice(0, 300)
-        }
-      }
-
-      // still nothing → the AI's warm reply (max 2 gentle asks, then it just
-      // chats like a friend). The pending token STAYS alive — deterministic
-      // parsers keep running on every next message, so late data still applies
-      // the offer silently.
-      if (!validData && ai.ok) {
-        if (ai.reply) {
-          await sendQuickReplies(psid, ai.reply, botQuickReplies(lang))
-          await saveChatTurn(psid, 'bot', ai.reply)
-        } else if (askCount < 2) {
-          // AI ok কিন্তু রিপ্লাই ফাঁকা — আগে এখানে নীরবতা যেত; এখন স্ট্যাটিক রি-আস্ক
-          await sendQuickReplies(psid, retryAsk(fieldType, lang), botQuickReplies(lang))
-        }
-        if (askCount < 2) {
-          await db.referralToken.update({
-            where: { id: tokenRow.id },
-            data: { askCount: askCount + 1, ...(ai.reply ? { askedText: ai.reply.slice(0, 300) } : {}) },
-          })
-        }
-        return
-      }
-
-      // AI down (quota/network) → static retry while we haven't nagged, else soft
-      if (!validData && !ai.ok) {
-        if (askCount < 2) {
-          await sendQuickReplies(psid, retryAsk(fieldType, lang), botQuickReplies(lang))
-          await db.referralToken.update({ where: { id: tokenRow.id }, data: { askCount: askCount + 1 } })
-        } else {
-          await sendQuickReplies(psid, t(lang, 'softWait'), botQuickReplies(lang))
-        }
-        return
-      }
-    }
-
-    // 2d. WRONG data / AI off → re-ask at most twice, then STOP nagging (soft mode:
-    // friendly chat; if the datum arrives later the parsers still apply the offer)
+    // 2d. WRONG data → re-ask at most twice, then STOP nagging (soft mode).
+    // মালিকের নির্দেশ: verification-এও AI নেই — ডিটারমিনিস্টিক পার্সার প্রতিটা
+    // পরের মেসেজে চলতেই থাকে, দেরিতে সঠিক তথ্য এলেও অফার নিজে থেকেই বিলে বসে।
     if (!validData) {
       const askCount = tokenRow.askCount || 0
       if (askCount < 2) {
         await sendQuickReplies(psid, retryAsk(fieldType, lang), botQuickReplies(lang))
         await db.referralToken.update({ where: { id: tokenRow.id }, data: { askCount: askCount + 1 } })
       } else {
-        const handled = await aiGeneralReply(psid, name, dataText)
-        if (!handled) {
-          await sendQuickReplies(psid, t(lang, 'softWaitMore'), botQuickReplies(lang))
-        }
+        await sendQuickReplies(psid, t(lang, 'softWaitMore'), botQuickReplies(lang))
       }
       return
     }
@@ -908,7 +650,7 @@ async function handleEvent(event: MessagingEvent) {
   if (event.postback && pbAction) {
     const cust = await upsertCustomer(psid)
     const lang = pickBotLang(cust.language, await globalBotLang())
-    await handleBotUiAction(psid, lang, pbAction, (msg) => aiGeneralReply(psid, cust.name, msg), event.postback?.payload)
+    await handleBotUiAction(psid, lang, pbAction, event.postback?.payload)
     return
   }
   if (event.postback) return

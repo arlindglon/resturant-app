@@ -87,7 +87,7 @@ await sendReceipt('PSID1', [{ text: 'রসিদ' }], chips)
 await sendBirthdayGreeting('PSID1', 'রাকিব', 'BDAY123', 50, chips)
 {
   const b = sent[sent.length - 1]?.body as { message?: { text?: string; quick_replies?: unknown[] } }
-  check('জন্মদিনের শুভেচ্ছার নিচেও ৫টা বাটন', b?.message?.text?.includes('শুভ জন্মদিন') && (b?.message?.quick_replies?.length || 0) === 5)
+  check('জন্মদিনের শুভেচ্ছার নিচেও ৫টা বাটন', (b?.message?.text?.includes('শুভ জন্মদিন') ?? false) && (b?.message?.quick_replies?.length || 0) === 5)
 }
 
 /* ── 5. admin token override: DB সেটিং > env ── */

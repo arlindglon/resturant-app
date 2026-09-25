@@ -403,39 +403,26 @@ async function sendCustomAction(psid: string, lang: BotLang, actionId: string): 
 }
 
 /**
- * AI-নির্ভর অ্যাকশন (লোকেশন/হেল্পলাইন): admin যা লিখেছে (AI_EXTRA_INFO/ডেলিভারি
- * রুলস) তার ভেতর থেকেই সঠিক উত্তর — synthetic মেসেজ দিয়ে সাধারণ চ্যাট-পথেই যায়।
- * handler নিজে কিছু না পাঠালে (AI বন্ধ/ব্যর্থ) caller-এর static fallback চলে।
+ * 📍 লোকেশন / ☎️ হেল্পলাইন — মালিকের নির্দেশ: Messenger-এ AI নয়। admin-এর লেখা
+ * তথ্য (AI_EXTRA_INFO / ডেলিভারি রুলস) থেকেই সঙ্গে সঙ্গে উত্তর যায়
+ * (buildStaticReply-এর topic-মোড — ইনস্ট্যান্ট, ডাটাবেস-নির্ভর, কখনো ব্যর্থ হয় না)।
  */
-export async function sendAiActionReply(
-  psid: string,
-  lang: BotLang,
-  action: BotActionKey,
-  /** caller-এর aiGeneralReply (typing + history + CRM সহ) — এটাই সব কাজ করে */
-  aiReply: (message: string) => Promise<boolean>,
-): Promise<void> {
-  const synthetic =
-    action === BOT_ACTIONS.LOCATION
-      ? t(lang, 'askLocationSynthetic')
-      : t(lang, 'askHelplineSynthetic')
-  const handled = await aiReply(synthetic)
-  if (!handled) {
-    const text = await buildStaticReply({ lang, message: action === BOT_ACTIONS.LOCATION ? 'location address' : 'helpline contact', psid })
-    await sendQuickReplies(psid, text, botQuickReplies(lang))
-  }
+export async function sendInfoAction(psid: string, lang: BotLang, action: BotActionKey): Promise<void> {
+  const topic = action === BOT_ACTIONS.LOCATION ? 'location' : 'helpline'
+  const text = await buildStaticReply({ lang, message: '', psid, topic })
+  await sendQuickReplies(psid, text, botQuickReplies(lang))
 }
 
 /**
- * কুইক-রিপ্লাই/পোস্টব্যাক পেলোডের ডিটারমিনিস্টিক হ্যান্ডলার।
- * rawPayload = কাঁচা payload (__CAT__:<id> ভাঙার জন্য)।
- * রিটার্ন: handled = সামলানো হয়েছে (AI routing বাদ); echo = AI-history-তে
- * রাখার সংক্ষিপ্ত লাইন (LOCATION/HELPLINE-এ aiReply নিজেই history সামলায় → null)।
+ * কুইক-রিপ্লাই/পোস্টব্যাক পেলোডের ডিটারমিনিস্টিক হ্যান্ডলার — সব উত্তর ইনস্ট্যান্ট
+ * ডাটাবেস-নির্ভর (মালিকের নির্দেশ: Messenger-এর কোনো বাটন-উত্তরে AI নেই)।
+ * rawPayload = কাঁচা payload (__CAT__:<id> / __ACT__:<id> ভাঙার জন্য)।
+ * রিটার্ন: handled = সামলানো হয়েছে; echo = AI-history-তে রাখার সংক্ষিপ্ত লাইন।
  */
 export async function handleBotUiAction(
   psid: string,
   lang: BotLang,
   action: BotActionKey,
-  aiReply?: (message: string) => Promise<boolean>,
   rawPayload?: string | null,
 ): Promise<{ handled: boolean; echo: string | null }> {
   switch (action) {
@@ -471,11 +458,8 @@ export async function handleBotUiAction(
     }
     case BOT_ACTIONS.LOCATION:
     case BOT_ACTIONS.HELPLINE: {
-      if (aiReply) {
-        await sendAiActionReply(psid, lang, action, aiReply)
-        return { handled: true, echo: null }
-      }
-      return { handled: false, echo: null }
+      await sendInfoAction(psid, lang, action)
+      return { handled: true, echo: action === BOT_ACTIONS.LOCATION ? '📍 লোকেশন-উত্তর পাঠানো হয়েছে' : '☎️ হেল্পলাইন-উত্তর পাঠানো হয়েছে' }
     }
     default:
       return { handled: false, echo: null }

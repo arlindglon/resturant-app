@@ -12,27 +12,63 @@
 // (এই ফাইল কখনো দুঃখপ্রকাশ করে না — হয় সঠিক তথ্য, নয় উষ্ণ আমন্ত্রণ)
 import { db } from '@/lib/db'
 import { usedVoucherIdsForPsid } from '@/lib/vouchers'
+import { getSetting } from '@/lib/settings'
+import { SETTING_KEYS } from '@/lib/constants'
 import { t, type BotLang } from '@/lib/bot-text'
 
 const DISC_RE = /offer|অফার|ছাড়|discou?nt|coupon|কুপন|vau?cher|deal|promo|সেল|sale|ফ্রি|claim/i
 const MENU_RE = /menu|মেনু|খাবার|khabar|price|দাম|item|খাওয়া|khaowa|food|কি আছে|কী আছে|ki ki ase|ki ase/i
 
-export async function buildStaticReply(opts: { lang: BotLang; message: string; psid?: string }): Promise<string> {
+export async function buildStaticReply(opts: {
+  lang: BotLang
+  message: string
+  psid?: string
+  /** 📍/☎️ ইনফো-মোড: admin-এর লেখা তথ্য থেকেই সরাসরি উত্তর (AI নয় — মালিকের নির্দেশ) */
+  topic?: 'location' | 'helpline'
+}): Promise<string> {
+  if (opts.topic) {
+    const [name, extra, delivery] = await Promise.all([
+      getSetting(SETTING_KEYS.RESTAURANT_NAME),
+      getSetting(SETTING_KEYS.AI_EXTRA_INFO),
+      getSetting(SETTING_KEYS.AI_DELIVERY_RULES),
+    ])
+    // admin যা লিখেছে (AI_EXTRA_INFO / ডেলিভারি রুলস) সেটাই আসল উত্তর —
+    // AI-ব্যাগার লেটেন্সি/ব্যর্থতা নেই, লাইভ সেটিং সঙ্গে সঙ্গে কার্যকর হয়
+    const body = [(extra || '').trim(), opts.topic === 'helpline' ? (delivery || '').trim() : '']
+      .filter(Boolean)
+      .join('\n\n')
+    const head =
+      opts.topic === 'location'
+        ? `${(name || '').trim() ? `${name.trim()} — ` : ''}${t(opts.lang, 'staticLocationHead')}`
+        : t(opts.lang, 'staticHelplineHead')
+    return [head, body || t(opts.lang, 'staticInfoMissing')].join('\n\n')
+  }
+
   const msg = opts.message || ''
   const wantsOffers = DISC_RE.test(msg)
   const wantsMenu = MENU_RE.test(msg)
 
+  // প্রতিটা কোয়েরি আলাদা catch — DB-ঝাঁকুনিতেও উত্তর কখনো থামে না (যা পাওয়া
+  // গেছে তা-ই সঠিক উত্তর; ফাঁকা হলে নিচের উষ্ণ সমাচারই যায়)
   const [offers, vouchers, happyHours, menuItems, excludeVoucherIds] = await Promise.all([
-    db.occasionOffer.findMany({ where: { active: true }, orderBy: [{ sortOrder: 'asc' as const }, { createdAt: 'asc' as const }] }),
-    db.voucher.findMany({ where: { active: true }, orderBy: { createdAt: 'desc' as const }, take: 12 }),
-    db.happyHour.findMany({ where: { active: true } }),
-    db.menuItem.findMany({
-      where: { isAvailable: true },
-      orderBy: [{ sortOrder: 'asc' as const }, { createdAt: 'asc' as const }],
-      include: { category: { select: { name: true } } },
-      take: 12,
-    }),
-    opts.psid ? usedVoucherIdsForPsid(opts.psid).catch(() => [] as string[]) : Promise.resolve([] as string[]),
+    db.occasionOffer
+      .findMany({ where: { active: true }, orderBy: [{ sortOrder: 'asc' as const }, { createdAt: 'asc' as const }] })
+      .catch(() => []),
+    db.voucher
+      .findMany({ where: { active: true }, orderBy: { createdAt: 'desc' as const }, take: 12 })
+      .catch(() => []),
+    db.happyHour.findMany({ where: { active: true } }).catch(() => []),
+    db.menuItem
+      .findMany({
+        where: { isAvailable: true },
+        orderBy: [{ sortOrder: 'asc' as const }, { createdAt: 'asc' as const }],
+        include: { category: { select: { name: true } } },
+        take: 12,
+      })
+      .catch(() => []),
+    opts.psid
+      ? usedVoucherIdsForPsid(opts.psid).catch(() => [] as string[])
+      : Promise.resolve([] as string[]),
   ])
   const liveVouchers = excludeVoucherIds.length ? vouchers.filter((v) => !excludeVoucherIds.includes(v.id)) : vouchers
 
