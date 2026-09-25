@@ -33,15 +33,22 @@ export const BOT_ACTIONS = {
   ORDER: '__ORDER__',
   TEXTMENU: '__TEXTMENU__',
   CAT: '__CAT__', // prefix-form: __CAT__:<categoryId> বা __CAT__:all
+  ACT: '__ACT__', // prefix-form: __ACT__:<botActionId> — admin-এর কাস্টম অ্যাকশন
 } as const
 
 export type BotActionKey = (typeof BOT_ACTIONS)[keyof typeof BOT_ACTIONS]
 
 export const CAT_PAYLOAD_PREFIX = '__CAT__:'
+export const ACT_PAYLOAD_PREFIX = '__ACT__:'
 
 /** ক্যাটাগরি-চিপ/মেনু-বাটনের payload বানায় (categoryId='all' → সব খাবার) */
 export function catPayload(categoryId: string): string {
   return `${CAT_PAYLOAD_PREFIX}${categoryId}`
+}
+
+/** কাস্টম-অ্যাকশন (BotAction) বাটনের payload */
+export function actPayload(id: string): string {
+  return `${ACT_PAYLOAD_PREFIX}${id}`
 }
 
 /** পার্সিস্টেন্ট-মেনু বাটনের payload হিসেবে গ্রহণযোগ্য কি না (admin validation) */
@@ -49,6 +56,7 @@ export function isValidMenuPayload(payload: string): boolean {
   const p = (payload || '').trim()
   if (!p) return false
   if (p === BOT_ACTIONS.CAT || p.startsWith(CAT_PAYLOAD_PREFIX)) return p === BOT_ACTIONS.CAT || p.length > CAT_PAYLOAD_PREFIX.length
+  if (p === BOT_ACTIONS.ACT || p.startsWith(ACT_PAYLOAD_PREFIX)) return p === BOT_ACTIONS.ACT || p.length > ACT_PAYLOAD_PREFIX.length
   return (Object.values(BOT_ACTIONS) as string[]).includes(p)
 }
 
@@ -57,6 +65,7 @@ export function botActionFromPayload(payload: string | undefined | null): BotAct
   const p = (payload || '').trim()
   if (!p) return null
   if (p === BOT_ACTIONS.CAT || p.startsWith(CAT_PAYLOAD_PREFIX)) return BOT_ACTIONS.CAT
+  if (p === BOT_ACTIONS.ACT || p.startsWith(ACT_PAYLOAD_PREFIX)) return BOT_ACTIONS.ACT
   const values = Object.values(BOT_ACTIONS) as string[]
   return values.includes(p) ? (p as BotActionKey) : null
 }
@@ -134,6 +143,9 @@ function priceBn(price: number): string {
   return `${bnNum(p)}৳`
 }
 
+/** ⬅️ পেছনে — মেনু-হোমে ফেরা (কার্ড-ভিউতে থাকা কাস্টমারের back-button) */
+export const BACK_CHIP: QuickReply = { title: '⬅️ পেছনে', payload: BOT_ACTIONS.MENU }
+
 /** মেনু-উত্তরের নিচের ক্যাটাগরি-চিপ: [🍽️ সব] + ক্যাটাগরিগুলো + [📄 টেক্সট মেনু] */
 async function menuChips(lang: BotLang): Promise<QuickReply[]> {
   void lang
@@ -142,14 +154,14 @@ async function menuChips(lang: BotLang): Promise<QuickReply[]> {
       where: { active: true },
       orderBy: { sortOrder: 'asc' as const },
       select: { id: true, name: true },
-      take: 9,
+      take: 7,
     })
     .catch(() => [] as { id: string; name: string }[])
   return [
     { title: '🍽️ সব খাবার', payload: catPayload('all') },
     ...cats.map((c) => ({ title: c.name.slice(0, 19), payload: catPayload(c.id) })),
     { title: '📄 টেক্সট মেনু', payload: BOT_ACTIONS.TEXTMENU },
-  ].slice(0, 11)
+  ].slice(0, 10)
 }
 
 /**
@@ -164,7 +176,7 @@ async function sendItemsCarouselOrText(
   items: { name: string; price: number; description?: string | null; imageUrl?: string | null; category?: { name: string } | null }[],
   baseUrl: string | null
 ): Promise<void> {
-  const chips = await menuChips(lang)
+  const chips = [...(await menuChips(lang)), BACK_CHIP].slice(0, 11)
   const withImage = items.filter((i) => i.imageUrl && /^https?:\/\//i.test(i.imageUrl))
   const cards: CarouselCard[] = withImage.slice(0, 10).map((i) => ({
     title: `${i.name} — ${priceBn(i.price)}`.slice(0, 80),
@@ -282,6 +294,92 @@ async function sendOrderHelp(psid: string, lang: BotLang): Promise<void> {
 }
 
 /**
+ * 🔥 অফার অ্যাকশন — টেক্সট নয়, কার্ড-স্লাইডার: চলমান অকেশন-অফার ও কুপন
+ * প্রতিটা কার্ডে নাম+ছাড়+শর্ত (ফ্রি-মোডেও পড়া যায়) + [অর্ডার করুন] বাটন।
+ * একটাও অফার না থাকলে উষ্ণ টেক্সট (bot-static)।
+ */
+async function sendOffersAction(psid: string, lang: BotLang): Promise<void> {
+  const [offers, vouchers, baseUrl] = await Promise.all([
+    db.occasionOffer.findMany({ where: { active: true }, orderBy: [{ sortOrder: 'asc' as const }, { createdAt: 'asc' as const }], take: 6 }),
+    db.voucher.findMany({ where: { active: true }, orderBy: { createdAt: 'desc' as const }, take: 6 }),
+    getSetting(SETTING_KEYS.PUBLIC_BASE_URL),
+  ])
+  const chips = [BACK_CHIP, ...botQuickReplies(lang)].slice(0, 11)
+  const cards: CarouselCard[] = [
+    ...offers.map((o) => ({
+      title: `${o.emoji || '🎁'} ${o.name} — ${bnNum(Math.round(o.discount * 100) / 100)}%`.slice(0, 80),
+      subtitle: [o.dateLabel, o.minBill > 0 ? `ন্যূনতম বিল ৳${bnNum(Math.round(o.minBill * 100) / 100)}` : '', o.description?.trim()].filter(Boolean).join(' • ').slice(0, 80),
+      buttonTitle: '🎁 অফার নিন',
+      buttonUrl: baseUrl?.trim() ? baseUrl.trim() : undefined,
+      buttonPayload: BOT_ACTIONS.ORDER,
+    })),
+    ...vouchers.map((v) => ({
+      title: `🎟️ ${v.code} — ${v.discountType === 'PERCENT' ? `${bnNum(Math.round(v.discountValue * 100) / 100)}%` : `৳${bnNum(Math.round(v.discountValue * 100) / 100)}`}`.slice(0, 80),
+      subtitle: [v.title, v.minOrderAmount > 0 ? `ন্যূনতম অর্ডার ৳${bnNum(Math.round(v.minOrderAmount * 100) / 100)}` : ''].filter(Boolean).join(' • ').slice(0, 80),
+      buttonTitle: '🎁 কুপন নিন',
+      buttonUrl: baseUrl?.trim() ? baseUrl.trim() : undefined,
+      buttonPayload: BOT_ACTIONS.ORDER,
+    })),
+  ].slice(0, 10)
+  if (cards.length) {
+    if (await sendGenericCarousel(psid, cards, chips)) return
+  }
+  const text = await buildStaticReply({ lang, message: 'offer', psid })
+  await sendQuickReplies(psid, text, chips)
+}
+
+/**
+ * ⭐ কাস্টম অ্যাকশন (__ACT__:<id>) — admin মেসেঞ্জার-ট্যাবে বানানো রিপ্লাই:
+ * replyType='text' → কাস্টম টেক্সট; 'cards' → কাস্টম কার্ড-স্লাইডার
+ * (প্রোমো-কোড, কাস্টম ডিটেইলস, ব্রাঞ্চ-মেনু — যা খুশি)। সবই ইনস্ট্যান্ট, AI ছাড়া।
+ */
+async function sendCustomAction(psid: string, lang: BotLang, actionId: string): Promise<void> {
+  const chips = [BACK_CHIP, ...botQuickReplies(lang)].slice(0, 11)
+  const act = await db.botAction
+    .findUnique({ where: { id: actionId } })
+    .catch(() => null)
+  if (!act || !act.active) {
+    // admin ডিলিট/বন্ধ করে ফেলেছে → মেনু-হোমই সবচেয়ে দরকারি উত্তর
+    await sendMenuAction(psid, lang)
+    return
+  }
+  if (act.replyType === 'cards' && act.cardsJson) {
+    try {
+      const raw = JSON.parse(act.cardsJson) as {
+        title?: string
+        subtitle?: string
+        imageUrl?: string
+        buttonTitle?: string
+        buttonUrl?: string
+      }[]
+      const baseUrl = await getSetting(SETTING_KEYS.PUBLIC_BASE_URL)
+      const cards: CarouselCard[] = raw
+        .filter((c) => c && typeof c.title === 'string' && c.title.trim())
+        .slice(0, 10)
+        .map((c) => ({
+          title: c.title!.slice(0, 80),
+          subtitle: (c.subtitle || '').slice(0, 80),
+          imageUrl: c.imageUrl && /^https?:\/\//i.test(c.imageUrl) ? c.imageUrl : undefined,
+          buttonTitle: (c.buttonTitle || '🛒 অর্ডার করুন').slice(0, 20),
+          buttonUrl: c.buttonUrl && /^https?:\/\//i.test(c.buttonUrl) ? c.buttonUrl : baseUrl?.trim() || undefined,
+          buttonPayload: BOT_ACTIONS.ORDER,
+        }))
+      if (cards.length && (await sendGenericCarousel(psid, cards, chips))) return
+    } catch {
+      // ভাঙা JSON → নিচের টেক্সট-ফলব্যাক
+    }
+  }
+  const text = (act.replyText || '').trim() || t(lang, 'staticMenuHead')
+  // লম্বা টেক্সট হলে চাংক (Messenger ২০০০-অক্ষর লিমিট)
+  const chunks = chunkByLine(text, 1800)
+  for (let idx = 0; idx < chunks.length; idx++) {
+    const isLast = idx === chunks.length - 1
+    if (isLast) await sendQuickReplies(psid, chunks[idx], chips)
+    else await sendText(psid, chunks[idx])
+  }
+}
+
+/**
  * AI-নির্ভর অ্যাকশন (লোকেশন/হেল্পলাইন): admin যা লিখেছে (AI_EXTRA_INFO/ডেলিভারি
  * রুলস) তার ভেতর থেকেই সঠিক উত্তর — synthetic মেসেজ দিয়ে সাধারণ চ্যাট-পথেই যায়।
  * handler নিজে কিছু না পাঠালে (AI বন্ধ/ব্যর্থ) caller-এর static fallback চলে।
@@ -332,9 +430,13 @@ export async function handleBotUiAction(
       return { handled: true, echo: t(lang, 'staticMenuHead') }
     }
     case BOT_ACTIONS.OFFERS: {
-      const text = await buildStaticReply({ lang, message: 'offer', psid })
-      await sendQuickReplies(psid, text, botQuickReplies(lang))
-      return { handled: true, echo: text.slice(0, 300) }
+      await sendOffersAction(psid, lang)
+      return { handled: true, echo: '🔥 অফার কার্ড পাঠানো হয়েছে' }
+    }
+    case BOT_ACTIONS.ACT: {
+      const id = (rawPayload || '').trim().slice(ACT_PAYLOAD_PREFIX.length)
+      await sendCustomAction(psid, lang, id)
+      return { handled: true, echo: `কাস্টম অ্যাকশন (act:${id.slice(0, 10)})` }
     }
     case BOT_ACTIONS.ORDER: {
       await sendOrderHelp(psid, lang)

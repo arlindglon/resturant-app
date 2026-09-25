@@ -450,3 +450,21 @@ model AccessKey {
 
   @@map("access_keys")
 }
+
+// Messenger বটের কাস্টম অ্যাকশন — admin মেসেঞ্জার-ট্যাব থেকে বানায়:
+// কাস্টমার পার্সিস্টেন্ট-মেনু বাটনে ট্যাপ করলে payload __ACT__:<id> যায় →
+// এখানকার রিপ্লাই (সাধারণ টেক্সট বা কার্ড-স্লাইডার) ইনস্ট্যান্ট যায় (AI ছাড়া)।
+model BotAction {
+  id        String   @id @default(cuid())
+  title     String // বাটনের নাম (≤২০ অক্ষর, ইমোজি সহ যেমন "🎁 প্রোমো")
+  desc      String? // admin-প্যানেলের ব্যাখ্যা — ট্যাপ করলে কী হয়
+  replyType String   @default("text") // 'text' = সাধারণ টেক্সট | 'cards' = কার্ড-স্লাইডার
+  replyText String?  @db.Text // replyType=text হলে এই টেক্সটই যায়
+  cardsJson String?  @db.Text // replyType=cards হলে JSON [{title,subtitle,imageUrl,buttonTitle,buttonUrl}]
+  sortOrder Int      @default(0)
+  active    Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@map("bot_actions")
+}

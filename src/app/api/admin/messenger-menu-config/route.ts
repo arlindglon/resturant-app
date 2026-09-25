@@ -1,9 +1,9 @@
 // GET  /api/admin/messenger-menu-config — পার্সিস্টেন্ট-মেনু বাটন-তালিকা (admin-সম্পাদনযোগ্য)
-//   + পাওয়া-যাচ্ছে অ্যাকশন ও লাইভ ক্যাটাগরি-তালিকা (বাটন-যোগ ড্রপডাউনের জন্য)
+//   + প্রতিটা অ্যাকশনের desc (ব্যাখ্যা-mark: ট্যাপ করলে কী হয়) + লাইভ ক্যাটাগরি + কাস্টম অ্যাকশন
 // PUT  /api/admin/messenger-menu-config — বাটন add/edit/delete/save
 //   + সঙ্গে সঙ্গে Meta পেজে সিঙ্ক (get_started + greeting সহ — setPersistentMenu)
-// বাটন payload: __MENU__/__OFFERS__/__LOCATION__/__HELPLINE__/__TEXTMENU__ বা
-// __CAT__:<categoryId> (ক্যাটাগরি-কার্ড সরাসরি) — webhook-এর Rich-UI সামলায়।
+// বাটন payload: __MENU__/__OFFERS__/__LOCATION__/__HELPLINE__/__TEXTMENU__ /
+// __CAT__:<categoryId> (ক্যাটাগরি-কার্ড) / __ACT__:<botActionId> (কাস্টম অ্যাকশন)।
 import { ok } from '@/lib/api'
 import { requirePerm } from '@/lib/staff-auth'
 import { setPersistentMenu } from '@/lib/messenger'
@@ -12,6 +12,7 @@ import { SETTING_KEYS } from '@/lib/constants'
 import { db } from '@/lib/db'
 import {
   BOT_ACTIONS,
+  actPayload,
   botPersistentMenuEntries,
   catPayload,
   isValidMenuPayload,
@@ -21,19 +22,20 @@ import {
 const GREETING =
   'আসসালামু আলাইকুম! 👋 Tea and Treat-এ স্বাগতম — মেনু, অফার বা লোকেশন জানতে নিচের বাটনে চাপুন বা লিখুন।'
 
+// desc = কাস্টমার বাটনে ট্যাপ করলে ঠিক কী হয় (admin-প্যানেলে প্রতিটা রো-র নিচে mark হিসেবে দেখানো হয়)
 const FIXED_ACTIONS = [
-  { payload: BOT_ACTIONS.MENU, title: '🍕 মেনু কার্ড (সব খাবার)' },
-  { payload: BOT_ACTIONS.OFFERS, title: '🔥 আজকের অফার' },
-  { payload: BOT_ACTIONS.LOCATION, title: '📍 লোকেশন ও সময়' },
-  { payload: BOT_ACTIONS.HELPLINE, title: '☎️ হেল্পলাইন' },
-  { payload: BOT_ACTIONS.TEXTMENU, title: '📄 সাধারণ টেক্সট মেনু' },
+  { payload: BOT_ACTIONS.MENU, title: '🍕 মেনু', desc: 'সব খাবারের কার্ড-স্লাইডার + নিচে ক্যাটাগরি বাটন (সেট মেনু, বার্গার...) — ক্যাটাগরিতে ট্যাপ করলে ওই ক্যাটাগরির কার্ড' },
+  { payload: BOT_ACTIONS.OFFERS, title: '🔥 অফার', desc: 'চলমান অকেশন-অফার ও কুপন-কোডের কার্ড-স্লাইডার (ছাড়% + শর্ত সহ)' },
+  { payload: BOT_ACTIONS.LOCATION, title: '📍 লোকেশন', desc: 'দোকানের ঠিকানা ও খোলার সময় (AI নলেজ-বেস থেকে; AI নিভে থাকলে স্ট্যাটিক ঠিকানা)' },
+  { payload: BOT_ACTIONS.HELPLINE, title: '☎️ হেল্পলাইন', desc: 'ফোন নম্বর ও যোগাযোগের তথ্য (AI নলেজ-বেস থেকে)' },
+  { payload: BOT_ACTIONS.TEXTMENU, title: '📄 টেক্সট মেনু', desc: 'ছবি ছাড়া পুরো মেনু টেক্সট আকারে — ফ্রি-ফেসবুক/ডাটা-ছাড়া কাস্টমারের জন্য' },
 ]
 
 export async function GET() {
   const denied = await requirePerm('settings')
   if (denied) return denied
 
-  const [entries, categories] = await Promise.all([
+  const [entries, categories, customActions] = await Promise.all([
     botPersistentMenuEntries(),
     db.category.findMany({
       where: { active: true },
@@ -41,11 +43,24 @@ export async function GET() {
       select: { id: true, name: true },
       take: 20,
     }),
+    db.botAction.findMany({
+      orderBy: [{ sortOrder: 'asc' as const }, { createdAt: 'asc' as const }],
+      select: { id: true, title: true, desc: true, active: true },
+    }),
   ])
   return ok({
     entries,
     actions: FIXED_ACTIONS,
-    categories: categories.map((c) => ({ payload: catPayload(c.id), title: c.name })),
+    categories: categories.map((c) => ({
+      payload: catPayload(c.id),
+      title: c.name,
+      desc: `ওই ক্যাটাগরির সব খাবারের কার্ড-স্লাইডার (নাম + দাম + অর্ডার বাটন সহ)`,
+    })),
+    customActions: customActions.map((a) => ({
+      payload: actPayload(a.id),
+      title: a.title,
+      desc: a.desc || (a.active ? 'কাস্টম অ্যাকশন' : 'কাস্টম অ্যাকশন (বন্ধ আছে — ট্যাপ করলে মেনু যাবে)'),
+    })),
   })
 }
 

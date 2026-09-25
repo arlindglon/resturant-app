@@ -5217,8 +5217,10 @@ function SettingsTab({ onAuthRequired }: TabProps) {
             <p className="text-xs leading-snug text-stone-500">
               📋 পার্সিস্টেন্ট মেনু = কাস্টমারের চ্যাটবক্সের নিচে সবসময় থাকা ফিক্সড মেনু (🍕 মেনু · 🔥 অফার · 📍 লোকেশন · ☎️ হেল্পলাইন) — একসাথে "শুরু করুন" বাটন ও স্বাগতম গ্রিটিংও সেট হয় (Meta-র নিয়ম: মেনুর আগে Get Started লাগবেই)। একবার সেট করলেই সব কাস্টমারের জন্য চালু হয়।
             </p>
-            <MessengerMenuManager />
-            {metaTest && (
+            <p className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-xs leading-snug text-amber-800">
+              🤖 মেনু বাটন ম্যানেজার ও কাস্টম অ্যাকশন — সব এখন <b>🤖 মেসেঞ্জার ট্যাবে</b> একসাথে (উপরের ট্যাব-বারে)।
+            </p>
+              {metaTest && (
               <div
                 className={`rounded-lg border p-3 text-xs leading-snug ${
                   metaTest.tokenTest.ok
@@ -6445,7 +6447,7 @@ export default function AdminPage() {
   const tabAllowed = (id: string) => {
     if (id === 'keys') return isMain
     if (id === 'receipts' || id === 'customers') return canSee('tables')
-    if (id === 'occasions') return canSee('settings')
+    if (id === 'occasions' || id === 'messenger') return canSee('settings')
     return canSee(id)
   }
   const orderedTabs: [string, string][] = [
@@ -6457,6 +6459,7 @@ export default function AdminPage() {
     ['happy', 'হ্যাপি আওয়ার'],
     ['vouchers', 'ভাউচার'],
     ['occasions', '🎁 অকেশন অফার'],
+    ['messenger', '🤖 মেসেঞ্জার'],
     ['ledger', '🔒 সিকিউরিটি লেজার'],
     ['imgbb', 'ImgBB কি'],
     ['settings', 'সেটিংস'],
@@ -6595,6 +6598,9 @@ export default function AdminPage() {
             <TabsContent value="imgbb" className="mt-4">
               <ImgbbTab onAuthRequired={onAuthRequired} />
             </TabsContent>
+            <TabsContent value="messenger" className="mt-4">
+              <MessengerBotTab />
+            </TabsContent>
             <TabsContent value="settings" className="mt-4">
               <SettingsTab onAuthRequired={onAuthRequired} />
             </TabsContent>
@@ -6613,10 +6619,12 @@ export default function AdminPage() {
   )
 }
 
-/* ═════════ পার্সিস্টেন্ট-মেনু বাটন ম্যানেজার — add/edit/delete + Meta sync ═════════
- * কাস্টমারের চ্যাটবক্সের নিচের ফিক্সড মেনুর বাটনগুলো এখান থেকে বদলানো যায়:
- * বাটনের নাম, ক্রম, অ্যাকশন (মেনু/অফার/লোকেশন/হেল্পলাইন/টেক্সট-মেনু/যেকোনো ক্যাটাগরি)।
- * সেভ করলেই DB + Meta পেজ — দুটোতেই সঙ্গে সঙ্গে আপডেট হয়। */
+/* ═════════ 🤖 মেসেঞ্জার ট্যাব — বটের সব ম্যানেজমেন্ট এক জায়গায় ═════════
+ * অংশ ১: পার্সিস্টেন্ট-মেনু বাটন ম্যানেজার (add/edit/delete/ক্রম + প্রতিটা
+ *         বাটনের নিচে "ট্যাপ করলে কী হয়" mark) + Meta-তে sync
+ * অংশ ২: কাস্টম অ্যাকশন ম্যানেজার — নিজের বাটন বানান: টেক্সট-রিপ্লাই বা
+ *         কার্ড-স্লাইডার (প্রোমো-কোড, ডিটেইলস — যা খুশি)
+ * অংশ ৩: ফ্লো ব্যাখ্যা (কাস্টমার কী দেখবে) */
 interface MenuConfigEntry {
   title: string
   payload: string
@@ -6624,9 +6632,26 @@ interface MenuConfigEntry {
 interface MenuConfigAction {
   payload: string
   title: string
+  desc?: string
+}
+interface BotCardRow {
+  title: string
+  subtitle: string
+  imageUrl: string
+  buttonTitle: string
+  buttonUrl: string
+}
+interface BotActionRow {
+  id: string
+  title: string
+  desc: string
+  replyType: 'text' | 'cards'
+  replyText: string
+  cards: BotCardRow[]
+  active: boolean
 }
 
-function MessengerMenuManager() {
+function MessengerMenuManager({ onChanged }: { onChanged?: () => void }) {
   const [entries, setEntries] = useState<MenuConfigEntry[] | null>(null)
   const [actions, setActions] = useState<MenuConfigAction[]>([])
   const [saving, setSaving] = useState(false)
@@ -6634,12 +6659,12 @@ function MessengerMenuManager() {
   const [newPayload, setNewPayload] = useState('')
 
   const load = useCallback(async () => {
-    const res = await api.get<{ entries: MenuConfigEntry[]; actions: MenuConfigAction[]; categories: MenuConfigAction[] }>(
+    const res = await api.get<{ entries: MenuConfigEntry[]; actions: MenuConfigAction[]; categories: MenuConfigAction[]; customActions: MenuConfigAction[] }>(
       '/api/admin/messenger-menu-config'
     )
     if (res.ok && res.data) {
       setEntries(res.data.entries)
-      setActions([...res.data.actions, ...res.data.categories])
+      setActions([...res.data.actions, ...res.data.categories, ...res.data.customActions])
     } else {
       setEntries([])
     }
@@ -6649,6 +6674,8 @@ function MessengerMenuManager() {
     const t = setTimeout(load, 0)
     return () => clearTimeout(t)
   }, [load])
+
+  const descOf = (payload: string) => actions.find((a) => a.payload === payload)?.desc || ''
 
   const update = (i: number, patch: Partial<MenuConfigEntry>) =>
     setEntries((prev) => (prev ? prev.map((e, idx) => (idx === i ? { ...e, ...patch } : e)) : prev))
@@ -6683,70 +6710,83 @@ function MessengerMenuManager() {
     if (!res.ok || !res.data?.ok) return toast.error(res.data?.error || res.error || 'সেভ করা যায়নি')
     if (res.data.synced === false) toast.warning(`💾 সেভ হয়েছে — কিন্তু Meta-তে সিঙ্ক হয়নি: ${res.data.error || ''}`)
     else toast.success('✅ সেভ হয়েছে ও Meta পেজে সিঙ্ক হয়েছে — Messenger-এ নিচের ☰ আইকনে দেখুন')
+    onChanged?.()
   }
 
-  if (!entries) return <p className="mt-3 text-xs text-stone-400">মেনু বাটন লোড হচ্ছে…</p>
+  if (!entries) return <p className="text-xs text-stone-400">মেনু বাটন লোড হচ্ছে…</p>
 
   return (
-    <div className="mt-3 space-y-2 rounded-xl border border-stone-200 bg-stone-50/60 p-3">
-      <p className="text-xs font-black text-stone-700">
-        🧩 মেনু বাটন ম্যানেজার — বাটন যোগ / এডিট / ডিলিট করুন (সেভ = সঙ্গে সঙ্গে Meta-তে)
+    <div className="space-y-2 rounded-xl border border-stone-200 bg-stone-50/60 p-4">
+      <p className="text-sm font-black text-stone-800">
+        📋 পার্সিস্টেন্ট মেনু বাটন — যোগ / এডিট / ডিলিট / ক্রম বদল
+      </p>
+      <p className="text-xs leading-snug text-stone-500">
+        এগুলোই কাস্টমারের চ্যাটবক্সের নিচে সবসময় থাকা ☰ মেনুর বাটন। প্রতিটা বাটনের নিচে <b>ট্যাপ করলে কী হয়</b> লেখা থাকে।
+        সেভ করলেই Meta পেজে সিঙ্ক হয় ("শুরু করুন" বাটন + স্বাগতম গ্রিটিং সহ)।
       </p>
       {entries.map((e, i) => (
-        <div key={`${i}-${e.payload}`} className="flex items-center gap-1.5">
-          <Input
-            value={e.title}
-            onChange={(ev) => update(i, { title: ev.target.value })}
-            maxLength={20}
-            aria-label={`বাটন ${i + 1} নাম`}
-            className="h-8 w-28 shrink-0 text-xs font-bold"
-          />
-          <select
-            value={e.payload}
-            onChange={(ev) => update(i, { payload: ev.target.value })}
-            aria-label={`বাটন ${i + 1} অ্যাকশন`}
-            className="h-8 min-w-0 flex-1 rounded-md border border-stone-300 bg-white px-2 text-xs"
-          >
-            {actions.some((a) => a.payload === e.payload) ? null : <option value={e.payload}>⚠️ পুরনো/অজানা অ্যাকশন</option>}
-            {actions.map((a) => (
-              <option key={a.payload} value={a.payload}>
-                {a.title}
-              </option>
-            ))}
-          </select>
-          <Button size="sm" variant="outline" onClick={() => move(i, -1)} disabled={i === 0} aria-label="উপরে" className="h-8 px-2">
-            ▲
-          </Button>
-          <Button
-            size="sm"
-            variant="outline"
-            onClick={() => move(i, 1)}
-            disabled={i === entries.length - 1}
-            aria-label="নিচে"
-            className="h-8 px-2"
-          >
-            ▼
-          </Button>
-          <Button
-            size="sm"
-            variant="outline"
-            onClick={() => remove(i)}
-            aria-label="ডিলিট"
-            className="h-8 px-2 font-black text-red-600 hover:bg-red-50"
-          >
-            🗑
-          </Button>
+        <div key={`${i}-${e.payload}`} className="rounded-lg border border-stone-200 bg-white p-2">
+          <div className="flex items-center gap-1.5">
+            <span className="w-5 shrink-0 text-center text-[11px] font-black text-stone-400">{i + 1}</span>
+            <Input
+              value={e.title}
+              onChange={(ev) => update(i, { title: ev.target.value })}
+              maxLength={20}
+              aria-label={`বাটন ${i + 1} নাম`}
+              className="h-8 w-28 shrink-0 text-xs font-bold"
+            />
+            <select
+              value={e.payload}
+              onChange={(ev) => update(i, { payload: ev.target.value })}
+              aria-label={`বাটন ${i + 1} অ্যাকশন`}
+              className="h-8 min-w-0 flex-1 rounded-md border border-stone-300 bg-white px-2 text-xs"
+            >
+              {actions.some((a) => a.payload === e.payload) ? null : (
+                <option value={e.payload}>⚠️ পুরনো/অজানা অ্যাকশন</option>
+              )}
+              {actions.map((a) => (
+                <option key={a.payload} value={a.payload}>
+                  {a.title}
+                </option>
+              ))}
+            </select>
+            <Button size="sm" variant="outline" onClick={() => move(i, -1)} disabled={i === 0} aria-label="উপরে" className="h-8 px-2">
+              ▲
+            </Button>
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() => move(i, 1)}
+              disabled={i === entries.length - 1}
+              aria-label="নিচে"
+              className="h-8 px-2"
+            >
+              ▼
+            </Button>
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() => remove(i)}
+              aria-label="ডিলিট"
+              className="h-8 px-2 font-black text-red-600 hover:bg-red-50"
+            >
+              🗑
+            </Button>
+          </div>
+          <p className="mt-1.5 pl-7 text-[11px] leading-snug text-emerald-700">
+            ✅ ট্যাপ করলে: {descOf(e.payload) || '—'}
+          </p>
         </div>
       ))}
       {/* নতুন বাটন যোগ */}
-      <div className="flex items-center gap-1.5 border-t border-dashed border-stone-300 pt-2">
+      <div className="flex items-center gap-1.5 rounded-lg border border-dashed border-stone-300 bg-white p-2">
         <Input
-          placeholder="নতুন বাটনের নাম"
+          placeholder="নতুন বাটনের নাম (যেমন: 🎁 প্রোমো)"
           value={newTitle}
           onChange={(ev) => setNewTitle(ev.target.value)}
           maxLength={20}
           aria-label="নতুন বাটনের নাম"
-          className="h-8 w-28 shrink-0 text-xs"
+          className="h-8 w-36 shrink-0 text-xs"
         />
         <select
           value={newPayload}
@@ -6765,13 +6805,292 @@ function MessengerMenuManager() {
           ➕ যোগ
         </Button>
       </div>
+      {newPayload && (
+        <p className="pl-1 text-[11px] leading-snug text-emerald-700">
+          ✅ এই অ্যাকশনটা ট্যাপ করলে: {descOf(newPayload) || '—'}
+        </p>
+      )}
       <Button onClick={save} disabled={saving} className="w-full font-black">
         {saving ? <Loader2 className="h-4 w-4 animate-spin" /> : '💾'} সেভ করুন ও Meta-তে সিঙ্ক করুন
       </Button>
       <p className="text-[11px] leading-snug text-stone-500">
-        টিপ: ক্যাটাগরি বাটন (যেমন 🍔 বার্গার) যোগ করলে কাস্টমার এক ট্যাপেই সেই ক্যাটাগরির খাবারের কার্ড-স্লাইডার পাবে — মেনু থেকে
-        অটো, নতুন করে কিছু লিখতে হবে না।
+        টিপ: নিচের "কাস্টম অ্যাকশন"-এ নিজের বাটন বানিয়ে (যেমন 🎁 প্রোমো কোড) এখানে যোগ করতে পারবেন।
       </p>
+    </div>
+  )
+}
+
+/* ───────── কাস্টম অ্যাকশন ম্যানেজার — নিজের বাটন + টেক্সট/কার্ড রিপ্লাই ───────── */
+const EMPTY_CARD: BotCardRow = { title: '', subtitle: '', imageUrl: '', buttonTitle: '🛒 অর্ডার করুন', buttonUrl: '' }
+
+function BotActionsManager({ onChanged }: { onChanged?: () => void }) {
+  const [rows, setRows] = useState<BotActionRow[] | null>(null)
+  const [busy, setBusy] = useState(false)
+  const [editing, setEditing] = useState<BotActionRow | null>(null) // null = closed, id-less = new
+
+  const load = useCallback(async () => {
+    const res = await api.get<{ actions: BotActionRow[] }>('/api/admin/bot-actions')
+    setRows(res.ok && res.data ? res.data.actions : [])
+  }, [])
+
+  useEffect(() => {
+    const t = setTimeout(load, 50)
+    return () => clearTimeout(t)
+  }, [load])
+
+  const refreshAll = () => {
+    void load()
+    onChanged?.()
+  }
+
+  const saveEdit = async () => {
+    if (!editing) return
+    if (!editing.title.trim()) return toast.error('অ্যাকশনের নাম দিন')
+    if (editing.replyType === 'text' && !editing.replyText.trim()) return toast.error('টেক্সট-রিপ্লাই লিখুন')
+    if (editing.replyType === 'cards' && !editing.cards.some((c) => c.title.trim())) return toast.error('অন্তত ১টা কার্ডের নাম দিন')
+    setBusy(true)
+    const body = {
+      id: editing.id || undefined,
+      title: editing.title,
+      desc: editing.desc,
+      replyType: editing.replyType,
+      replyText: editing.replyText,
+      cards: editing.replyType === 'cards' ? editing.cards.filter((c) => c.title.trim()) : [],
+      active: editing.active,
+    }
+    const res = editing.id
+      ? await api.put<{ ok: boolean; error?: string }>('/api/admin/bot-actions', body)
+      : await api.post<{ ok: boolean; error?: string }>('/api/admin/bot-actions', body)
+    setBusy(false)
+    if (!res.ok || !res.data?.ok) return toast.error(res.data?.error || res.error || 'সেভ করা যায়নি')
+    toast.success(editing.id ? '✅ অ্যাকশন আপডেট হয়েছে' : '✅ নতুন কাস্টম অ্যাকশন তৈরি হয়েছে — উপরের মেনু বাটনে যোগ করুন')
+    setEditing(null)
+    refreshAll()
+  }
+
+  const del = async (row: BotActionRow) => {
+    setBusy(true)
+    const res = await api.del<{ ok: boolean }>(`/api/admin/bot-actions?id=${encodeURIComponent(row.id)}`)
+    setBusy(false)
+    if (!res.ok || !res.data?.ok) return toast.error('ডিলিট করা যায়নি')
+    toast.success('🗑 ডিলিট হয়েছে (মেনু-বাটন থেকেও সরিয়ে নিন)')
+    refreshAll()
+  }
+
+  const toggle = async (row: BotActionRow) => {
+    setBusy(true)
+    const res = await api.put<{ ok: boolean }>(
+      '/api/admin/bot-actions',
+      { ...row, cards: row.cards, active: !row.active } as unknown
+    )
+    setBusy(false)
+    if (!res.ok || !res.data?.ok) return toast.error('বদলানো যায়নি')
+    refreshAll()
+  }
+
+  if (!rows) return <p className="text-xs text-stone-400">কাস্টম অ্যাকশন লোড হচ্ছে…</p>
+
+  const updCard = (idx: number, patch: Partial<BotCardRow>) =>
+    setEditing((prev) =>
+      prev ? { ...prev, cards: prev.cards.map((c, i) => (i === idx ? { ...c, ...patch } : c)) } : prev
+    )
+
+  return (
+    <div className="space-y-2 rounded-xl border border-stone-200 bg-stone-50/60 p-4">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <p className="text-sm font-black text-stone-800">⭐ কাস্টম অ্যাকশন — নিজের বাটন বানান</p>
+        <Button
+          size="sm"
+          onClick={() => setEditing({ id: '', title: '', desc: '', replyType: 'text', replyText: '', cards: [], active: true })}
+          className="font-black"
+        >
+          ➕ নতুন কাস্টম অ্যাকশন
+        </Button>
+      </div>
+      <p className="text-xs leading-snug text-stone-500">
+        যেমন: 🎁 প্রোমো কোড (কুপন-কার্ড), 🏪 ব্রাঞ্চ তালিকা (কার্ড), 🕒 বিশেষ ঘোষণা (টেক্সট)। বানানোর পর উপরের
+        <b> মেনু বাটন</b> তালিকায় ➕ দিয়ে যোগ করুন — কাস্টমার ট্যাপ করলেই ইনস্ট্যান্ট রিপ্লাই (AI ছাড়া)।
+      </p>
+      {rows.length === 0 && <p className="text-xs text-stone-400">এখনো কোনো কাস্টম অ্যাকশন নেই।</p>}
+      {rows.map((r) => (
+        <div key={r.id} className="rounded-lg border border-stone-200 bg-white p-2.5">
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="text-sm font-black text-stone-800">{r.title}</span>
+            {r.replyType === 'cards' ? (
+              <Badge variant="outline" className="border-sky-200 bg-sky-50 text-[10px] text-sky-700">
+                🃏 কার্ড ×{r.cards.length}
+              </Badge>
+            ) : (
+              <Badge variant="outline" className="border-stone-200 bg-stone-50 text-[10px] text-stone-600">
+                📝 টেক্সট
+              </Badge>
+            )}
+            {!r.active && (
+              <Badge variant="outline" className="border-red-200 bg-red-50 text-[10px] text-red-600">
+                বন্ধ
+              </Badge>
+            )}
+            <span className="ml-auto flex gap-1.5">
+              <Button size="sm" variant="outline" onClick={() => toggle(r)} disabled={busy} className="h-7 px-2 text-[11px]">
+                {r.active ? '⏸ বন্ধ করুন' : '▶️ চালু করুন'}
+              </Button>
+              <Button size="sm" variant="outline" onClick={() => setEditing({ ...r, cards: r.cards.map((c) => ({ ...c })) })} className="h-7 px-2 text-[11px]">
+                ✏️ এডিট
+              </Button>
+              <Button size="sm" variant="outline" onClick={() => del(r)} disabled={busy} className="h-7 px-2 text-[11px] font-black text-red-600 hover:bg-red-50">
+                🗑
+              </Button>
+            </span>
+          </div>
+          {r.desc && <p className="mt-1 text-[11px] text-stone-500">{r.desc}</p>}
+        </div>
+      ))}
+
+      {/* এডিটর (নতুন + এডিট) */}
+      {editing && (
+        <div className="space-y-3 rounded-lg border-2 border-amber-300 bg-white p-3">
+          <p className="text-xs font-black text-amber-700">{editing.id ? '✏️ অ্যাকশন এডিট' : '➕ নতুন কাস্টম অ্যাকশন'}</p>
+          <div className="grid gap-2 sm:grid-cols-2">
+            <div>
+              <Label className="text-xs">বাটনের নাম (≤২০ অক্ষর, ইমোজি সহ)</Label>
+              <Input
+                value={editing.title}
+                onChange={(e) => setEditing({ ...editing, title: e.target.value })}
+                maxLength={20}
+                placeholder="🎁 প্রোমো কোড"
+                className="h-9 text-sm font-bold"
+              />
+            </div>
+            <div>
+              <Label className="text-xs">ব্যাখ্যা (admin-প্যানেলের mark — ট্যাপ করলে কী হয়)</Label>
+              <Input
+                value={editing.desc}
+                onChange={(e) => setEditing({ ...editing, desc: e.target.value })}
+                maxLength={190}
+                placeholder="চলমান প্রোমো কোডের কার্ড দেখায়"
+                className="h-9 text-sm"
+              />
+            </div>
+          </div>
+          <div className="flex items-center gap-3">
+            <Label className="text-xs">রিপ্লাই ধরন:</Label>
+            <label className="flex items-center gap-1.5 text-xs font-bold">
+              <input
+                type="radio"
+                checked={editing.replyType === 'text'}
+                onChange={() => setEditing({ ...editing, replyType: 'text' })}
+                name={`rt-${editing.id || 'new'}`}
+              />{' '}
+              📝 সাধারণ টেক্সট
+            </label>
+            <label className="flex items-center gap-1.5 text-xs font-bold">
+              <input
+                type="radio"
+                checked={editing.replyType === 'cards'}
+                onChange={() =>
+                  setEditing({ ...editing, replyType: 'cards', cards: editing.cards.length ? editing.cards : [{ ...EMPTY_CARD }] })
+                }
+                name={`rt-${editing.id || 'new'}`}
+              />{' '}
+              🃏 কার্ড-স্লাইডার
+            </label>
+          </div>
+          {editing.replyType === 'text' ? (
+            <div>
+              <Label className="text-xs">রিপ্লাই-টেক্সট (কাস্টমার এটাই পাবে)</Label>
+              <Textarea
+                value={editing.replyText}
+                onChange={(e) => setEditing({ ...editing, replyText: e.target.value })}
+                rows={4}
+                maxLength={1900}
+                placeholder="🎁 আজকের প্রোমো: TREAT20 — ২০% ছাড়, সব আইটেমে..."
+                className="text-sm"
+              />
+            </div>
+          ) : (
+            <div className="space-y-2">
+              {editing.cards.map((c, i) => (
+                <div key={i} className="space-y-1.5 rounded-lg border border-stone-200 bg-stone-50/70 p-2">
+                  <div className="flex items-center justify-between">
+                    <p className="text-[11px] font-black text-stone-500">কার্ড {i + 1}</p>
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      onClick={() => setEditing({ ...editing, cards: editing.cards.filter((_, x) => x !== i) })}
+                      className="h-6 px-2 text-[11px] text-red-600"
+                    >
+                      🗑 কার্ড
+                    </Button>
+                  </div>
+                  <div className="grid gap-1.5 sm:grid-cols-2">
+                    <Input value={c.title} onChange={(e) => updCard(i, { title: e.target.value })} maxLength={80} placeholder="কার্ডের নাম (যেমন: TREAT20 — ২০% ছাড়)" className="h-8 text-xs" />
+                    <Input value={c.subtitle} onChange={(e) => updCard(i, { subtitle: e.target.value })} maxLength={80} placeholder="ছোট বর্ণনা (ঐচ্ছিক)" className="h-8 text-xs" />
+                    <Input value={c.imageUrl} onChange={(e) => updCard(i, { imageUrl: e.target.value })} placeholder="ছবির URL (https://... — ঐচ্ছিক)" className="h-8 text-xs" />
+                    <Input value={c.buttonTitle} onChange={(e) => updCard(i, { buttonTitle: e.target.value })} maxLength={20} placeholder="বাটন (🛒 অর্ডার করুন)" className="h-8 text-xs" />
+                    <Input value={c.buttonUrl} onChange={(e) => updCard(i, { buttonUrl: e.target.value })} placeholder="বাটনের লিংক (ঐচ্ছিক — না দিলে সাইট/অর্ডার-হেল্প)" className="h-8 text-xs sm:col-span-2" />
+                  </div>
+                </div>
+              ))}
+              {editing.cards.length < 10 && (
+                <Button size="sm" variant="outline" onClick={() => setEditing({ ...editing, cards: [...editing.cards, { ...EMPTY_CARD }] })} className="font-black">
+                  ➕ কার্ড যোগ করুন
+                </Button>
+              )}
+            </div>
+          )}
+          <div className="flex items-center gap-2">
+            <Button onClick={saveEdit} disabled={busy} className="font-black">
+              {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : '💾'} সেভ করুন
+            </Button>
+            <Button variant="outline" onClick={() => setEditing(null)} disabled={busy} className="border-stone-300 font-bold">
+              বাতিল
+            </Button>
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
+
+/* ───────── ট্যাব র‍্যাপার ───────── */
+function MessengerBotTab() {
+  const [reloadKey, setReloadKey] = useState(0)
+  const [syncing, setSyncing] = useState(false)
+
+  const syncNow = async () => {
+    setSyncing(true)
+    const res = await api.post<{ ok: boolean; error?: string }>('/api/admin/messenger-menu')
+    setSyncing(false)
+    if (!res.ok || !res.data) return toast.error(res.error || 'সিঙ্ক করা যায়নি')
+    if (res.data.ok) toast.success('✅ মেনু + "শুরু করুন" বাটন Meta পেজে সেট হয়েছে')
+    else toast.error(`Meta রিজেক্ট করেছে: ${res.data.error || 'অজানা ত্রুটি'}`)
+  }
+
+  return (
+    <div className="space-y-4">
+      <Card className="border-stone-200">
+        <CardHeader className="pb-2">
+          <CardTitle className="flex flex-wrap items-center gap-2 text-base font-black">
+            🤖 মেসেঞ্জার বট ম্যানেজার
+            <span className="ml-auto flex gap-2">
+              <Button onClick={syncNow} disabled={syncing} variant="outline" className="h-8 border-stone-300 text-xs font-black text-stone-700 hover:bg-stone-50">
+                {syncing ? <Loader2 className="h-4 w-4 animate-spin" /> : '🔄'} এখনই Meta-তে সিঙ্ক
+              </Button>
+            </span>
+          </CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <div className="rounded-lg border border-emerald-200 bg-emerald-50 p-3 text-xs leading-relaxed text-emerald-900">
+            <p className="font-black">কাস্টমারের ফ্লো (সব ইনস্ট্যান্ট — AI লাগে না):</p>
+            <p>
+              📱 চ্যাট খুললে <b>&quot;শুরু করুন&quot;</b> → ওয়েলকাম + সব খাবারের কার্ড-স্লাইডার → নিচে ক্যাটাগরি বাটন (সেট মেনু, বার্গার...)
+              → ট্যাপে ওই ক্যাটাগরির কার্ড → <b>⬅️ পেছনে</b> বাটনে সব-খাবার ভিউতে ফেরা। ☰ মেনু সবসময় চ্যাটবক্সের নিচে থাকে।
+            </p>
+          </div>
+          <MessengerMenuManager key={`menu-${reloadKey}`} onChanged={() => setReloadKey((k) => k + 1)} />
+          <BotActionsManager key={`acts-${reloadKey}`} onChanged={() => setReloadKey((k) => k + 1)} />
+        </CardContent>
+      </Card>
     </div>
   )
 }
