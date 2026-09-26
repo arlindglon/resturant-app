@@ -4,7 +4,7 @@ import { ok, fail } from '@/lib/api'
 import { getAllSettings, getSetting, setSettings } from '@/lib/settings'
 import { SETTING_KEYS } from '@/lib/constants'
 import { requirePerm } from '@/lib/staff-auth'
-import { messengerConfigured, pageTokenInfo } from '@/lib/messenger'
+import { messengerConfigured, pageTokenInfo, verifyTokenInfo } from '@/lib/messenger'
 
 /** Public origin of this deployment (Vercel or local) — for webhook URL display */
 function baseUrl(req: NextRequest): string {
@@ -29,6 +29,7 @@ export async function GET(req: NextRequest) {
       sessionDurationHint: 'QR স্ক্যানে তৈরি HMAC সেশন কুকির মেয়াদ (মিনিট)। নতুন স্ক্যান থেকে কার্যকর হবে।',
       messengerConfigured: await messengerConfigured(),
       tokenInfo: await pageTokenInfo(),
+      verifyTokenInfo: await verifyTokenInfo(),
       metaEnv: {
         pageToken: Boolean(process.env.META_PAGE_TOKEN),
         pageId: Boolean(process.env.META_PAGE_ID),
@@ -79,6 +80,14 @@ export async function PUT(req: NextRequest) {
       const tok = String(v).trim().replace(/[\s\u200B-\u200D]/g, '')
       if (tok && !/^EAA[a-zA-Z0-9_-]{20,}$/.test(tok)) {
         return fail('টোকেনটি দেখতে Page Access Token-এর মতো নয় (EAA… দিয়ে শুরু হয়) — আবার কপি করুন।', 400)
+      }
+      updates[k] = tok
+    } else if (k === SETTING_KEYS.META_VERIFY_TOKEN) {
+      // Webhook Verify Token — ফাঁকা মানে env-এ ফেরা; স্পেস/নতুন-লাইন ছাঁটাই,
+      // ৬–১২৮ অক্ষরের মধ্যে হতে হবে (Meta ড্যাশবোর্ডে যেটা পেস্ট করা হয়)
+      const tok = String(v).trim().replace(/[\s\u200B-\u200D]/g, '')
+      if (tok && (tok.length < 6 || tok.length > 128)) {
+        return fail('Verify Token ৬–১২৮ অক্ষরের হতে হবে — আবার দিন।', 400)
       }
       updates[k] = tok
     } else {

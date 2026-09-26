@@ -19,7 +19,7 @@ import { NextRequest, after } from 'next/server'
 import crypto from 'crypto'
 import { db } from '@/lib/db'
 import { fail, ok } from '@/lib/api'
-import { fetchMessengerProfile, askPhoneQuickReply, sendReceipt, sendText, sendRnOptInRequest, sendQuickReplies } from '@/lib/messenger'
+import { fetchMessengerProfile, askPhoneQuickReply, sendReceipt, sendText, sendRnOptInRequest, sendQuickReplies, verifyToken } from '@/lib/messenger'
 import { botActionFromPayload, botActionFromText, handleBotUiAction, botQuickReplies, isGreetingText, BOT_ACTIONS } from '@/lib/bot-ui'
 import { applyBirthdayDiscount } from '@/lib/birthday'
 import { setSettings, getSetting } from '@/lib/settings'
@@ -80,7 +80,9 @@ export async function GET(req: NextRequest) {
   const mode = params.get('hub.mode')
   const token = params.get('hub.verify_token')
   const challenge = params.get('hub.challenge')
-  if (mode === 'subscribe' && token === process.env.META_VERIFY_TOKEN) {
+  // verify token সোর্স: admin সেটিং (meta_verify_token) আগে, না মিললে env
+  // META_VERIFY_TOKEN — admin প্যানেল থেকে সেভ করলেই সঙ্গে সঙ্গে কার্যকর।
+  if (mode === 'subscribe' && token && token === (await verifyToken())) {
     // successful handshake = the webhook was just saved in the Meta App dashboard
     await recordVerify()
     return new Response(challenge, { status: 200 })

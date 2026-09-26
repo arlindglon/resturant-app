@@ -230,6 +230,7 @@ interface SettingsMeta {
   lastWebhookInfo: string
   lastVerifyAt: string
   tokenInfo?: { source: 'admin' | 'env' | 'none'; tail: string }
+  verifyTokenInfo?: { source: 'admin' | 'env' | 'none'; tail: string }
 }
 
 interface MessengerTestResult {
@@ -246,6 +247,7 @@ interface MessengerTestResult {
   sendProbe: { psid: string | null; ok: boolean; error: string | null; hint: string | null } | null
   env: { pageToken: boolean; pageId: boolean; verifyToken: boolean; appSecret: boolean }
   tokenInfo?: { source: 'admin' | 'env' | 'none'; tail: string }
+  verifyTokenInfo?: { source: 'admin' | 'env' | 'none'; tail: string }
   lastWebhookAt: string
   lastWebhookInfo: string
   lastVerifyAt: string
@@ -4573,6 +4575,8 @@ function SettingsTab({ onAuthRequired }: TabProps) {
   const [rnBroadcastText, setRnBroadcastText] = useState('')
   const [tokenInput, setTokenInput] = useState('')
   const [tokenSaving, setTokenSaving] = useState(false)
+  const [verifyInput, setVerifyInput] = useState('')
+  const [verifySaving, setVerifySaving] = useState(false)
   const logoFileRef = useRef<HTMLInputElement>(null)
 
   const load = useCallback(async () => {
@@ -4711,6 +4715,7 @@ function SettingsTab({ onAuthRequired }: TabProps) {
             ...prev,
             metaEnv: res.data!.env,
             tokenInfo: res.data!.tokenInfo ?? prev.tokenInfo,
+            verifyTokenInfo: res.data!.verifyTokenInfo ?? prev.verifyTokenInfo,
             lastWebhookAt: res.data!.lastWebhookAt,
             lastWebhookInfo: res.data!.lastWebhookInfo,
             lastVerifyAt: res.data!.lastVerifyAt,
@@ -4742,6 +4747,30 @@ function SettingsTab({ onAuthRequired }: TabProps) {
     if (!res.ok) return toast.error(res.error || 'টোকেন সেভ হয়নি')
     setTokenInput('')
     toast.success(clear ? 'admin টোকেন মুছে ফেলা হয়েছে — এখন Vercel env-এর টোকেন চলছে' : '✅ নতুন Page Access Token সেভ হয়েছে — সঙ্গে সঙ্গে কার্যকর! নিচের টেস্ট বাটনে যাচাই করুন')
+    await load()
+  }
+
+  // 🔐 Webhook Verify Token — admin সেটিং হিসেবে সেভ (মালিকের নির্দেশ)। Meta
+  // অ্যাপ ড্যাশবোর্ডে webhook সেভ করার সময় একই টোকেন পেস্ট করতে হয়। Vercel
+  // env ছোঁয়া/রিডিপ্লয় ছাড়াই এখান থেকে বদলানো যায় — সেভ হলেই কার্যকর।
+  const saveVerifyToken = async (clear = false) => {
+    const v = verifyInput.trim().replace(/\s+/g, '')
+    if (!clear && !v) return toast.error('আগে Verify Token-টি লিখুন')
+    if (!clear && (v.length < 6 || v.length > 128)) {
+      return toast.error('Verify Token ৬–১২৮ অক্ষরের হতে হবে')
+    }
+    setVerifySaving(true)
+    const res = await api.put<{ settings: Record<string, string> }>('/api/admin/settings', {
+      [SETTING_KEYS.META_VERIFY_TOKEN]: clear ? '' : v,
+    })
+    setVerifySaving(false)
+    if (!res.ok) return toast.error(res.error || 'Verify Token সেভ হয়নি')
+    setVerifyInput('')
+    toast.success(
+      clear
+        ? 'admin Verify Token মুছে ফেলা হয়েছে — এখন Vercel env-এর টোকেন চলছে'
+        : '✅ Webhook Verify Token সেভ হয়েছে — Meta অ্যাপ ড্যাশবোর্ডে webhook সেভ/রি-সেভ করলেই কাজ করবে'
+    )
     await load()
   }
 
@@ -5270,6 +5299,53 @@ function SettingsTab({ onAuthRequired }: TabProps) {
             </div>
           </div>
 
+          {/* 🔐 Webhook Verify Token — admin সেটিং (Vercel env ছাড়াই বদলানো যায়) */}
+          <div className="space-y-2 rounded-lg border border-stone-200 p-3">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <p className="text-sm font-black text-stone-800">🔐 Webhook Verify Token</p>
+              <span
+                className={`rounded-full px-2 py-0.5 text-[10px] font-black ${
+                  meta.verifyTokenInfo?.source === 'admin'
+                    ? 'bg-emerald-100 text-emerald-700'
+                    : meta.verifyTokenInfo?.source === 'env'
+                      ? 'bg-sky-100 text-sky-700'
+                      : 'bg-red-100 text-red-700'
+                }`}
+              >
+                {meta.verifyTokenInfo?.source === 'admin'
+                  ? `নিচের ফিল্ডের টোকেন চলছে (…${meta.verifyTokenInfo?.tail || ''})`
+                  : meta.verifyTokenInfo?.source === 'env'
+                    ? `Vercel env টোকেন চলছে (…${meta.verifyTokenInfo?.tail || ''})`
+                    : 'কোনো Verify Token নেই ❌'}
+              </span>
+            </div>
+            <p className="text-xs leading-snug text-stone-500">
+              Meta অ্যাপ ড্যাশবোর্ডে (developers.facebook.com) webhook সেভ করার সময় <b>Verify Token</b> ঘরে ঠিক এই টোকেনটাই
+              পেস্ট করতে হয়। এখানে সেভ করলেই কার্যকর — Vercel env/রিডিপ্লয় লাগবে না। Callback URL:{' '}
+              <span className="font-mono">{meta.webhookUrl}</span>
+            </p>
+            <div className="flex flex-col gap-2 sm:flex-row">
+              <Input
+                type="password"
+                value={verifyInput}
+                onChange={(e) => setVerifyInput(e.target.value)}
+                placeholder="যেমন: my_shop_verify_99"
+                className="flex-1 font-mono text-xs"
+                autoComplete="off"
+              />
+              <div className="flex gap-2">
+                <Button onClick={() => saveVerifyToken(false)} disabled={verifySaving} size="sm" className="flex-1 bg-emerald-600 font-black text-white hover:bg-emerald-700 sm:flex-none">
+                  {verifySaving ? <Loader2 className="h-4 w-4 animate-spin" /> : '💾'} সেভ করুন
+                </Button>
+                {meta.verifyTokenInfo?.source === 'admin' && (
+                  <Button onClick={() => saveVerifyToken(true)} disabled={verifySaving} size="sm" variant="outline" className="border-red-200 font-black text-red-600 hover:bg-red-50">
+                    🗑️ মুছুন
+                  </Button>
+                )}
+              </div>
+            </div>
+          </div>
+
           {/* checklist: what is configured vs missing */}
           <div className="space-y-3 rounded-lg border border-stone-200 p-3">
             <p className="text-[11px] font-black uppercase tracking-wide text-stone-400">কনফিগারেশন চেকলিস্ট</p>
@@ -5281,9 +5357,9 @@ function SettingsTab({ onAuthRequired }: TabProps) {
             />
             <MetaCheckRow
               label="ভেরিফাই টোকেন"
-              code="META_VERIFY_TOKEN (Vercel env)"
-              ok={!!meta.metaEnv?.verifyToken}
-              note="এটি ছাড়া Meta অ্যাপ ড্যাশবোর্ডে webhook সেভ/ভেরিফাই করা যাবে না।"
+              code="admin সেটিং / META_VERIFY_TOKEN (env)"
+              ok={meta.verifyTokenInfo ? meta.verifyTokenInfo.source !== 'none' : !!meta.metaEnv?.verifyToken}
+              note="এটি ছাড়া Meta অ্যাপ ড্যাশবোর্ডে webhook সেভ/ভেরিফাই করা যাবে না। উপরের 🔐 ফিল্ড থেকে সেট করুন।"
             />
             <MetaCheckRow
               label="অ্যাপ সিক্রেট (ঐচ্ছিক)"

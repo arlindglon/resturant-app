@@ -93,6 +93,37 @@ export async function pageTokenInfo(): Promise<{ source: 'admin' | 'env' | 'none
   return { source: 'none', tail: '' }
 }
 
+/**
+ * Webhook Verify Token রেজোলিউশন (webhook GET-handshake-এ ব্যবহৃত):
+ *  ১) admin সেটিং `meta_verify_token` — admin প্যানেল থেকে সেভ করা (মালিকের
+ *     নির্দেশ: verify token এখন admin প্যানেল থেকেই বদলানো যাবে, Vercel env
+ *     ছোঁয়া/রিডিপ্লয় লাগবে না)।
+ *  ২) না থাকলে Vercel env META_VERIFY_TOKEN (পুরনো পথ — backward compatible)।
+ */
+export async function verifyToken(): Promise<string> {
+  try {
+    const adminTok = (await getSetting(SETTING_KEYS.META_VERIFY_TOKEN)).trim()
+    if (adminTok) return adminTok
+  } catch {
+    /* DB blip → env fallback */
+  }
+  return process.env.META_VERIFY_TOKEN || ''
+}
+
+/** admin প্যানেলের verify-token-সোর্স ডায়াগনস্টিকস — কখনোই পুরো ফেরায় না (শেষ ৪ অক্ষর) */
+export async function verifyTokenInfo(): Promise<{ source: 'admin' | 'env' | 'none'; tail: string }> {
+  let adminTok = ''
+  try {
+    adminTok = (await getSetting(SETTING_KEYS.META_VERIFY_TOKEN)).trim()
+  } catch {
+    /* ignore */
+  }
+  if (adminTok) return { source: 'admin', tail: adminTok.slice(-4) }
+  const envTok = (process.env.META_VERIFY_TOKEN || '').trim()
+  if (envTok) return { source: 'env', tail: envTok.slice(-4) }
+  return { source: 'none', tail: '' }
+}
+
 export async function messengerConfigured(): Promise<boolean> {
   // Only the Page Token is functionally required: Graph /me/messages resolves
   // the page from the token itself. META_PAGE_ID is optional (informational).
