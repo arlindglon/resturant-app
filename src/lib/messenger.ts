@@ -130,6 +130,20 @@ export async function messengerConfigured(): Promise<boolean> {
   return Boolean(await pageToken())
 }
 
+/**
+ * শেষ ব্যর্থ পাঠানোর হুবহু Graph error + বাংলা ফিক্স-ইঙ্গিত — admin ব্রডকাস্ট/
+ * মেসেজ route-গুলো ব্যর্থ হলে এটা রেসপন্সেই দেয়, তাই "যায়নি" ছাড়া কারণও দেখা যায়।
+ */
+export async function lastSendErrorWithHint(): Promise<string> {
+  try {
+    const err = (await getSetting(KEY_LAST_SEND_ERROR)).trim()
+    if (!err) return ''
+    return `${err.slice(0, 300)}${sendErrorHint(err) ? ` 💡 ${sendErrorHint(err)}` : ''}`
+  } catch {
+    return ''
+  }
+}
+
 export interface PageTokenTest {
   ok: boolean
   pageName: string | null

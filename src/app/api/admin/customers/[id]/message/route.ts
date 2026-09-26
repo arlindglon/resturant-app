@@ -4,7 +4,7 @@ import { NextRequest } from 'next/server'
 import { db } from '@/lib/db'
 import { ok, fail } from '@/lib/api'
 import { requirePerm } from '@/lib/staff-auth'
-import { messengerConfigured, sendQuickReplies } from '@/lib/messenger'
+import { messengerConfigured, sendQuickReplies, lastSendErrorWithHint } from '@/lib/messenger'
 import { botQuickReplies } from '@/lib/bot-ui'
 import { globalBotLang, pickBotLang } from '@/lib/bot-text'
 
@@ -30,6 +30,9 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
   // মেনু/অফারে ট্যাপ করতে পারে (কাস্টমারের ভাষার প্যাক অনুযায়ী)
   const lang = pickBotLang(customer.language, await globalBotLang())
   const sent = await sendQuickReplies(customer.psid, text, botQuickReplies(lang))
-  if (!sent) return fail('মেসেজ পাঠানো যায়নি — টোকেন/সংযোগ চেক করুন।', 502, 'SEND_FAILED')
+  if (!sent) {
+    const detail = await lastSendErrorWithHint()
+    return fail(`মেসেজ পাঠানো যায়নি${detail ? ` — ${detail}` : ' — টোকেন/সংযোগ চেক করুন।'}`, 502, 'SEND_FAILED')
+  }
   return ok({ sent: true })
 }

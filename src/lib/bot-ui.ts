@@ -480,6 +480,8 @@ const ACTION_TEXT_RE: { action: BotActionKey; re: RegExp }[] = [
   { action: BOT_ACTIONS.OFFERS, re: re('offer|offers|অফার|অফারস|ki ki offer|offer ki ki|offer gul?[oa]?(?: dew| deaw| dekhaw)?|discount|discou?nt|কুপন|coupon') },
   { action: BOT_ACTIONS.LOCATION, re: re('location|লোকেশন|ঠিকানা|address|kothay|কোথায়|where are you(?: located)?|map') },
   { action: BOT_ACTIONS.HELPLINE, re: re('helpline|হেল্পলাইন|যোগাযোগ|contact|phone number|ফোন নম্বর|hotline|হটলাইন') },
+  // "order"/"অর্ডার" লিখলেও অর্ডার-গাইড কার্ড — AI নয়, ডিটারমিনিস্টিক DB-উত্তর
+  { action: BOT_ACTIONS.ORDER, re: re('order|orders|অর্ডার|অর্ডারস|order korbo|order dibo|অর্ডার করব|কিভাবে অর্ডার|কীভাবে অর্ডার|how to order|place (?:an )?order') },
 ]
 
 export function botActionFromText(text: string): BotActionKey | null {

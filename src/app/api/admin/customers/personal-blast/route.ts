@@ -10,7 +10,7 @@ import { NextRequest } from 'next/server'
 import { db } from '@/lib/db'
 import { ok, fail } from '@/lib/api'
 import { requirePerm } from '@/lib/staff-auth'
-import { sendQuickReplies, sendRnToToken, markdownEnabled } from '@/lib/messenger'
+import { sendQuickReplies, sendRnToToken, markdownEnabled, lastSendErrorWithHint } from '@/lib/messenger'
 import { botQuickReplies } from '@/lib/bot-ui'
 import { getGeminiConfig, composePersonalBlast, loadChatHistory, saveChatTurn } from '@/lib/gemini'
 import { buildKnowledgeBase } from '@/lib/knowledge'
@@ -85,10 +85,11 @@ export async function POST(req: NextRequest) {
   if (await sendQuickReplies(customer.psid, text, blastChips)) via = 'messenger'
   else if (customer.rnToken && (await sendRnToToken(customer.rnToken, text)).ok) via = 'rn'
   if (!via) {
+    const detail = await lastSendErrorWithHint()
     return fail(
-      customer.rnToken
+      (customer.rnToken
         ? 'পাঠানো যায়নি — Messenger ও RN টোকেন দুটোই রিজেক্ট করেছে।'
-        : 'পাঠানো যায়নি — ২৪ ঘণ্টার নিয়মের বাইরে (কাস্টমার RN আপডেট চালু করেননি)।',
+        : 'পাঠানো যায়নি — ২৪ ঘণ্টার নিয়মের বাইরে (কাস্টমার RN আপডেট চালু করেননি)।') + (detail ? ` — ${detail}` : ''),
       502,
       'SEND_FAILED'
     )

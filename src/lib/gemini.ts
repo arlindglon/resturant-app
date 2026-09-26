@@ -525,8 +525,9 @@ export function sanitizeExtractedName(raw: string | null | undefined): string | 
     .replace(/\s+/g, ' ')
     .trim()
   if (!n || n.length > 60) return null // নাম এত বড় হয় না — narration-চাঙ্ক
-  // মডেলের meta-কথা নাম হিসেবে এলে বাতিল
-  if (/^(?:wait|hmm|okay|ok|so|and|but|let'?s|lets|draft(?:ing)?|note|info|action|final|reply|response|answer|the\s+(?:user|customer)|customer|unknown|n\/a)$/i.test(n)) return null
+  // মডেলের meta-কথা নাম হিসেবে এলে বাতিল (ইংরেজি + বাংলা meta-শব্দ —
+  // AI "নাম"/"ফোন"/"ঠিকানা" একা ইকো করলেও সেটা নাম হিসেবে জমা হবে না)
+  if (/^(?:wait|hmm|okay|ok|so|and|but|let'?s|lets|draft(?:ing)?|note|info|action|final|reply|response|answer|the\s+(?:user|customer)|customer|unknown|n\/a|name|nam|phone|address|birthday|নাম|ফোন|ফোন\s*নম্বর|ঠিকানা|জন্মদিন|জন্ম(?:তারিখ)?|ভাষা)$/i.test(n)) return null
   // প্রটোকল/টেমপ্লেট-ইকো (নাম=…, INFO:…, JSON ব্রেস, পাইপ)
   if (/[=<>{}[\]|]/.test(n) || /^(?:INFO|DATA|ACTION)\s*:/i.test(n) || /^(?:ভাষা|language|নাম|name|phone|ফোন)\s*=/i.test(n)) return null
   // অন্তত ২ অক্ষরের আসল অক্ষর-ক্রম থাকতে হবে (যেকোনো লিপি — বাংলা কার-চিহ্ন \p{M} সহ)
