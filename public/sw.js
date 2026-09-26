@@ -1,5 +1,5 @@
 // 🔔 Tea and Treat — customer push service worker
-// মেনু পেজের 🔔 বাটনে সাবস্ক্রাইব হলে এই worker push ইভেন্ট ধরে নোটিফিকেশন দেখায়।
+// কাস্টমার অটো-সাবস্ক্রাইব হলে (🔔 অটো-পুশ ইঞ্জিন — push-bell.tsx) এই worker push ইভেন্ট ধরে নোটিফিকেশন দেখায়।
 self.addEventListener('push', (event) => {
   let data = { title: '🔔 Tea and Treat', body: 'নতুন আপডেট এসেছে!', url: '/menu' }
   try {
