@@ -93,7 +93,7 @@ export async function buildDailyReport(now = new Date()): Promise<string> {
     const m = o.paymentMethod || 'অন্যান্য'
     byMethod.set(m, (byMethod.get(m) || 0) + o.total)
   }
-  const methodLine = [...byMethod.entries()].map(([m, v]) => `${m === 'CASH' ? 'নগদ' : m === 'BKASH' ? 'বিকাশ' : m === 'NAGAD' ? 'নগদ(ন্যাগাদ)' : m === 'CARD' ? 'কার্ড' : m} ${taka(v)}`).join(' · ')
+  const methodLine = [...byMethod.entries()].map(([m, v]) => `${m === 'CASH' ? 'নগদ' : m === 'BKASH' ? 'বিকাশ' : m === 'NAGAD' ? 'নগদ(ন্যাগাদ)' : m === 'CARD' ? 'কার্ড' : m} ${toBn(taka(v))}`).join(' · ')
   const topLine = topItems.map((t) => `${t.itemName} (${toBn(t._sum.quantity || 0)})`).join(', ')
 
   const L: string[] = []
@@ -102,9 +102,9 @@ export async function buildDailyReport(now = new Date()): Promise<string> {
   L.push('')
   L.push(`🧾 মোট অর্ডার: *${toBn(ordersToday.length)}* টা`)
   L.push(`💰 মোট বিক্রি: *${cur}${toBn(totalSales.toFixed(totalSales % 1 === 0 ? 0 : 2))}*`)
-  if (discounts > 0) L.push(`🎁 ডিসকাউন্ট দেওয়া হয়েছে: ${taka(discounts)}`)
+  if (discounts > 0) L.push(`🎁 ডিসকাউন্ট দেওয়া হয়েছে: ${toBn(taka(discounts))}`)
   if (methodLine) L.push(`💳 বিল পেমেন্ট: ${methodLine}`)
-  L.push(`🏦 কালেক্টেড: ${taka(paidTotal)}${unpaidAgg._sum.total ? ` · এখনো বাকি (খোলা বিল): ${taka(unpaidAgg._sum.total)}` : ''}`)
+  L.push(`🏦 কালেক্টেড: ${toBn(taka(paidTotal))}${unpaidAgg._sum.total ? ` · এখনো বাকি (খোলা বিল): ${toBn(taka(unpaidAgg._sum.total))}` : ''}`)
   if (topLine) L.push(`🏆 টপ আইটেম: ${topLine}`)
   L.push(`🪑 এখন ব্যস্ত টেবিল: ${toBn(occupiedTables)} · ⏳ অপেক্ষমাণ ওয়েটার-কল: ${toBn(pendingCalls)}`)
   L.push(`👥 আজকের নতুন কাস্টমার: ${toBn(newCustomers)} জন`)
