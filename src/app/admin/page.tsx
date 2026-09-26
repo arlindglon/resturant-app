@@ -3572,6 +3572,17 @@ function SendMessageDialog({
       : ''
   )
   const [sending, setSending] = useState(false)
+  const lastTypingPing = useRef(0)
+  // মালিকের নিয়ম: admin ওপাশ থেকে লিখলে কাস্টমারের Messenger-এ লাইভ "..." দেখা যাবে —
+  // প্রথম কি-চাপেই সঙ্গে সঙ্গে টাইপিং-সিগন্যাল, তারপর লেখা চলাকালীন ৪ সেকেন্ড পরপর;
+  // মেসেজ পাঠালে/বন্ধ করলে ইন্ডিকেটর নিজে থেকেই নিভে যায় (Meta-র নিয়ম)।
+  const pingTyping = () => {
+    if (!customer) return
+    const now = Date.now()
+    if (now - lastTypingPing.current < 4000) return
+    lastTypingPing.current = now
+    api.post(`/api/admin/customers/${customer.id}/typing`).catch(() => {})
+  }
 
   const send = async () => {
     if (!customer) return
@@ -3594,7 +3605,15 @@ function SendMessageDialog({
             {customer ? `${customerName(customer)} — কাস্টমার এই পেজের মেসেঞ্জারে চ্যাট করেছেন, তাই সরাসরি মেসেজ যাবে।` : ''}
           </DialogDescription>
         </DialogHeader>
-        <Textarea rows={6} value={text} onChange={(e) => setText(e.target.value)} placeholder="মেসেজ লিখুন…" />
+        <Textarea
+          rows={6}
+          value={text}
+          onChange={(e) => {
+            setText(e.target.value)
+            pingTyping() // লিখছেন → কাস্টমারের চ্যাটে "..." জ্বলবে
+          }}
+          placeholder="মেসেজ লিখুন… (লিখতে থাকলে কাস্টমার লাইভ “...” দেখবে)"
+        />
         <DialogFooter>
           <Button variant="outline" onClick={onOpenChange}>
             বাতিল

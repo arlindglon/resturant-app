@@ -19,7 +19,7 @@ import { NextRequest, after } from 'next/server'
 import crypto from 'crypto'
 import { db } from '@/lib/db'
 import { fail, ok } from '@/lib/api'
-import { fetchMessengerProfile, askPhoneQuickReply, sendReceipt, sendText, sendRnOptInRequest, sendQuickReplies, verifyToken } from '@/lib/messenger'
+import { fetchMessengerProfile, askPhoneQuickReply, sendReceipt, sendText, sendRnOptInRequest, sendQuickReplies, sendTypingOn, verifyToken } from '@/lib/messenger'
 import { botActionFromPayload, botActionFromText, handleBotUiAction, botQuickReplies, isGreetingText, BOT_ACTIONS } from '@/lib/bot-ui'
 import { applyBirthdayDiscount } from '@/lib/birthday'
 import { setSettings, getSetting } from '@/lib/settings'
@@ -73,6 +73,19 @@ function summarizeEvents(body: {
     }
   }
   return kinds.size ? [...kinds].join(', ') : 'unknown'
+}
+
+/* ───── "..." টাইপিং-ইন্ডিকেটর (মালিকের নিয়ম: ওপাশ থেকে লেখা হলে "..." দেখাবে) ─────
+ * কাস্টমার যা-ই পাঠাক (টেক্সট/বাটন/লাইক/স্টিকার), উত্তর যাওয়ার আগ পর্যন্ত
+ * Messenger-এ পেজ "লিখছে…" ("...") দেখাবে — বট মরে গেছে মনে হবে না।
+ * ফ্রি-টেক্সটে ইন্ডিকেটর ন্যূনতম ১.২ সেকেন্ড চোখে পড়ার মতো থাকে; বাটন-ট্যাপে
+ * ন্যূনতম অপেক্ষা নেই — মালিকের নিয়ম: বাটনের উত্তর সঙ্গে সঙ্গে (druto)।
+ */
+const FREE_TEXT_TYPING_MS = 1200
+const REFERRAL_TYPING_MS = 900
+async function holdTyping(startedAt: number, minMs: number): Promise<void> {
+  const remain = minMs - (Date.now() - startedAt)
+  if (remain > 0) await new Promise((resolve) => setTimeout(resolve, remain))
 }
 
 export async function GET(req: NextRequest) {
@@ -184,9 +197,15 @@ const seenMids = new Map<string, number>()
 
 /**
  * ক্রস-ইনস্ট্যান্স ডুপ্লিকেট গার্ড: Meta একই মেসেজ অন্য instance-এ দিলে
- * (মেমরি-ডিডুপ তখন কাজ করে না) DB-তে এইমাত্র (৬০ সেকেন্ডে) একই কাস্টমার-টেক্সট
- * সেভ থাকলে সেটা ডুপ্লিকেট — দ্বিতীয়বার উত্তর যাবে না।
+ * (মেমরি-ডিডুপ তখন কাজ করে না) DB-তে এইমাত্র একই কাস্টমার-টেক্সট সেভ থাকলে
+ * সেটা ডুপ্লিকেট — দ্বিতীয়বার উত্তর যাবে না।
+ *
+ * মালিকের all-time-reply নিয়ম: আগে উইন্ডো ছিল ৬০ সেকেন্ড — কাস্টমার একই কথা
+ * আবার লিখলে চুপ থাকত। এখন (১) উইন্ডো মাত্র ১০ সেকেন্ড (শুধু Meta re-delivery
+ * ধরার জন্য), (২) আগেরবার বটের উত্তরই না গিয়ে থাকলে ডুপ্লিকেট ধরা হয় না —
+ * অর্থাৎ নীরবতার কোনো সুযোগই থাকে না।
  */
+const DEDUP_WINDOW_MS = 10_000
 async function isDuplicateCustomerMessage(psid: string, text: string): Promise<boolean> {
   try {
     const recent = await db.chatMessage.findFirst({
@@ -194,11 +213,18 @@ async function isDuplicateCustomerMessage(psid: string, text: string): Promise<b
         psid,
         role: 'customer',
         text: text.slice(0, 3000),
-        createdAt: { gte: new Date(Date.now() - 60_000) },
+        createdAt: { gte: new Date(Date.now() - DEDUP_WINDOW_MS) },
       },
+      orderBy: { createdAt: 'desc' },
+      select: { id: true, createdAt: true },
+    })
+    if (!recent) return false
+    // আগেরবার বটের উত্তর যায়নি হলে এটা ডুপ্লিকেট নয় — আবার উত্তর যাবেই
+    const botAfter = await db.chatMessage.findFirst({
+      where: { psid, role: 'bot', createdAt: { gte: recent.createdAt } },
       select: { id: true },
     })
-    return !!recent
+    return Boolean(botAfter)
   } catch {
     return false
   }
@@ -398,7 +424,30 @@ async function maybeAskRnOptIn(psid: string): Promise<void> {
 
 /* ───────────────────────── event routing ───────────────────────── */
 
-async function handleEvent(event: MessagingEvent) {
+/**
+ * all-time-reply নিয়মের শেষ রক্ষা-স্তর: রাউটিং-এ যা-ই ভুল হোক (DB-ব্লিপ,
+ * অপ্রত্যাশিত ইভেন্ট-ফরম্যাট, কোড-বাগ), কাস্টমার কখনো নীরবতা পাবে না —
+ * হোম-মেনু বাটনসহ উত্তর যাবেই।
+ */
+async function handleEvent(event: MessagingEvent): Promise<void> {
+  try {
+    await routeEvent(event)
+  } catch (e) {
+    console.error('[webhook:handler]', e)
+    const psid = event.sender?.id || event.recipient?.id
+    const customerInitiated = Boolean(event.message || event.message_reactions || event.postback)
+    if (!psid || event.message?.is_echo || !customerInitiated) return
+    try {
+      const lang = await globalBotLang()
+      await sendQuickReplies(psid, t(lang, 'homeMenuText'), botQuickReplies(lang))
+      await saveChatTurn(psid, 'bot', '🏠 হোম-মেনু (error-fallback — নীরবতা নয়)')
+    } catch (e2) {
+      console.error('[webhook:fallback]', e2)
+    }
+  }
+}
+
+async function routeEvent(event: MessagingEvent) {
   // Case 0: Recurring Notifications opt-in — the customer tapped [Opt-in] on the
   // RN template card. The PSID may arrive as sender OR recipient (Meta uses
   // recipient for marketing-message opt-ins), so check both.
@@ -417,6 +466,7 @@ async function handleEvent(event: MessagingEvent) {
   if (event.message_reactions?.length) {
     const cust = await upsertCustomer(psid)
     const lang = pickBotLang(cust.language, await globalBotLang())
+    await sendTypingOn(psid) // লাইক দিলেও "..." — তারপর সঙ্গে সঙ্গে মেনু-বাটন
     await sendQuickReplies(psid, t(lang, 'homeMenuText'), botQuickReplies(lang))
     await saveChatTurn(psid, 'bot', '🏠 হোম-মেনু (reaction/লাইক-এর উত্তর)')
     return
@@ -430,8 +480,17 @@ async function handleEvent(event: MessagingEvent) {
     const { name } = cust
     // ভাষা: কাস্টমারের মার্ক করা ভাষা > admin গ্লোবাল সেটিং > বাংলা
     const lang = pickBotLang(cust.language, await globalBotLang())
+    // কাস্টমার পেজে প্রবেশ করেছে — "..." জ্বলে উঠে উষ্ণ স্বাগতম যাবে
+    const typingStart = Date.now()
+    await sendTypingOn(psid)
 
-    if (!tokenRow || tokenRow.status !== 'PENDING') return
+    if (!tokenRow || tokenRow.status !== 'PENDING') {
+      // টোকেন নেই/মেয়াদোত্তীর্ণ — তবুও নীরবতা নয় (all-time-reply নিয়ম): হোম-মেনু
+      await holdTyping(typingStart, REFERRAL_TYPING_MS)
+      await sendQuickReplies(psid, t(lang, 'homeMenuText'), botQuickReplies(lang))
+      await saveChatTurn(psid, 'bot', '🏠 হোম-মেনু (referral-এ প্রবেশ)')
+      return
+    }
 
     // remember who this conversation belongs to
     await db.referralToken.update({
@@ -449,6 +508,7 @@ async function handleEvent(event: MessagingEvent) {
     const askedText = offer?.askText?.trim() || defaultAsk(fieldType, lang)
     await db.referralToken.update({ where: { id: tokenRow.id }, data: { askedText } })
 
+    await holdTyping(typingStart, REFERRAL_TYPING_MS)
     await askVerificationData(
       psid,
       name,
@@ -482,11 +542,15 @@ async function handleEvent(event: MessagingEvent) {
     // চাপলেও উত্তর যাবেই। dup-suppression শুধু ফ্রি-টেক্সটে (নইলে ⬅️ পেছনে
     // বারবার চাপলে মাঝে মাঝে নীরবতা — কাস্টমারের সবচেয়ে বিরক্তিকর কেস)।
     const isButtonTap = Boolean((event.message?.quick_reply?.payload || '').trim())
-    if (dataTextIn) {
-      // ক্রস-ইনস্ট্যান্স ডুপ্লিকেট — একই প্রশ্নে দ্বিতীয় উত্তর কখনো যাবে না (শুধু ফ্রি-টেক্সটে)
-      if (!isButtonTap && (await isDuplicateCustomerMessage(psid, dataTextIn))) return
-      await saveChatTurn(psid, 'customer', dataTextIn)
-    }
+    // ক্রস-ইনস্ট্যান্স ডুপ্লিকেট — একই প্রশ্নে দ্বিতীয় উত্তর কখনো যাবে না (শুধু ফ্রি-টেক্সটে);
+    // আগেরবার উত্তর না গেলে ডুপ্লিকেট নয় — আবার উত্তর যাবে (all-time-reply নিয়ম)
+    if (dataTextIn && !isButtonTap && (await isDuplicateCustomerMessage(psid, dataTextIn))) return
+    // "..." টাইপিং-ইন্ডিকেটর — উত্তর পাঠানোর মুহূর্ত পর্যন্ত কাস্টমার "লিখছে…" দেখবে
+    const typingStart = Date.now()
+    await sendTypingOn(psid)
+    if (dataTextIn) await saveChatTurn(psid, 'customer', dataTextIn)
+    // ফ্রি-টেক্সটে "..." ন্যূনতম ১.২ সেকেন্ড দৃশ্যমান; বাটনে ট্যাপে ন্যূনতম অপেক্ষা নেই (সঙ্গে সঙ্গে)
+    const holdNow = () => holdTyping(typingStart, isButtonTap ? 0 : FREE_TEXT_TYPING_MS)
 
     // 2a. no pending claim → AI chat (AI down → লাইভ নলেজ বেস থেকে সঠিক উত্তর)
     if (!tokenRow) {
@@ -494,6 +558,7 @@ async function handleEvent(event: MessagingEvent) {
       // করে ফিরত যেত ("কাস্টমার মেসেজ দিলে উত্তর হয় না" কেসের একটা রূপ)।
       // এখন উষ্ণ হোম-মেনু যায় — কাস্টমার বাটন থেকেই এগোতে পারে।
       if (!dataTextIn) {
+        await holdNow()
         await sendQuickReplies(psid, t(lang, 'homeMenuText'), botQuickReplies(lang))
         await saveChatTurn(psid, 'bot', '🏠 হোম-মেনু (sticker/attachment-এর উত্তর)')
         return
@@ -501,6 +566,7 @@ async function handleEvent(event: MessagingEvent) {
       // 2a-quick: কুইক-রিপ্লাই বাটনে ট্যাপ (payload) — ডিটারমিনিস্টিক Rich-UI অ্যাকশন
       const qrAction = botActionFromPayload(event.message?.quick_reply?.payload)
       if (qrAction) {
+        await holdNow()
         const r = await handleBotUiAction(psid, lang, qrAction, event.message?.quick_reply?.payload)
         if (r.handled) {
           if (r.echo) await saveChatTurn(psid, 'bot', r.echo)
@@ -512,6 +578,7 @@ async function handleEvent(event: MessagingEvent) {
       // মেসেজে AI দিয়ে উত্তর দেওয়ার দরকার নেই, বাটনই যাবে)
       if (isGreetingText(dataTextIn)) {
         const greetText = t(lang, 'greetMenuText', { name: nameVar(name) })
+        await holdNow()
         await sendQuickReplies(psid, greetText, botQuickReplies(lang))
         await saveChatTurn(psid, 'bot', greetText)
         await maybeAskRnOptIn(psid)
@@ -520,6 +587,7 @@ async function handleEvent(event: MessagingEvent) {
       // 2a-text: সরাসরি টেক্সটেও মেনু/অফার/হোম চাইলে একই কার্ড/বাটন-উত্তর
       const textAction = botActionFromText(dataTextIn)
       if (textAction && (textAction === BOT_ACTIONS.MENU || textAction === BOT_ACTIONS.OFFERS || textAction === BOT_ACTIONS.ORDER || textAction === BOT_ACTIONS.TEXTMENU || textAction === BOT_ACTIONS.HOME)) {
+        await holdNow()
         const r = await handleBotUiAction(psid, lang, textAction)
         if (r.handled) {
           if (r.echo) await saveChatTurn(psid, 'bot', r.echo)
@@ -531,6 +599,7 @@ async function handleEvent(event: MessagingEvent) {
       // ডাটাবেস থেকেই সঙ্গে সঙ্গে যায় (চলমান অফার/কুপন/মেনু/ঠিকানা — bot-static.ts),
       // সাথে মেনু-বাটন। AI-লেটেন্সি/ব্যর্থতার কোনো সুযোগই থাকে না।
       const staticReply = await buildStaticReply({ lang, message: dataTextIn, psid })
+      await holdNow()
       await sendQuickReplies(psid, staticReply, botQuickReplies(lang))
       await saveChatTurn(psid, 'bot', staticReply)
       // সরাসরি পেজে মেসেজ দেওয়া কাস্টমারও RN-এর সুযোগ পাক (একবারই, কুলডাউন গার্ড সহ)
@@ -574,6 +643,7 @@ async function handleEvent(event: MessagingEvent) {
     // পরের মেসেজে চলতেই থাকে, দেরিতে সঠিক তথ্য এলেও অফার নিজে থেকেই বিলে বসে।
     if (!validData) {
       const askCount = tokenRow.askCount || 0
+      await holdNow()
       if (askCount < 2) {
         await sendQuickReplies(psid, retryAsk(fieldType, lang), botQuickReplies(lang))
         await db.referralToken.update({ where: { id: tokenRow.id }, data: { askCount: askCount + 1 } })
@@ -617,6 +687,7 @@ async function handleEvent(event: MessagingEvent) {
     }
 
     if (!result.ok) {
+      await holdNow()
       await sendQuickReplies(psid, `😔 ${result.message}`, botQuickReplies(lang))
       return
     }
@@ -627,6 +698,7 @@ async function handleEvent(event: MessagingEvent) {
       data: { status: 'CLAIMED', phone: parsedPhone || null, birthday: parsedBirthday || undefined, dataText: validData },
     })
 
+    await holdNow()
     await sendText(psid, t(lang, 'verifySuccess', { name: nameVar(name) }))
     await sendBillReceipt(
       psid,
@@ -647,15 +719,20 @@ async function handleEvent(event: MessagingEvent) {
 
   // Case 1b: persistent-menu / কার্ড-বাটনের postback — ডিটারমিনিস্টিক Rich-UI অ্যাকশন
   // (🍕 মেনু / 🔥 অফার / 📍 লোকেশন / ☎️ হেল্পলাইন / 🛒 অর্ডার) — AI-র অপেক্ষা ছাড়াই
-  // সঠিক উত্তর; অজানা payload হলে আগের মতো নিঃশব্দে বাদ
+  // সঠিক উত্তর। অজানা payload হলেও নীরবতা নয় (all-time-reply নিয়ম) — হোম-মেনু যাবে।
   const pbAction = botActionFromPayload(event.postback?.payload)
-  if (event.postback && pbAction) {
+  if (event.postback) {
     const cust = await upsertCustomer(psid)
     const lang = pickBotLang(cust.language, await globalBotLang())
-    await handleBotUiAction(psid, lang, pbAction, event.postback?.payload)
+    await sendTypingOn(psid) // বাটনে ট্যাপ → "..." — সঙ্গে সঙ্গে উত্তর
+    if (pbAction) {
+      await handleBotUiAction(psid, lang, pbAction, event.postback?.payload)
+    } else {
+      await sendQuickReplies(psid, t(lang, 'homeMenuText'), botQuickReplies(lang))
+      await saveChatTurn(psid, 'bot', '🏠 হোম-মেনু (অজানা postback-এর উত্তর)')
+    }
     return
   }
-  if (event.postback) return
 }
 
 function extractPhone(event: MessagingEvent): string | null {

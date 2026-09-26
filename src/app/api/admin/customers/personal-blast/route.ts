@@ -10,7 +10,7 @@ import { NextRequest } from 'next/server'
 import { db } from '@/lib/db'
 import { ok, fail } from '@/lib/api'
 import { requirePerm } from '@/lib/staff-auth'
-import { sendQuickReplies, sendRnToToken, markdownEnabled, lastSendErrorWithHint } from '@/lib/messenger'
+import { sendQuickReplies, sendRnToToken, markdownEnabled, lastSendErrorWithHint, sendTypingOn } from '@/lib/messenger'
 import { botQuickReplies } from '@/lib/bot-ui'
 import { getGeminiConfig, composePersonalBlast, loadChatHistory, saveChatTurn } from '@/lib/gemini'
 import { buildKnowledgeBase } from '@/lib/knowledge'
@@ -68,14 +68,27 @@ export async function POST(req: NextRequest) {
     formatting: await markdownEnabled(),
     cfg,
   }
-  // একটা retry — Gemini মাঝে মাঝে rate-limit/খালি উত্তর দেয় (কোনো টাইমআউট নয় —
-  // AI যত সময় লাগে লিখবে, প্রতি চেষ্টায় ১২০s বাজেট)
-  let ai = await composePersonalBlast({ ...blastOpts, cfg: { ...cfg, budgetMs: COMPOSE_BUDGET_MS } })
-  if (!ai.ok) {
-    await new Promise((r) => setTimeout(r, 1200))
+  // মালিকের নিয়ম: AI লেখার পুরো সময়টায় কাস্টমার Messenger-এ লাইভ "..." দেখবে —
+  // ইন্ডিকেটর ~২০ সেকেন্ডে নিজে নিভে যায়, তাই প্রতি ৯ সেকেন্ডে নতুন টাইপিং-সিগন্যাল
+  // (মেসেজ গেলে/ব্যর্থ হলে heartbeat বন্ধ — ইন্ডিকেটর নিজে থেকেই মুছে যায়)
+  let typingTimer: ReturnType<typeof setInterval> | null = null
+  let ai: Awaited<ReturnType<typeof composePersonalBlast>> | null = null
+  try {
+    void sendTypingOn(customer.psid).catch(() => {})
+    typingTimer = setInterval(() => {
+      void sendTypingOn(customer.psid).catch(() => {})
+    }, 9_000)
+    // একটা retry — Gemini মাঝে মাঝে rate-limit/খালি উত্তর দেয় (কোনো টাইমআউট নয় —
+    // AI যত সময় লাগে লিখবে, প্রতি চেষ্টায় ১২০s বাজেট)
     ai = await composePersonalBlast({ ...blastOpts, cfg: { ...cfg, budgetMs: COMPOSE_BUDGET_MS } })
+    if (!ai.ok) {
+      await new Promise((r) => setTimeout(r, 1200))
+      ai = await composePersonalBlast({ ...blastOpts, cfg: { ...cfg, budgetMs: COMPOSE_BUDGET_MS } })
+    }
+  } finally {
+    if (typingTimer) clearInterval(typingTimer)
   }
-  if (!ai.ok || !ai.text) return fail(ai.error || 'মেসেজ লেখা যায়নি', 502, 'AI_FAIL')
+  if (!ai || !ai.ok || !ai.text) return fail(ai?.error || 'মেসেজ লেখা যায়নি', 502, 'AI_FAIL')
 
   const text = ai.text.slice(0, 1900)
   let via: 'messenger' | 'rn' | null = null
