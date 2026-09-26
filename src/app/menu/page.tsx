@@ -714,9 +714,16 @@ export default function MenuPage() {
     // localStorage-এ সেভ করা শেষ মেনু থাকলে সাথে সাথেই দেখাই (stale-while-revalidate):
     // দুর্বল ইন্টারনেটেও মেনু সাথে সাথে আসে, নেটওয়ার্ক আসলে ব্যাকগ্রাউন্ডে টাটকা হয়ে যায়।
     // ৩০ মিনিটের পুরনো ক্যাশ আর দেখানো হয় না (হ্যাপি আওয়ার/এভেইলেবিলিটি বদলাতে পারে)।
+    // ⚠️ menuLoading-এর প্রাথমিক মান true — তাই ক্যাশ দেখালেই অবশ্যই false করতে হবে,
+    // নাহলে /t/1 → /menu remount-এ ক্যাশ-হিট পাথে স্কেলেটন চিরকাল আটকে থাকে
+    // (কাস্টমার আইটেম দেখতেই পায় না — ২০২৬-০৯ প্রোডাকশন বাগ)।
     const cachedMenu = loadCachedMenu()
-    if (cachedMenu) setMenu(cachedMenu)
-    if (!cachedMenu) setMenuLoading(true)
+    if (cachedMenu) {
+      setMenu(cachedMenu)
+      setMenuLoading(false)
+    } else {
+      setMenuLoading(true)
+    }
     setMenuError(null)
     const res = await api.get<MenuData>('/api/menu')
     if (res.ok && res.data) {
@@ -732,7 +739,8 @@ export default function MenuPage() {
       // নেটওয়ার্ক ফেল করেছে, কিন্তু সেভ করা মেনু দেখাচ্ছি — নরম নোটিশ যথেষ্ট
       toast(res.error || 'নেটওয়ার্ক সমস্যা — সেভ করা মেনু দেখানো হচ্ছে')
     }
-    if (!cachedMenu) setMenuLoading(false)
+    // নেটওয়ার্ক চেষ্টা শেষ — যে-পাথেই হোক লোডিং বন্ধ (কখনোই স্কেলেটন-আটকে থাকা নয়)
+    setMenuLoading(false)
   }, [])
 
   const fetchOrders = useCallback(async () => {
