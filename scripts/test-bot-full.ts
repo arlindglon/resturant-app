@@ -178,7 +178,7 @@ const { BOT_LANG_CODES, t, pickBotLang, nameVar } = await import('../src/lib/bot
 const LANGS = ['bn', 'banglish', 'en', 'hi'] as const
 check('BOT_LANG_CODES = ৪টা ভাষা', BOT_LANG_CODES.length === 4 && LANGS.every((l) => BOT_LANG_CODES.includes(l)))
 for (const lang of LANGS) {
-  const qr = botQuickReplies(lang)
+  const qr = await botQuickReplies(lang)
   check(`${lang}: ৫টা চিপ`, qr.length === 5)
   check(`${lang}: সব payload '__'-prefixed`, qr.every((q) => q.payload.startsWith('__')))
   check(`${lang}: সব title খালি নয় ও ≤20 chars (Meta নিয়ম)`, qr.every((q) => q.title.length > 0 && q.title.length <= 20))

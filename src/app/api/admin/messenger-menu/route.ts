@@ -2,7 +2,8 @@
 // Meta পেজে সেট করে (POST /me/messenger_profile)। কাস্টমার যেকোনো সময় ☰
 // আইকনে চেপে মেনু/অফার/লোকেশন/হেল্পলাইন পায় — এক ক্লিকে, টাইপ না করেই।
 // বাটনগুলো postback পেলোড পাঠায় যা webhook-এর Rich-UI অ্যাকশন সামলায় (bot-ui.ts)।
-// বাটন-তালিকা admin-সম্পাদনযোগ্য (messenger-menu-config) — এই রুট সেটাই Meta-তে সিঙ্ক করে।
+// বাটন-তালিকা DB setting (messenger_menu_json) থেকে আসে (botPersistentMenuEntries) —
+// এই রুট সেটাই Meta-তে সিঙ্ক করে (রিপেয়ার-বাটন: ☰ মেনু কখনো হারাবে না)।
 //
 // Meta নিয়ম: persistent_menu-র পূর্বশর্ত Get Started বাটন — তাই এই রুট একসাথে
 // get_started (+ নতুন কথোপকথনের গ্রিটিং) ও সেট করে। "শুরু করুন" চাপলে __MENU__

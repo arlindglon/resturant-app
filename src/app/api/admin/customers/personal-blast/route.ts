@@ -94,7 +94,7 @@ export async function POST(req: NextRequest) {
   let via: 'messenger' | 'rn' | null = null
   // মালিকের নিয়ম: ব্রডকাস্টসহ প্রতিটা মেসেজের নিচে মেনু-বাটন সবসময় থাকবে —
   // কাস্টমার সরাসরি 🍕 মেনু / 🔥 অফার ট্যাপ করে অর্ডারে যেতে পারে
-  const blastChips = botQuickReplies(pickBotLang(customer.language, await globalBotLang()))
+  const blastChips = await botQuickReplies(pickBotLang(customer.language, await globalBotLang()))
   if (await sendQuickReplies(customer.psid, text, blastChips)) via = 'messenger'
   else if (customer.rnToken && (await sendRnToToken(customer.rnToken, text)).ok) via = 'rn'
   if (!via) {

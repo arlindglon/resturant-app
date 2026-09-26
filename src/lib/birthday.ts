@@ -255,7 +255,7 @@ export async function runBirthdayCron(): Promise<{ sent: number; skipped: boolea
     }
     // টেক্সট-পথেও নিচে মেনু-বাটন যায় (সবসময়-বাটন নিয়ম)
     const ok = await sendText(c.psid, wish, {
-      quickReplies: botQuickReplies(pickBotLang(c.language, globalLang)),
+      quickReplies: await botQuickReplies(pickBotLang(c.language, globalLang)),
     })
     if (ok) sent++
   }

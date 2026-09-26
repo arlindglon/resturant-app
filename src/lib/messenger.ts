@@ -655,56 +655,6 @@ export async function setPersistentMenu(
   return { ok: true, buttons: buttons.length }
 }
 
-/**
- * Meta পেজে এই মুহূর্তে যে persistent menu + get_started আছে সেটা লাইভ পড়া।
- * admin-এর "Meta-তে এখন যা আছে" প্যানেল — sync সত্যিই হয়েছে কি না এক নজরে।
- * পুরনো nested-মেনু থাকলে ভেতরের বাটনগুলো সমতল করে দেখাই।
- */
-export interface PersistentMenuStatus {
-  ok: boolean
-  error: string | null
-  buttons: { title: string; type: string }[]
-  hasGetStarted: boolean
-}
-
-export async function fetchPersistentMenuStatus(): Promise<PersistentMenuStatus> {
-  const token = await pageToken()
-  if (!token)
-    return { ok: false, error: 'META_PAGE_TOKEN সেট করা নেই (Vercel env)', buttons: [], hasGetStarted: false }
-  try {
-    const res = await fetch(
-      `${GRAPH}/me/messenger_profile?fields=persistent_menu,get_started&access_token=${encodeURIComponent(token)}`,
-      { signal: AbortSignal.timeout(10_000) }
-    )
-    const j = (await res.json()) as {
-      data?: {
-        persistent_menu?: { locale?: string; call_to_actions?: { type?: string; title?: string; call_to_actions?: { type?: string; title?: string }[] }[] }[]
-        get_started?: { payload?: string } | null
-      }[]
-      error?: { message?: string }
-    }
-    if (!res.ok || j.error) {
-      const msg = j.error?.message || `Graph API HTTP ${res.status}`
-      return { ok: false, error: msg, buttons: [], hasGetStarted: false }
-    }
-    const row = j.data?.[0]
-    const menus = row?.persistent_menu || []
-    const flat: { title: string; type: string }[] = []
-    for (const m of menus) {
-      for (const a of m.call_to_actions || []) {
-        if (a.type === 'nested') {
-          for (const c of a.call_to_actions || []) flat.push({ title: c.title || '', type: 'nested' })
-        } else {
-          flat.push({ title: a.title || '', type: a.type || '' })
-        }
-      }
-    }
-    return { ok: true, error: null, buttons: flat, hasGetStarted: Boolean(row?.get_started?.payload) }
-  } catch (e) {
-    return { ok: false, error: e instanceof Error ? e.message : 'সংযোগ ব্যর্থ', buttons: [], hasGetStarted: false }
-  }
-}
-
 /** Digital receipt message — replies দিলে রসিদের নিচেও মেনু-বাটন যায় (সবসময়-বাটন নিয়ম) */
 export async function sendReceipt(
   psid: string,

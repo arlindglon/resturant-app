@@ -29,7 +29,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
   // মালিকের নিয়ম: যেকোনো মেসেজের নিচে মেনু-বাটন সবসময় থাকবে — কাস্টমার সরাসরি
   // মেনু/অফারে ট্যাপ করতে পারে (কাস্টমারের ভাষার প্যাক অনুযায়ী)
   const lang = pickBotLang(customer.language, await globalBotLang())
-  const sent = await sendQuickReplies(customer.psid, text, botQuickReplies(lang))
+  const sent = await sendQuickReplies(customer.psid, text, await botQuickReplies(lang))
   if (!sent) {
     const detail = await lastSendErrorWithHint()
     return fail(`মেসেজ পাঠানো যায়নি${detail ? ` — ${detail}` : ' — টোকেন/সংযোগ চেক করুন।'}`, 502, 'SEND_FAILED')

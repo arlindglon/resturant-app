@@ -71,16 +71,68 @@ export function botActionFromPayload(payload: string | undefined | null): BotAct
   return values.includes(p) ? (p as BotActionKey) : null
 }
 
-/** প্রতিটি উত্তরের নিচে থাকা ট্যাপ-বাটন সেট — কথোপকথন কখনো গলধঃকরা লাগে না */
-export function botQuickReplies(lang: BotLang): QuickReply[] {
+/**
+ * প্রতিটা উত্তরের নিচে থাকা ট্যাপ-বাটন সেটের ডিফল্ট — 📸 স্ক্রিনশট-ফরম্যাট
+ * (🍕 মেনু দেখুন / 🔥 আজকের অফার / 📍 লোকেশন / ☎️ হেল্পলাইন / 📄 টেক্সট মেনু)।
+ * admin নিজের মতো বদলানোর আগে এটাই চলে (DB setting MESSENGER_QUICK_REPLIES_JSON)।
+ */
+export const DEFAULT_QUICK_REPLIES: QuickReply[] = [
+  { title: '🍕 মেনু দেখুন', payload: BOT_ACTIONS.MENU },
+  { title: '🔥 আজকের অফার', payload: BOT_ACTIONS.OFFERS },
+  { title: '📍 লোকেশন', payload: BOT_ACTIONS.LOCATION },
+  { title: '☎️ হেল্পলাইন', payload: BOT_ACTIONS.HELPLINE },
+  { title: '📄 টেক্সট মেনু', payload: BOT_ACTIONS.TEXTMENU },
+]
+
+export interface QuickReplyEntry {
+  title: string // ≤20 chars (Messenger quick_reply title নিয়ম)
+  payload: string // BOT_ACTIONS বা __CAT__:<id> / __ACT__:<id>
+}
+
+/**
+ * admin-সেট করা কুইক-রিপ্লাই JSON → পরিষ্কার বাটন-তালিকা (pure — DB ছাড়াই টেস্টযোগ্য)।
+ * ভাঙা JSON/ফাঁকা/সব-অবৈধ → null (ডেকারে ডিফল্ট ৫ বাটন চলবে)।
+ * নিয়ম: title ≤20, payload isValidMenuPayload, ডুপ্লিকেট payload বাদ, সর্বোচ্চ ১০টা
+ * (Messenger প্রতি মেসেজে ১১ quick reply নেয়; উপরে BACK_CHIP-এর জায়গা রাখা হয়)।
+ */
+export function parseQuickRepliesConfig(raw: string): QuickReplyEntry[] | null {
+  if (!raw || !raw.trim()) return null
+  try {
+    const parsed = JSON.parse(raw) as unknown
+    if (!Array.isArray(parsed)) return null
+    const cleaned: QuickReplyEntry[] = []
+    const seen = new Set<string>()
+    for (const e of parsed) {
+      if (!e || typeof e !== 'object') continue
+      const title = typeof (e as QuickReplyEntry).title === 'string' ? (e as QuickReplyEntry).title.trim().slice(0, 20) : ''
+      const payload = typeof (e as QuickReplyEntry).payload === 'string' ? (e as QuickReplyEntry).payload.trim() : ''
+      if (!title || !isValidMenuPayload(payload) || seen.has(payload)) continue
+      seen.add(payload)
+      cleaned.push({ title, payload })
+      if (cleaned.length >= 10) break
+    }
+    return cleaned.length ? cleaned : null
+  } catch {
+    return null
+  }
+}
+
+/**
+ * প্রতিটা উত্তরের নিচে থাকা ট্যাপ-বাটন সেট — কথোপকথন কখনো গলধঃকরা লাগে না।
+ * admin প্যানেলের "চ্যাট-বাটন ম্যানেজার" থেকে add/edit/delete করলেই সঙ্গে সঙ্গে
+ * প্রতিফলিত হয় (DB setting MESSENGER_QUICK_REPLIES_JSON — প্রতিবার লাইভ পড়ে;
+ * সেটিংস-ক্যাশ ৩০সে-তে সেট হলেই ক্যাশও সতেজ হয়)। ভাঙা/ফাঁকা সেটিং → ডিফল্ট ৫ বাটন।
+ */
+export async function botQuickReplies(lang: BotLang): Promise<QuickReply[]> {
   void lang
-  return [
-    { title: '🍕 মেনু দেখুন', payload: BOT_ACTIONS.MENU },
-    { title: '🔥 আজকের অফার', payload: BOT_ACTIONS.OFFERS },
-    { title: '📍 লোকেশন', payload: BOT_ACTIONS.LOCATION },
-    { title: '☎️ হেল্পলাইন', payload: BOT_ACTIONS.HELPLINE },
-    { title: '📄 টেক্সট মেনু', payload: BOT_ACTIONS.TEXTMENU },
-  ]
+  try {
+    const raw = await getSetting(SETTING_KEYS.MESSENGER_QUICK_REPLIES_JSON)
+    const parsed = parseQuickRepliesConfig(raw)
+    if (parsed) return parsed
+  } catch {
+    // DB-blip → নিচে ডিফল্ট
+  }
+  return DEFAULT_QUICK_REPLIES
 }
 
 /* ───────────────────── persistent menu (admin-editable) ───────────────────── */
@@ -237,7 +289,7 @@ async function sendTextMenuAction(psid: string, lang: BotLang): Promise<void> {
     })
     .catch(() => [])
   if (!items.length) {
-    await sendQuickReplies(psid, t(lang, 'staticMenuHead'), botQuickReplies(lang))
+    await sendQuickReplies(psid, t(lang, 'staticMenuHead'), await botQuickReplies(lang))
     return
   }
   // ক্রম রেখে ক্যাটাগরি-ভাগ (sortOrder অনুযায়ী আসা আইটেম গ্রুপ করে)
@@ -252,7 +304,7 @@ async function sendTextMenuAction(psid: string, lang: BotLang): Promise<void> {
   const chunks = chunkByLine(full, 1800)
   for (let idx = 0; idx < chunks.length; idx++) {
     const isLast = idx === chunks.length - 1
-    if (isLast) await sendQuickReplies(psid, chunks[idx], botQuickReplies(lang))
+    if (isLast) await sendQuickReplies(psid, chunks[idx], await botQuickReplies(lang))
     else await sendText(psid, chunks[idx])
   }
 }
@@ -265,7 +317,7 @@ async function sendTextMenuAction(psid: string, lang: BotLang): Promise<void> {
  * কার্ড-ভিউ/ক্যাটাগরি/অফার থেকে এক ট্যাপে শুরুর জায়গায় — ঘুরপাক নেই।
  */
 async function sendHomeAction(psid: string, lang: BotLang): Promise<void> {
-  await sendQuickReplies(psid, t(lang, 'homeMenuText'), botQuickReplies(lang))
+  await sendQuickReplies(psid, t(lang, 'homeMenuText'), await botQuickReplies(lang))
 }
 
 /**
@@ -308,7 +360,7 @@ async function sendOrderHelp(psid: string, lang: BotLang): Promise<void> {
   await sendQuickReplies(
     psid,
     t(lang, 'orderHelp'),
-    botQuickReplies(lang),
+    await botQuickReplies(lang),
   )
 }
 
@@ -327,7 +379,7 @@ async function sendOffersAction(psid: string, lang: BotLang): Promise<void> {
       .catch(() => []),
     getSetting(SETTING_KEYS.PUBLIC_BASE_URL),
   ])
-  const chips = [BACK_CHIP, ...botQuickReplies(lang)].slice(0, 11)
+  const chips = [BACK_CHIP, ...(await botQuickReplies(lang))].slice(0, 11)
   const cards: CarouselCard[] = [
     ...offers.map((o) => ({
       title: `${o.emoji || '🎁'} ${o.name} — ${bnNum(Math.round(o.discount * 100) / 100)}%`.slice(0, 80),
@@ -357,7 +409,7 @@ async function sendOffersAction(psid: string, lang: BotLang): Promise<void> {
  * (প্রোমো-কোড, কাস্টম ডিটেইলস, ব্রাঞ্চ-মেনু — যা খুশি)। সবই ইনস্ট্যান্ট, AI ছাড়া।
  */
 async function sendCustomAction(psid: string, lang: BotLang, actionId: string): Promise<void> {
-  const chips = [BACK_CHIP, ...botQuickReplies(lang)].slice(0, 11)
+  const chips = [BACK_CHIP, ...(await botQuickReplies(lang))].slice(0, 11)
   const act = await db.botAction
     .findUnique({ where: { id: actionId } })
     .catch(() => null)
@@ -410,7 +462,7 @@ async function sendCustomAction(psid: string, lang: BotLang, actionId: string): 
 export async function sendInfoAction(psid: string, lang: BotLang, action: BotActionKey): Promise<void> {
   const topic = action === BOT_ACTIONS.LOCATION ? 'location' : 'helpline'
   const text = await buildStaticReply({ lang, message: '', psid, topic })
-  await sendQuickReplies(psid, text, botQuickReplies(lang))
+  await sendQuickReplies(psid, text, await botQuickReplies(lang))
 }
 
 /**

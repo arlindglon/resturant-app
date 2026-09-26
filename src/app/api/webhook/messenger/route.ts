@@ -298,7 +298,7 @@ async function askVerificationData(
     await askPhoneQuickReply(psid, text) // ফোন-শেয়ার বাটনই এখানে কার্যকরী বাটন
   } else {
     // মালিকের নিয়ম: বটের প্রতিটা উত্তরের নিচে মেনু-বাটন সবসময় থাকবে
-    await sendQuickReplies(psid, text, botQuickReplies(lang))
+    await sendQuickReplies(psid, text, await botQuickReplies(lang))
   }
 }
 
@@ -363,7 +363,7 @@ async function sendBillReceipt(
   lines.push(t(lang, 'receiptThanks', { name: nameVar(name) }))
   lines.push(await followNudge(lang))
   // রসিদের নিচেও মেনু-বাটন — টার্নের শেষ মেসেজেই বাটন থাকে (সবসময়-বাটন নিয়ম)
-  await sendReceipt(psid, [{ text: lines.join('\n') }], botQuickReplies(lang))
+  await sendReceipt(psid, [{ text: lines.join('\n') }], await botQuickReplies(lang))
 }
 
 /* ───────────────────── Recurring Notifications (24h-বাইপাস মার্কেটিং) ───────────────────── */
@@ -439,7 +439,7 @@ async function handleEvent(event: MessagingEvent): Promise<void> {
     if (!psid || event.message?.is_echo || !customerInitiated) return
     try {
       const lang = await globalBotLang()
-      await sendQuickReplies(psid, t(lang, 'homeMenuText'), botQuickReplies(lang))
+      await sendQuickReplies(psid, t(lang, 'homeMenuText'), await botQuickReplies(lang))
       await saveChatTurn(psid, 'bot', '🏠 হোম-মেনু (error-fallback — নীরবতা নয়)')
     } catch (e2) {
       console.error('[webhook:fallback]', e2)
@@ -467,7 +467,7 @@ async function routeEvent(event: MessagingEvent) {
     const cust = await upsertCustomer(psid)
     const lang = pickBotLang(cust.language, await globalBotLang())
     await sendTypingOn(psid) // লাইক দিলেও "..." — তারপর সঙ্গে সঙ্গে মেনু-বাটন
-    await sendQuickReplies(psid, t(lang, 'homeMenuText'), botQuickReplies(lang))
+    await sendQuickReplies(psid, t(lang, 'homeMenuText'), await botQuickReplies(lang))
     await saveChatTurn(psid, 'bot', '🏠 হোম-মেনু (reaction/লাইক-এর উত্তর)')
     return
   }
@@ -487,7 +487,7 @@ async function routeEvent(event: MessagingEvent) {
     if (!tokenRow || tokenRow.status !== 'PENDING') {
       // টোকেন নেই/মেয়াদোত্তীর্ণ — তবুও নীরবতা নয় (all-time-reply নিয়ম): হোম-মেনু
       await holdTyping(typingStart, REFERRAL_TYPING_MS)
-      await sendQuickReplies(psid, t(lang, 'homeMenuText'), botQuickReplies(lang))
+      await sendQuickReplies(psid, t(lang, 'homeMenuText'), await botQuickReplies(lang))
       await saveChatTurn(psid, 'bot', '🏠 হোম-মেনু (referral-এ প্রবেশ)')
       return
     }
@@ -559,7 +559,7 @@ async function routeEvent(event: MessagingEvent) {
       // এখন উষ্ণ হোম-মেনু যায় — কাস্টমার বাটন থেকেই এগোতে পারে।
       if (!dataTextIn) {
         await holdNow()
-        await sendQuickReplies(psid, t(lang, 'homeMenuText'), botQuickReplies(lang))
+        await sendQuickReplies(psid, t(lang, 'homeMenuText'), await botQuickReplies(lang))
         await saveChatTurn(psid, 'bot', '🏠 হোম-মেনু (sticker/attachment-এর উত্তর)')
         return
       }
@@ -579,7 +579,7 @@ async function routeEvent(event: MessagingEvent) {
       if (isGreetingText(dataTextIn)) {
         const greetText = t(lang, 'greetMenuText', { name: nameVar(name) })
         await holdNow()
-        await sendQuickReplies(psid, greetText, botQuickReplies(lang))
+        await sendQuickReplies(psid, greetText, await botQuickReplies(lang))
         await saveChatTurn(psid, 'bot', greetText)
         await maybeAskRnOptIn(psid)
         return
@@ -600,7 +600,7 @@ async function routeEvent(event: MessagingEvent) {
       // সাথে মেনু-বাটন। AI-লেটেন্সি/ব্যর্থতার কোনো সুযোগই থাকে না।
       const staticReply = await buildStaticReply({ lang, message: dataTextIn, psid })
       await holdNow()
-      await sendQuickReplies(psid, staticReply, botQuickReplies(lang))
+      await sendQuickReplies(psid, staticReply, await botQuickReplies(lang))
       await saveChatTurn(psid, 'bot', staticReply)
       // সরাসরি পেজে মেসেজ দেওয়া কাস্টমারও RN-এর সুযোগ পাক (একবারই, কুলডাউন গার্ড সহ)
       await maybeAskRnOptIn(psid)
@@ -645,10 +645,10 @@ async function routeEvent(event: MessagingEvent) {
       const askCount = tokenRow.askCount || 0
       await holdNow()
       if (askCount < 2) {
-        await sendQuickReplies(psid, retryAsk(fieldType, lang), botQuickReplies(lang))
+        await sendQuickReplies(psid, retryAsk(fieldType, lang), await botQuickReplies(lang))
         await db.referralToken.update({ where: { id: tokenRow.id }, data: { askCount: askCount + 1 } })
       } else {
-        await sendQuickReplies(psid, t(lang, 'softWaitMore'), botQuickReplies(lang))
+        await sendQuickReplies(psid, t(lang, 'softWaitMore'), await botQuickReplies(lang))
       }
       return
     }
@@ -688,7 +688,7 @@ async function routeEvent(event: MessagingEvent) {
 
     if (!result.ok) {
       await holdNow()
-      await sendQuickReplies(psid, `😔 ${result.message}`, botQuickReplies(lang))
+      await sendQuickReplies(psid, `😔 ${result.message}`, await botQuickReplies(lang))
       return
     }
 
@@ -728,7 +728,7 @@ async function routeEvent(event: MessagingEvent) {
     if (pbAction) {
       await handleBotUiAction(psid, lang, pbAction, event.postback?.payload)
     } else {
-      await sendQuickReplies(psid, t(lang, 'homeMenuText'), botQuickReplies(lang))
+      await sendQuickReplies(psid, t(lang, 'homeMenuText'), await botQuickReplies(lang))
       await saveChatTurn(psid, 'bot', '🏠 হোম-মেনু (অজানা postback-এর উত্তর)')
     }
     return

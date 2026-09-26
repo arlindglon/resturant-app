@@ -6849,16 +6849,17 @@ export default function AdminPage() {
 }
 
 /* ═════════ 🤖 মেসেঞ্জার ট্যাব — বটের সব ম্যানেজমেন্ট এক জায়গায় ═════════
- * অংশ ১: পার্সিস্টেন্ট-মেনু বাটন ম্যানেজার (add/edit/delete/ক্রম + প্রতিটা
- *         বাটনের নিচে "ট্যাপ করলে কী হয়" mark) + Meta-তে sync
+ * অংশ ১: চ্যাট-বাটন ম্যানেজার — প্রতিটা উত্তরের নিচে থাকা কুইক-রিপ্লাই বাটন
+ *         (📸 স্ক্রিনশট-ফরম্যাট: 🍕 মেনু দেখুন / 🔥 আজকের অফার...) add/edit/
+ *         delete/ক্রমবদল — সেভ করলেই সঙ্গে সঙ্গে লাইভ (Meta sync লাগে না)
  * অংশ ২: কাস্টম অ্যাকশন ম্যানেজার — নিজের বাটন বানান: টেক্সট-রিপ্লাই বা
  *         কার্ড-স্লাইডার (প্রোমো-কোড, ডিটেইলস — যা খুশি)
  * অংশ ৩: ফ্লো ব্যাখ্যা (কাস্টমার কী দেখবে) */
-interface MenuConfigEntry {
+interface QrEntry {
   title: string
   payload: string
 }
-interface MenuConfigAction {
+interface QrAction {
   payload: string
   title: string
   desc?: string
@@ -6879,38 +6880,17 @@ interface BotActionRow {
   cards: BotCardRow[]
   active: boolean
 }
-interface MetaMenuStatus {
-  ok: boolean
-  error: string | null
-  buttons: { title: string; type: string }[]
-  hasGetStarted: boolean
-}
-interface MenuStatusResp {
-  dbEntries: MenuConfigEntry[]
-  meta: MetaMenuStatus
-  inSync: boolean
-  hint: string
-}
 
-function MessengerMenuManager({ onChanged }: { onChanged?: () => void }) {
-  const [entries, setEntries] = useState<MenuConfigEntry[] | null>(null)
-  const [actions, setActions] = useState<MenuConfigAction[]>([])
+function QuickRepliesManager({ onChanged }: { onChanged?: () => void }) {
+  const [entries, setEntries] = useState<QrEntry[] | null>(null)
+  const [actions, setActions] = useState<QrAction[]>([])
   const [saving, setSaving] = useState(false)
   const [newTitle, setNewTitle] = useState('')
   const [newPayload, setNewPayload] = useState('')
-  const [metaStatus, setMetaStatus] = useState<MenuStatusResp | null>(null)
-  const [checkingMeta, setCheckingMeta] = useState(false)
-
-  const checkMeta = useCallback(async () => {
-    setCheckingMeta(true)
-    const res = await api.get<MenuStatusResp>('/api/admin/messenger-menu-status')
-    setCheckingMeta(false)
-    if (res.ok && res.data) setMetaStatus(res.data)
-  }, [])
 
   const load = useCallback(async () => {
-    const res = await api.get<{ entries: MenuConfigEntry[]; actions: MenuConfigAction[]; categories: MenuConfigAction[]; customActions: MenuConfigAction[] }>(
-      '/api/admin/messenger-menu-config'
+    const res = await api.get<{ entries: QrEntry[]; actions: QrAction[]; categories: QrAction[]; customActions: QrAction[] }>(
+      '/api/admin/quick-replies'
     )
     if (res.ok && res.data) {
       setEntries(res.data.entries)
@@ -6924,14 +6904,10 @@ function MessengerMenuManager({ onChanged }: { onChanged?: () => void }) {
     const t = setTimeout(load, 0)
     return () => clearTimeout(t)
   }, [load])
-  useEffect(() => {
-    const t = setTimeout(checkMeta, 300)
-    return () => clearTimeout(t)
-  }, [checkMeta])
 
   const descOf = (payload: string) => actions.find((a) => a.payload === payload)?.desc || ''
 
-  const update = (i: number, patch: Partial<MenuConfigEntry>) =>
+  const update = (i: number, patch: Partial<QrEntry>) =>
     setEntries((prev) => (prev ? prev.map((e, idx) => (idx === i ? { ...e, ...patch } : e)) : prev))
 
   const move = (i: number, dir: -1 | 1) =>
@@ -6949,7 +6925,7 @@ function MessengerMenuManager({ onChanged }: { onChanged?: () => void }) {
   const add = () => {
     const title = newTitle.trim()
     if (!title || !newPayload) return toast.error('বাটনের নাম ও অ্যাকশন — দুটোই দিন')
-    if ((entries?.length || 0) >= 20) return toast.error('সর্বোচ্চ ২০টা বাটন রাখা যায় (Meta নিয়ম)')
+    if ((entries?.length || 0) >= 10) return toast.error('সর্বোচ্চ ১০টা চ্যাট-বাটন রাখা যায় (Messenger নিয়ম)')
     setEntries((prev) => [...(prev || []), { title: title.slice(0, 20), payload: newPayload }])
     setNewTitle('')
     setNewPayload('')
@@ -6957,95 +6933,41 @@ function MessengerMenuManager({ onChanged }: { onChanged?: () => void }) {
 
   const save = async () => {
     setSaving(true)
-    const res = await api.put<{ ok: boolean; synced?: boolean; error?: string; buttons?: number }>('/api/admin/messenger-menu-config', {
+    const res = await api.put<{ ok: boolean; error?: string; entries?: QrEntry[] }>('/api/admin/quick-replies', {
       entries: entries || [],
     })
     setSaving(false)
     if (!res.ok || !res.data?.ok) return toast.error(res.data?.error || res.error || 'সেভ করা যায়নি')
-    if (res.data.synced === false) toast.warning(`💾 সেভ হয়েছে — কিন্তু Meta-তে সিঙ্ক হয়নি: ${res.data.error || ''}`)
-    else toast.success(`✅ সেভ হয়েছে ও Meta পেজে সিঙ্ক হয়েছে${res.data.buttons ? ` — ${res.data.buttons}টা বাটন` : ''} — Messenger-এ নিচের ☰ আইকনে দেখুন`)
-    void checkMeta() // সেভের সাথে সাথে Meta-র লাইভ অবস্থা আবার দেখাই
+    if (res.data.entries) setEntries(res.data.entries)
+    toast.success('✅ চ্যাট-বাটন সেভ হয়েছে — এখনই লাইভ! বটের পরের প্রতিটা উত্তরের নিচে নতুন বাটনগুলো দেখা যাবে।')
     onChanged?.()
   }
 
-  if (!entries) return <p className="text-xs text-stone-400">মেনু বাটন লোড হচ্ছে…</p>
+  if (!entries) return <p className="text-xs text-stone-400">চ্যাট-বাটন লোড হচ্ছে…</p>
 
   return (
     <div className="space-y-2 rounded-xl border border-stone-200 bg-stone-50/60 p-4">
       <p className="text-sm font-black text-stone-800">
-        📋 পার্সিস্টেন্ট মেনু বাটন — যোগ / এডিট / ডিলিট / ক্রম বদল
+        🎨 চ্যাট-বাটন ম্যানেজার — যোগ / এডিট / ডিলিট / ক্রম বদল
       </p>
       <p className="text-xs leading-snug text-stone-500">
-        এগুলোই কাস্টমারের চ্যাটবক্সের নিচে সবসময় থাকা ☰ মেনুর বাটন। প্রতিটা বাটনের নিচে <b>ট্যাপ করলে কী হয়</b> লেখা থাকে।
-        সেভ করলেই Meta পেজে সিঙ্ক হয় (&quot;শুরু করুন&quot; বাটন + স্বাগতম গ্রিটিং সহ)।
+        📸 এগুলোই বটের <b>প্রতিটা উত্তরের নিচে থাকা বাটন</b> (স্ক্রিনশটের ফরম্যাট)। বাটনগুলো মেসেজের সাথেই যায় —
+        তাই সেভ করলেই <b>সঙ্গে সঙ্গে লাইভ</b>; Meta-সিঙ্কের অপেক্ষা বা error কিছুই নেই।
       </p>
-      {/* 🔍 Meta-তে এখন যা আছে — লাইভ স্ট্যাটাস (sync সত্যিই হলো কি না এক নজরে) */}
-      <div
-        className={`rounded-lg border p-3 text-xs leading-relaxed ${
-          !metaStatus
-            ? 'border-stone-200 bg-stone-100 text-stone-500'
-            : !metaStatus.meta.ok
-              ? 'border-red-200 bg-red-50 text-red-900'
-              : metaStatus.inSync
-                ? 'border-emerald-200 bg-emerald-50 text-emerald-900'
-                : 'border-amber-200 bg-amber-50 text-amber-900'
-        }`}
-      >
-        <div className="flex items-center gap-2">
-          <p className="font-black">🔍 Meta পেজে এখন যা আছে:</p>
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={checkMeta}
-            disabled={checkingMeta}
-            className="ml-auto h-7 border-stone-300 px-2 text-[11px] font-black text-stone-700 hover:bg-white"
-          >
-            {checkingMeta ? <Loader2 className="h-3 w-3 animate-spin" /> : '🔄'} আবার চেক
-          </Button>
+      {/* 📱 Messenger-প্রিভিউ — কাস্টমার ঠিক যেমন দেখবে */}
+      <div className="rounded-lg border border-stone-200 bg-white p-3">
+        <p className="text-[11px] font-black text-stone-400">📱 কাস্টমার যেভাবে দেখবে:</p>
+        <div className="mt-1.5 flex flex-wrap gap-1.5">
+          {entries.map((e, i) => (
+            <span
+              key={`${i}-${e.payload}`}
+              className="rounded-full border border-stone-300 bg-white px-3 py-1 text-xs font-bold text-stone-800 shadow-sm"
+            >
+              {e.title || '…'}
+            </span>
+          ))}
+          {!entries.length && <span className="text-[11px] text-red-600">⚠️ একটাও বাটন নেই — নিচ থেকে যোগ করুন</span>}
         </div>
-        {!metaStatus ? (
-          <p className="mt-1">Meta-র সাথে যোগাযোগ করা হচ্ছে…</p>
-        ) : !metaStatus.meta.ok ? (
-          <>
-            <p className="mt-1 font-bold">⚠️ Meta থেকে মেনু পড়া গেল না:</p>
-            <p className="mt-0.5 break-words font-mono text-[11px]">{metaStatus.meta.error}</p>
-            <p className="mt-1">{metaStatus.hint}</p>
-          </>
-        ) : metaStatus.inSync ? (
-          <>
-            <p className="mt-1">
-              ✅ <b>আপনার এডিট করা {metaStatus.meta.buttons.length}টা বাটনই Meta পেজে আছে</b>
-              {metaStatus.meta.hasGetStarted ? ' + "শুরু করুন" বাটন চালু ✅' : ' — কিন্তু "শুরু করুন" বাটন নেই ⚠️'}
-            </p>
-            <p className="mt-1 flex flex-wrap gap-1">
-              {metaStatus.meta.buttons.map((b, i) => (
-                <span key={`${i}-${b.title}`} className="rounded border border-emerald-300 bg-white px-1.5 py-0.5 text-[11px] font-bold">
-                  {b.title}
-                </span>
-              ))}
-            </p>
-            <p className="mt-1.5">
-              💡 Messenger অ্যাপ পুরনো মেনু কিছুক্ষণ ক্যাশে রাখে — <b>চ্যাট বন্ধ করে আবার খুলুন</b> (বা Messenger অ্যাপ বন্ধ করে চালু করুন), তারপর নিচের ☰ আইকনে নতুন মেনু দেখবেন।
-            </p>
-          </>
-        ) : (
-          <>
-            <p className="mt-1 font-bold">
-              ⚠️ Meta-তে এখনও পুরনো মেনু ({metaStatus.meta.buttons.length}টা বাটন) — আপনার নতুন তালিকা সেখানে যায়নি।
-            </p>
-            <p className="mt-0.5">Meta-তে এখন এগুলো আছে:</p>
-            <p className="mt-1 flex flex-wrap gap-1">
-              {metaStatus.meta.buttons.map((b, i) => (
-                <span key={`${i}-${b.title}`} className="rounded border border-amber-300 bg-white px-1.5 py-0.5 text-[11px] font-bold">
-                  {b.title}
-                </span>
-              ))}
-            </p>
-            <p className="mt-1.5 font-bold">
-              👉 নিচের &quot;💾 সেভ করুন ও Meta-তে সিঙ্ক করুন&quot; বাটনে চাপুন — সিঙ্ক হওয়ার পর এই ঘরটা সবুজ হবে।
-            </p>
-          </>
-        )}
       </div>
       {entries.map((e, i) => (
         <div key={`${i}-${e.payload}`} className="rounded-lg border border-stone-200 bg-white p-2">
@@ -7134,10 +7056,10 @@ function MessengerMenuManager({ onChanged }: { onChanged?: () => void }) {
         </p>
       )}
       <Button onClick={save} disabled={saving} className="w-full font-black">
-        {saving ? <Loader2 className="h-4 w-4 animate-spin" /> : '💾'} সেভ করুন ও Meta-তে সিঙ্ক করুন
+        {saving ? <Loader2 className="h-4 w-4 animate-spin" /> : '💾'} সেভ করুন — সঙ্গে সঙ্গে লাইভ
       </Button>
       <p className="text-[11px] leading-snug text-stone-500">
-        টিপ: নিচের "কাস্টম অ্যাকশন"-এ নিজের বাটন বানিয়ে (যেমন 🎁 প্রোমো কোড) এখানে যোগ করতে পারবেন।
+        টিপ: নিচের &quot;কাস্টম অ্যাকশন&quot;-এ নিজের বাটন বানিয়ে (যেমন 🎁 প্রোমো কোড) এখানে যোগ করতে পারবেন।
       </p>
     </div>
   )
@@ -7699,7 +7621,7 @@ function MessengerBotTab() {
               → ট্যাপে ওই ক্যাটাগরির কার্ড → <b>⬅️ পেছনে</b> বাটনে সব-খাবার ভিউতে ফেরা। ☰ মেনু সবসময় চ্যাটবক্সের নিচে থাকে।
             </p>
           </div>
-          <MessengerMenuManager key={`menu-${reloadKey}`} onChanged={() => setReloadKey((k) => k + 1)} />
+          <QuickRepliesManager key={`qr-${reloadKey}`} onChanged={() => setReloadKey((k) => k + 1)} />
           <BotActionsManager key={`acts-${reloadKey}`} onChanged={() => setReloadKey((k) => k + 1)} />
         </CardContent>
       </Card>

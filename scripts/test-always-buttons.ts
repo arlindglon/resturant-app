@@ -38,7 +38,7 @@ const sent: { url: string; body: Record<string, unknown> }[] = []
 }) as unknown
 
 const { sendText, sendReceipt, sendBirthdayGreeting } = await import('../src/lib/messenger')
-const chips = botQuickReplies('bn')
+const chips = await botQuickReplies('bn')
 
 await sendText('PSID1', 'সাধারণ টেক্সট', { quickReplies: chips })
 {
