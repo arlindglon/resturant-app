@@ -1,6 +1,7 @@
 // GET/POST /api/admin/push — কাস্টমার ওয়েব-পুশ: পরিসংখ্যান, টেস্ট, ব্রডকাস্ট, চালু/বন্ধ
 import { NextRequest } from 'next/server'
 import { ok, fail } from '@/lib/api'
+import { db } from '@/lib/db'
 import { requirePerm } from '@/lib/staff-auth'
 import { getSetting, setSettings } from '@/lib/settings'
 import { SETTING_KEYS } from '@/lib/constants'
@@ -36,6 +37,13 @@ export async function POST(req: NextRequest) {
     const enabled = body.enabled === true
     await setSettings({ [SETTING_KEYS.PUSH_ENABLED]: enabled ? 'true' : 'false' })
     return ok({ enabled })
+  }
+
+  if (action === 'remove') {
+    const id = String(body.id || '')
+    if (!id) return fail('id প্রয়োজন')
+    const res = await db.pushSubscription.deleteMany({ where: { id } })
+    return ok({ removed: res.count })
   }
 
   if (action === 'test' || action === 'broadcast') {
