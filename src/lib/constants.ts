@@ -86,7 +86,7 @@ export const SETTING_KEYS = {
   DEVELOPER_NOTE_LINK: 'developer_note_link',
   ITEM_SPECIAL_NOTE_ENABLED: 'item_special_note_enabled',
   MESSENGER_AUTO_REPLY_ENABLED: 'messenger_auto_reply_enabled',
-  MESSENGER_MARKDOWN: 'messenger_markdown', // Messenger মার্কডাউন ফরম্যাট (*bold*, _italic_, ~strike~, `কোড`) — 'false' হলে প্লেইন টেক্সট
+  MESSENGER_MARKDOWN: 'messenger_markdown', // AI-প্রম্পটে মার্কডাউন-স্টাইল নিয়ম যাবে কি না — ওয়্যারে Graph v21 text_format রিজেক্ট করে বলে মার্কার পাঠানোর আগেই পরিষ্কার হয় (stripMdMarkers)
   MESSENGER_PAGE_TOKEN: 'messenger_page_token', // Page Access Token (admin সেটিং-ওভাররাইড) — মেয়াদ শেষ হলে Vercel env ছোঁয়া ছাড়াই এখান থেকে নতুন টোকেন; ফাঁকা = env META_PAGE_TOKEN
   META_VERIFY_TOKEN: 'meta_verify_token', // Webhook Verify Token (admin সেটিং-ওভাররাইড) — Meta অ্যাপ ড্যাশবোর্ডে webhook সেভ করার সময় যে টোকেন দেওয়া হয়; ফাঁকা = env META_VERIFY_TOKEN
   MESSENGER_MENU_JSON: 'messenger_menu_json', // পার্সিস্টেন্ট-মেনু বাটন (admin-সম্পাদনযোগ্য) — JSON [{title,payload}]; ফাঁকা = ডিফল্ট

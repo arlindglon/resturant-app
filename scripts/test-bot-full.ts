@@ -8,7 +8,7 @@
 //   [5] botQuickReplies(lang) — ৪ ভাষাতেই ৫টা বাটন, title ≤20, payload __-prefixed
 //   [6] BACK_CHIP / catPayload / actPayload / isValidMenuPayload
 //   [7] handleBotUiAction     — fetch mock দিয়ে প্রতিটা অ্যাকশনের ডিসপ্যাচ (DB-blip fallback সহ)
-//   [8] sendText markdown fallback — text_format → plain retry → chip-less retry (fetch mock)
+//   [8] sendText — প্লেইন-ফার্স্ট পাঠানো + চিপ-ছাড়া ফলব্যাক + text_format সম্পূর্ণ বাদ (fetch mock)
 //   [9] verifyToken env fallback  — DB ফাঁকা → process.env.META_VERIFY_TOKEN
 //  [10] webhook route + messenger.ts source-contract (file-text assertions)
 //
@@ -274,12 +274,14 @@ check('ACT echo-তে "act:nope"', rAct.echo?.includes('act:nope') === true)
 check('ACT: মেনু-ফলব্যাক মেসেজ গেছে', sentAct.length >= 1 && Boolean(sentAct[0]?.message?.text))
 
 // TEXTMENU — DB খালি → staticMenuHead + ৫ মূল বাটন
+// (ওয়্যারে stripMdMarkers চলে — তাই প্রত্যাশাও marker-মুক্ত করে মিলাতে হয়)
+const { stripMdMarkers: stripForTm } = await import('../src/lib/messenger')
 const sentTm: SentBody[] = []
 mockFetch(sentTm)
 const rTm = await handleBotUiAction('PSID6', 'bn', BOT_ACTIONS.TEXTMENU)
 check('TEXTMENU handled=true', rTm.handled === true)
 check('TEXTMENU: ১টা মেসেজ (খালি DB → হেড+বাটন)', sentTm.length === 1)
-check('TEXTMENU: staticMenuHead টেক্সট', Boolean(sentTm[0]?.message?.text?.includes(t('bn', 'staticMenuHead').slice(0, 10))))
+check('TEXTMENU: staticMenuHead টেক্সট (মার্কার-মুক্ত)', Boolean(sentTm[0]?.message?.text?.includes(stripForTm(t('bn', 'staticMenuHead')).slice(0, 10))))
 check('TEXTMENU: ৫টা মূল চিপ', qrOf(sentTm[0]).length === 5)
 
 // LOCATION / HELPLINE — buildStaticReply topic-মোড (settings-default থেকে)
@@ -304,31 +306,43 @@ check('OFFERS handled=true', rOff.handled === true)
 check('OFFERS: কমপক্ষে ১টা মেসেজ', sentOff.length >= 1)
 check('OFFERS: চিপে __HOME__ (পেছনে)', qrOf(sentOff[0]).some((q) => q.payload === '__HOME__'))
 
-/* ── [8] sendText markdown fallback ─────────────────────────────────────── */
-section('8 sendText — markdown → plain → chip-less fallback (fetch mock)')
-const { sendText, verifyToken, verifyTokenInfo } = await import('../src/lib/messenger')
+/* ── [8] sendText — প্লেইন-ফার্স্ট + চিপ-ছাড়া ফলব্যাক (fetch mock) ─────── */
+section('8 sendText — চিপসহ → চিপছাড়া ফলব্যাক + text_format নেই + মার্কার-পরিষ্কার (fetch mock)')
+const { sendText, stripMdMarkers, verifyToken, verifyTokenInfo } = await import('../src/lib/messenger')
 
-// 8a: markdown গ্রহণ → ১ কল, text_format:markdown, true
-const mdOk: SentBody[] = []
-mockFetch(mdOk)
-const okMd = await sendText('P1', 'হ্যালো *বোল্ড*')
-check('markdown-ok → true', okMd === true)
-check('markdown-ok: ঠিক ১টা কল', mdOk.length === 1)
-check("markdown-ok: body-তে text_format:'markdown'", (mdOk[0]?.message as Record<string, unknown> | undefined)?.text_format === 'markdown')
+// stripMdMarkers — কাঁচা markdown-মার্কার কাস্টমারের কাছে যায় না
+eq('stripMdMarkers: *বোল্ড* পরিষ্কার', stripMdMarkers('শুভ জন্মদিন *রাকিব*!'), 'শুভ জন্মদিন রাকিব!')
+eq('stripMdMarkers: **বোল্ড** পরিষ্কার', stripMdMarkers('**রাকিব**'), 'রাকিব')
+eq('stripMdMarkers: `কোড` পরিষ্কার', stripMdMarkers('কুপন `W10` নিন'), 'কুপন W10 নিন')
+eq('stripMdMarkers: ~কাটা~ পরিষ্কার', stripMdMarkers('~৳৫০০~ ৳৩৯৯'), '৳৫০০ ৳৩৯৯')
+eq('stripMdMarkers: একা * অক্ষত (গণিত)', stripMdMarkers('৫*৪=২০'), '৫*৪=২০')
+eq('stripMdMarkers: আন্ডারস্কোর-শব্দ অক্ষত', stripMdMarkers('my_page লিখুন'), 'my_page লিখুন')
 
-// 8b: markdown রিজেক্ট → প্লেইন রিট্রাই সফল → ২ কল, দ্বিতীয়টায় text_format নেই
-let callCount = 0
+// 8a: সফল পাঠানো → ঠিক ১টা কল — text_format কখনোই তারেরে যায় না (Graph v21 #100)
+const okCalls: SentBody[] = []
+mockFetch(okCalls)
+const okPlain = await sendText('P1', 'হ্যালো *বোল্ড* `কোড`')
+check('plain-ok → true', okPlain === true)
+check('plain-ok: ঠিক ১টা কল (বৃথা md-রিজেক্ট কল নেই)', okCalls.length === 1)
+check('plain-ok: body-তে text_format নেই', !JSON.stringify(okCalls[0]).includes('text_format'))
+check('plain-ok: মার্কার পরিষ্কার টেক্সট', okCalls[0]?.message?.text === 'হ্যালো বোল্ড কোড')
+
+// 8b: চিপসহ রিজেক্ট → চিপছাড়া রিট্রাই সফল → ২ কল, দুটোতেই text_format নেই
+const retryCalls: SentBody[] = []
+let retryN = 0
 ;(globalThis as { fetch: unknown }).fetch = (async (_u: unknown, init?: { body?: string }) => {
-  callCount++
-  const hasMd = Boolean(init?.body?.includes('text_format'))
-  if (hasMd) return new Response(JSON.stringify({ error: { message: 'text_format not supported' } }), { status: 400 })
+  retryN++
+  const body = JSON.parse(init?.body || '{}') as { message?: Record<string, unknown> }
+  retryCalls.push(body as SentBody)
+  if (body.message?.quick_replies) return new Response(JSON.stringify({ error: { message: 'quick_replies rejected' } }), { status: 400 })
   return new Response(JSON.stringify({ recipient_id: 'X', message_id: 'm' }), { status: 200 })
 }) as unknown
-const okRetry = await sendText('P2', 'প্লেইন রিট্রাই')
-check('md-reject → plain-retry → true', okRetry === true)
-check('md-reject: ২টা কল (md + plain)', callCount === 2)
+const okRetry = await sendText('P2', 'প্লেইন রিট্রাই', { quickReplies: [{ title: '🍕 মেনু', payload: '__MENU__' }] })
+check('chips-reject → chipless-retry → true', okRetry === true)
+check('chips-reject: ২টা কল (চিপসহ + চিপছাড়া)', retryN === 2)
+check('chips-reject: কোনো কলেই text_format নেই', retryCalls.every((b) => !JSON.stringify(b).includes('text_format')))
 
-// 8c: চিপসহ সব রিজেক্ট → ৩ কল (md, plain+chips, plain-chipless), false
+// 8c: সব রিজেক্ট → ২ কল (চিপসহ / চিপছাড়া), false
 const allCalls: string[] = []
 ;(globalThis as { fetch: unknown }).fetch = (async (_u: unknown, init?: { body?: string }) => {
   allCalls.push(init?.body || '')
@@ -336,9 +350,9 @@ const allCalls: string[] = []
 }) as unknown
 const allFail = await sendText('P3', 'চিপ-টেস্ট', { quickReplies: [{ title: '🍕 মেনু', payload: '__MENU__' }] })
 check('all-reject → false', allFail === false)
-check('all-reject: ৩টা কল (md / plain+chips / chipless)', allCalls.length === 3)
-check('all-reject: ৩য় কলে quick_replies নেই (শেষ চেষ্টা)', allCalls[2] ? !allCalls[2].includes('quick_replies') : false)
-check('all-reject: ২য় কলে quick_replies ছিল', allCalls[1] ? allCalls[1].includes('quick_replies') : false)
+check('all-reject: ২টা কল (চিপসহ / চিপছাড়া)', allCalls.length === 2)
+check('all-reject: ২য় কলে quick_replies নেই (শেষ চেষ্টা)', allCalls[1] ? !allCalls[1].includes('quick_replies') : false)
+check('all-reject: ১লা কলে quick_replies ছিল', allCalls[0] ? allCalls[0].includes('quick_replies') : false)
 
 // 8d: চিপ title 20-char clamp (Meta নিয়ম) — লম্বা title কাটা পড়ে
 const clampCalls: string[] = []
@@ -347,7 +361,7 @@ const clampCalls: string[] = []
   return new Response(JSON.stringify({ error: { message: 'x' } }), { status: 400 })
 }) as unknown
 await sendText('P4', 'clamp', { quickReplies: [{ title: 'X'.repeat(40), payload: '__MENU__' }] })
-const clamped = JSON.parse(clampCalls[1] || '{}') as { message?: { quick_replies?: { title: string }[] } }
+const clamped = JSON.parse(clampCalls[0] || '{}') as { message?: { quick_replies?: { title: string }[] } }
 check('chips: title 40 → 20 chars-এ clamp', clamped.message?.quick_replies?.[0]?.title.length === 20)
 
 /* ── [9] verifyToken env fallback ───────────────────────────────────────── */
@@ -394,9 +408,12 @@ check('route: GET+POST দুটোই export করা', routeSrc.includes('exp
 check('route: টেক্সট-অ্যাকশন allowlist-এ MENU/OFFERS/ORDER/TEXTMENU/HOME', ['BOT_ACTIONS.MENU', 'BOT_ACTIONS.OFFERS', 'BOT_ACTIONS.ORDER', 'BOT_ACTIONS.TEXTMENU', 'BOT_ACTIONS.HOME'].every((a) => routeSrc.includes(a)))
 
 // messenger.ts contracts
-has("messenger: text_format: 'markdown' (md ফরম্যাট)", msSrc, "text_format: 'markdown'")
-check('messenger: sendText-এ ৩-ধাপ ফলব্যাক (md → plain → chipless)', (msSrc.match(/message: \{ text/g) || []).length >= 3)
-has('messenger: chipless শেষ চেষ্টা রিটার্ন-লাইন', msSrc, 'return chips ? post({ recipient: { id: psid }, message: { text } }) : false')
+check('messenger: text_format কোনো পে-লোডে নেই (Graph v21 #100 রিজেক্ট)', !/\btext_format\s*:/.test(msSrc))
+check('messenger: sendText-এ ২-ধাপ ফলব্যাক (চিপসহ → চিপছাড়া)', (msSrc.match(/message: \{ text/g) || []).length >= 2)
+has('messenger: stripMdMarkers ওয়্যার-ক্লিনার (কাঁচা মার্কার যায় না)', msSrc, 'export function stripMdMarkers')
+has('messenger: recordSendError সিরিয়াল কিউ (শেষ এররই DB-তে শেষ)', msSrc, 'sendErrWriteChain')
+has("messenger: sendTypingOn — sender_action typing_on ('...' ইন্ডিকেটর)", msSrc, "sender_action: 'typing_on'")
+has('messenger: chipless শেষ চেষ্টা রিটার্ন-লাইন', msSrc, 'return chips ? post({ recipient: { id: psid }, message: { text: stripMdMarkers(text) } }) : false')
 has('messenger: AbortSignal.timeout (sendText post)', msSrc, 'AbortSignal.timeout(10_000)')
 check('messenger: recordSendError error-path-এ ≥৪ বার', (msSrc.match(/recordSendError\(/g) || []).length >= 4)
 has('messenger: verifyToken DB-আগে (SETTING_KEYS.META_VERIFY_TOKEN)', msSrc, 'SETTING_KEYS.META_VERIFY_TOKEN')

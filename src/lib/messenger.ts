@@ -11,12 +11,18 @@ const GRAPH = 'https://graph.facebook.com/v21.0'
 export const KEY_LAST_SEND_ERROR = 'messenger_last_send_error'
 let lastSendErrWrite = 0
 let lastSendErrText = ''
+let sendErrWriteChain = Promise.resolve()
 function recordSendError(msg: string, psid?: string) {
   const text = `${new Date().toISOString()} — ${msg}${psid ? ` (psid: ${psid})` : ''}`.slice(0, 500)
   if (text === lastSendErrText && Date.now() - lastSendErrWrite < 30_000) return
   lastSendErrWrite = Date.now()
   lastSendErrText = text
-  setSettings({ [KEY_LAST_SEND_ERROR]: text }).catch(() => {})
+  // সিরিয়াল কিউ: একই রিকোয়েস্টে পরপর দুটো রেকর্ড (যেমন আগে রিজেক্ট-এরর, পরে
+  // আসল-এরর) হলে DB-রাইটও সেই ক্রমেই ল্যান্ড করে — race-এ পুরনো এরর সবশেষে
+  // বসে যাওয়া বন্ধ (আগে admin ভুল কারণ দেখতেন: আসল এররের জায়গায় পুরনোটা)।
+  sendErrWriteChain = sendErrWriteChain
+    .then(() => setSettings({ [KEY_LAST_SEND_ERROR]: text }))
+    .catch(() => {})
 }
 
 /** রিপ্লাই/টেস্টে ব্যবহারের জন্য হুবহু Graph error → মানব-পাঠযোগ্য বাংলা ইঙ্গিত */
@@ -337,7 +343,7 @@ export async function sendTypingOn(psid: string): Promise<boolean> {
 export async function sendText(
   psid: string,
   text: string,
-  opts?: { markdown?: boolean; quickReplies?: QuickReply[] }
+  opts?: { quickReplies?: QuickReply[] }
 ): Promise<boolean> {
   const token = await pageToken()
   if (!token) return false
@@ -369,18 +375,38 @@ export async function sendText(
     }
   }
 
-  // Messenger markdown (*bold*, _italic_, ~strike~, `code`): admin বন্ধ না করলে
-  // text_format:markdown দিয়ে যায় — Graph কোনো কারণে রিজেক্ট করলে (নতুন ফিল্ড
-  // না-মানা / ২৪ঘ উইন্ডো / যা-ই হোক) প্লেইন টেক্সট দিয়ে আরেকবার — মেসেজ কখনো হারায় না।
-  const wantMd = opts?.markdown !== false && (await markdownEnabled())
-  if (wantMd && (await post({ recipient: { id: psid }, message: { text, text_format: 'markdown', ...(chips ? { quick_replies: chips } : {}) } }))) {
-    return true
-  }
-  if (await post({ recipient: { id: psid }, message: { text, ...(chips ? { quick_replies: chips } : {}) } })) {
+  // ⚠️ Graph API v21.0-এর Send API-তে text_format/markdown ফিল্ড নেই — পাঠালেই
+  // "(#100) Invalid keys \"text_format\"" রিজেক্ট (লাইভ-প্রোব-যাচিত)। আগে প্রতি
+  // মেসেজে আগে একটা বৃথা রিজেক্ট-কল যেত + ভুল এরর-রেকর্ড বসত — তাই markdown
+  // চেষ্টা সম্পূর্ণ বাদ। সব মেসেজ প্লেইন টেক্সটে: আগে চিপসহ, রিজেক্ট হলে চিপ ছাড়া —
+  // মেসেজ কখনো হারায় না।
+  if (await post({ recipient: { id: psid }, message: { text: stripMdMarkers(text), ...(chips ? { quick_replies: chips } : {}) } })) {
     return true
   }
   // চিপসহ রিজেক্ট হলে চিপ ছাড়া শেষ চেষ্টা (quick_replies ফিল্ডই কোনো কারণে অগ্রাহ্য হলে)
-  return chips ? post({ recipient: { id: psid }, message: { text } }) : false
+  return chips ? post({ recipient: { id: psid }, message: { text: stripMdMarkers(text) } }) : false
+}
+
+/**
+ * Messenger markdown (*bold*, ~strike~, `code`, **bold**) মার্কার পরিষ্কার —
+ * Graph v21 Send API markdown রেন্ডারই করে না, তাই মার্কার রেখে দিলে কাস্টমার
+ * কাঁচা *তারকা*-চিহ্ন দেখত (জন্মদিনের শুভেচ্ছা/AI-উত্তর/কুপন কোডে প্রতিদিনই ঘটত)।
+ * জোড়া-মিললেই চিহ্ন খুলে ভেতরের লেখা থাকে; একা `*` (যেমন ৫*৪=২০) অক্ষত থাকে।
+ * _italic_ ইচ্ছাকৃতভাবে বাদ — আন্ডারস্কোর-যুক্ত শব্দ/ইমেইল নষ্ট হওয়ার ঝুঁকি।
+ */
+export function stripMdMarkers(text: string): string {
+  let out = text
+  for (let i = 0; i < 3; i++) {
+    const next = out
+      .replace(/\*\*([^*\n]+)\*\*/g, '$1')
+      .replace(/\*([^*\n]+)\*/g, '$1')
+      .replace(/~~([^~\n]+)~~/g, '$1')
+      .replace(/~([^~\n]+)~/g, '$1')
+      .replace(/`([^`\n]+)`/g, '$1')
+    if (next === out) break
+    out = next
+  }
+  return out
 }
 
 /** Messenger markdown চালু আছে কি না (admin সেটিং; ৩০ সেকেন্ড ক্যাশ) */
@@ -450,7 +476,7 @@ export async function sendQuickReplies(psid: string, text: string, replies: Quic
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         recipient: { id: psid },
-        message: { text, quick_replies: chips },
+        message: { text: stripMdMarkers(text), quick_replies: chips },
       }),
       signal: AbortSignal.timeout(10_000),
     })
@@ -775,7 +801,7 @@ export async function sendRnToToken(token: string, text: string): Promise<GraphS
   for (const key of ['notification_messages_token', 'notification_message_token']) {
     const r = await graphPost('/me/messages', {
       recipient: { [key]: token },
-      message: { text },
+      message: { text: stripMdMarkers(text) },
     })
     if (r.ok) return { ok: true }
     lastError = r.error || lastError

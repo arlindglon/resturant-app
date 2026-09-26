@@ -42,7 +42,7 @@ const chips = botQuickReplies('bn')
 
 await sendText('PSID1', 'সাধারণ টেক্সট', { quickReplies: chips })
 {
-  const b = sent[sent.length - 1]?.body as { message?: { text?: string; quick_replies?: unknown[]; text_format?: string } }
+  const b = sent[sent.length - 1]?.body as { message?: { text?: string; quick_replies?: unknown[] } }
   check('টেক্সট গেছে', b?.message?.text === 'সাধারণ টেক্সট')
   check('নিচে ৫টা মেনু-বাটন গেছে', (b?.message?.quick_replies?.length || 0) === 5)
 }
@@ -63,9 +63,9 @@ sent.length = 0
   return new Response(JSON.stringify({ recipient_id: 'X', message_id: 'm' }), { status: 200 })
 }) as unknown
 
-const okFallback = await sendText('PSID1', 'গুরুত্বপূর্ণ মেসেজ', { markdown: false, quickReplies: chips })
+const okFallback = await sendText('PSID1', 'গুরুত্বপূর্ণ মেসেজ', { quickReplies: chips })
 check('fallback সফল (true)', okFallback === true)
-check('৩ বার চেষ্টা হয়েছে (চিপ+মার্কডাউন বন্ধ → চিপসহ → চিপছাড়া)', sent.length === 2)
+check('২ বার চেষ্টা হয়েছে (চিপসহ → চিপছাড়া)', sent.length === 2)
 {
   const last = sent[sent.length - 1]?.body as { message?: { text?: string; quick_replies?: unknown[] } }
   check('শেষ চেষ্টায় মেসেজ গেছে চিপ ছাড়া', last?.message?.text === 'গুরুত্বপূর্ণ মেসেজ' && !last?.message?.quick_replies)
