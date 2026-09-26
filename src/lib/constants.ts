@@ -110,6 +110,18 @@ export const SETTING_KEYS = {
   GEO_LAT: 'geo_lat',
   GEO_LNG: 'geo_lng',
   GEO_RADIUS_METERS: 'geo_radius_meters',
+  // 📊 ডেইলি অটো রিপোর্ট (WhatsApp, CallMeBot — কোনো ডকুমেন্ট/রিভিউ লাগে না)
+  WA_REPORT_ENABLED: 'wa_report_enabled',
+  WA_REPORT_RECIPIENTS: 'wa_report_recipients', // JSON [{label, phone, apiKey}] — admin/owner/partner
+  WA_REPORT_TIME: 'wa_report_time', // শুধু দেখানোর জন্য (Vercel cron আসল সময় ঠিক করে) — "22:00"
+  WA_REPORT_LAST_DATE: 'wa_report_last_date', // YYYY-MM-DD (Asia/Dhaka) — দিনে একবার idempotent
+  WA_REPORT_LAST_RESULT: 'wa_report_last_result', // শেষ পাঠানোর ফলাফল (ডায়াগনস্টিকস)
+  // 🔔 কাস্টমার ওয়েব পুশ (VAPID — Meta রিভিউ/ডকুমেন্ট ছাড়া)
+  PUSH_ENABLED: 'push_enabled',
+  PUSH_VAPID_PUBLIC: 'push_vapid_public',
+  PUSH_VAPID_PRIVATE: 'push_vapid_private', // কখনো UI-তে যায় না
+  PUSH_SUBJECT: 'push_subject', // mailto: বা সাইট URL
+  PUSH_LAST_RESULT: 'push_last_result',
 } as const
 
 export const SETTING_DEFAULTS: Record<string, string> = {
@@ -158,6 +170,16 @@ export const SETTING_DEFAULTS: Record<string, string> = {
   [SETTING_KEYS.GEO_LAT]: '',
   [SETTING_KEYS.GEO_LNG]: '',
   [SETTING_KEYS.GEO_RADIUS_METERS]: '200',
+  [SETTING_KEYS.WA_REPORT_ENABLED]: 'true',
+  [SETTING_KEYS.WA_REPORT_RECIPIENTS]: '',
+  [SETTING_KEYS.WA_REPORT_TIME]: '22:00',
+  [SETTING_KEYS.WA_REPORT_LAST_DATE]: '',
+  [SETTING_KEYS.WA_REPORT_LAST_RESULT]: '',
+  [SETTING_KEYS.PUSH_ENABLED]: 'true',
+  [SETTING_KEYS.PUSH_VAPID_PUBLIC]: '',
+  [SETTING_KEYS.PUSH_VAPID_PRIVATE]: '',
+  [SETTING_KEYS.PUSH_SUBJECT]: '',
+  [SETTING_KEYS.PUSH_LAST_RESULT]: '',
 }
 
 export const DAY_NAMES = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday']

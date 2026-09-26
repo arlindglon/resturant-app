@@ -401,3 +401,23 @@ ALTER TABLE `waiter_calls` ADD CONSTRAINT `waiter_calls_tableId_fkey` FOREIGN KE
 -- AddForeignKey
 ALTER TABLE `birthday_claims` ADD CONSTRAINT `birthday_claims_customerId_fkey` FOREIGN KEY (`customerId`) REFERENCES `customers`(`id`) ON DELETE SET NULL ON UPDATE CASCADE;
 
+
+-- ============================================================
+-- 🔔 Customer Web Push subscriptions (VAPID — কোনো ডকুমেন্ট লাগে না)
+-- নতুন ইনস্টলে এই টেবিলও লাগবে; পুরনো সিস্টেমে অ্যাপ নিজেই বানিয়ে নেয়।
+-- ============================================================
+CREATE TABLE IF NOT EXISTS `push_subscriptions` (
+    `id` VARCHAR(191) NOT NULL,
+    `endpoint` VARCHAR(500) NOT NULL,
+    `p256dh` TEXT NOT NULL,
+    `auth` TEXT NOT NULL,
+    `deviceId` VARCHAR(191) NULL,
+    `tableNumber` INTEGER NULL,
+    `userAgent` TEXT NULL,
+    `lastError` TEXT NULL,
+    `createdAt` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+    UNIQUE KEY `push_subscriptions_endpoint_key` (`endpoint`),
+    PRIMARY KEY (`id`)
+) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+CREATE INDEX IF NOT EXISTS `push_subscriptions_deviceId_idx` ON `push_subscriptions`(`deviceId`);
+CREATE INDEX IF NOT EXISTS `push_subscriptions_tableNumber_idx` ON `push_subscriptions`(`tableNumber`);

@@ -33,6 +33,7 @@ import { taka } from '@/lib/constants'
 import { cn } from '@/lib/utils'
 import { useCart, unitPrice, type CartItem } from '@/store/cart'
 import { useRealtime } from '@/hooks/use-realtime'
+import { PushBell } from '@/components/push-bell'
 
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -1488,6 +1489,7 @@ export default function MenuPage() {
       </Sheet>
 
       {/* ── developer credit ── */}
+      <PushBell tableNumber={tableNumber} />
       <footer className="pb-24 pt-2 sm:pb-20">
         <p className="text-center text-[11px] text-stone-400">
           {restaurantName} • স্ক্যান করুন, অর্ডার করুন, উপভোগ করুন

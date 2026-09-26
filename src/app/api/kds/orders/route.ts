@@ -66,6 +66,21 @@ export async function PATCH(req: NextRequest) {
 
   const order = await db.order.update({ where: { id }, data })
 
+  // 🔔 অর্ডার রেডি হলে সেই টেবিলের সব ডিভাইসে অটো ওয়েব-পুশ (best-effort — কখনো কিচেনের রেসপন্স ফেল করাবে না)
+  if (status === ORDER_STATUS.READY) {
+    try {
+      const { notifySessionDevices } = await import('@/lib/webpush-server')
+      await notifySessionDevices(order.sessionId, order.tableNumber, {
+        title: `🔔 টেবিল ${order.tableNumber} — অর্ডার রেডি!`,
+        body: 'আপনার খাবার তৈরি হয়ে গেছে — পরিবেশন করা হচ্ছে। খেতে সবুজ থাকুন! 🍽️',
+        tag: `order-${order.id}`,
+        url: '/menu',
+      })
+    } catch {
+      /* পুশ ব্যর্থ হলেও কিচেন-ফ্লো অক্ষুণ্ণ */
+    }
+  }
+
   // if all orders of session are served/completed, free the table status flag is NOT auto —
   // table cleared manually by cashier.
 

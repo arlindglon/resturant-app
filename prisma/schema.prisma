@@ -260,6 +260,25 @@ model WaiterCall {
   @@map("waiter_calls")
 }
 
+// ---------------- Customer Web Push (no documents needed — VAPID) ----------------
+// One row per browser/device subscription. Tagged with the sticky deviceId so
+// "order READY" pushes go exactly to the devices that ordered from that table.
+model PushSubscription {
+  id          String   @id @default(cuid())
+  endpoint    String   @unique @db.VarChar(500) // browser push service URL (unique per subscription)
+  p256dh      String   @db.Text // subscription.keys.p256dh
+  auth        String   @db.Text // subscription.keys.auth
+  deviceId    String? // sticky qr_device id (link to the ordering device)
+  tableNumber Int? // table snapshot at subscribe time (broadcast/report context)
+  userAgent   String?  @db.Text // diagnostics
+  lastError   String?  @db.Text // last send error (auto-cleaned on 404/410)
+  createdAt   DateTime @default(now())
+
+  @@index([deviceId])
+  @@index([tableNumber])
+  @@map("push_subscriptions")
+}
+
 // ---------------- CRM: Customers (Messenger) ----------------
 model Customer {
   id              String         @id @default(cuid())

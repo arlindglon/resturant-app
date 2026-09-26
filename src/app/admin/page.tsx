@@ -4577,6 +4577,189 @@ function GeoMap({
   )
 }
 
+/* ───────── 🔔 নোটিফিকেশন কার্ড: ডেইলি WhatsApp রিপোর্ট + কাস্টমার ওয়েব পুশ ───────── */
+interface WaRecipientRow {
+  label: string
+  phone: string
+  apiKey: string
+}
+interface WaReportState {
+  enabled: boolean
+  time: string
+  today: string
+  lastDate: string
+  lastResult: string
+  preview: string
+}
+interface PushState {
+  enabled: boolean
+  count: number
+  lastResult: string
+}
+
+function NotificationsCard() {
+  const [wa, setWa] = useState<WaReportState | null>(null)
+  const [rows, setRows] = useState<WaRecipientRow[]>([])
+  const [push, setPush] = useState<PushState | null>(null)
+  const [busy, setBusy] = useState('')
+  const [guideOpen, setGuideOpen] = useState(false)
+  const [bcTitle, setBcTitle] = useState('')
+  const [bcBody, setBcBody] = useState('')
+
+  const load = useCallback(async () => {
+    const [waRes, pushRes] = await Promise.all([
+      api.get<WaReportState & { rawRecipients: string }>('/api/admin/whatsapp-report'),
+      api.get<PushState>('/api/admin/push'),
+    ])
+    if (waRes.ok && waRes.data) {
+      setWa(waRes.data)
+      try {
+        const arr = JSON.parse(waRes.data.rawRecipients || '[]') as WaRecipientRow[]
+        setRows(Array.isArray(arr) ? arr.map((r) => ({ label: String(r.label || ''), phone: String(r.phone || ''), apiKey: String(r.apiKey || '') })) : [])
+      } catch {
+        setRows([])
+      }
+    }
+    if (pushRes.ok && pushRes.data) setPush(pushRes.data)
+  }, [])
+  useEffect(() => {
+    const t = setTimeout(load, 0)
+    return () => clearTimeout(t)
+  }, [load])
+
+  const saveWa = async (patch: { enabled?: boolean }) => {
+    setBusy('wa-save')
+    const res = await api.post<{ saved: string[] }>('/api/admin/whatsapp-report', {
+      action: 'save',
+      enabled: patch.enabled ?? wa?.enabled,
+      recipients: rows.filter((r) => r.phone.trim() && r.apiKey.trim()),
+    })
+    setBusy('')
+    if (!res.ok || !res.data) return toast.error(res.error || 'সেভ হয়নি')
+    toast.success('✅ WhatsApp রিপোর্ট সেটিং সেভ হয়েছে')
+    void load()
+  }
+
+  const sendNow = async () => {
+    setBusy('wa-send')
+    const res = await api.post<{ skipped: boolean; reason?: string; sent: number; total: number; details?: { ok: boolean; label: string; info: string }[] }>('/api/admin/whatsapp-report', { action: 'send-now' })
+    setBusy('')
+    if (!res.ok || !res.data) return toast.error(res.error || 'পাঠানো যায়নি')
+    if (res.data.skipped) return toast.warning(res.data.reason || 'পাঠানো হয়নি')
+    if (res.data.failed > 0) toast.error(`${toBn(String(res.data.sent))}/${toBn(String(res.data.total))} গেছে — ব্যর্থ: ${res.data.details?.filter((d) => !d.ok).map((d) => `${d.label} (${d.info})`).join(', ') || '?'}`)
+    else toast.success(`✅ রিপোর্ট ${toBn(String(res.data.sent))} জনের WhatsApp-এ গেছে!`)
+    void load()
+  }
+
+  const togglePush = async (enabled: boolean) => {
+    const res = await api.post<{ enabled: boolean }>('/api/admin/push', { action: 'toggle', enabled })
+    if (!res.ok) return toast.error(res.error || 'বদলানো যায়নি')
+    toast.success(enabled ? '🔔 কাস্টমার পুশ চালু' : 'কাস্টমার পুশ বন্ধ')
+    void load()
+  }
+
+  const sendBroadcast = async () => {
+    setBusy('push-bc')
+    const res = await api.post<{ total: number; sent: number; failed: number; message?: string }>('/api/admin/push', { action: 'broadcast', title: bcTitle, body: bcBody })
+    setBusy('')
+    if (!res.ok || !res.data) return toast.error(res.error || 'পাঠানো যায়নি')
+    if (res.data.message) toast.warning(res.data.message)
+    else toast.success(`✅ ${toBn(String(res.data.sent))}/${toBn(String(res.data.total))} কাস্টমার পেয়েছে`)
+    setBcTitle('')
+    setBcBody('')
+    void load()
+  }
+
+  return (
+    <Card className="border-emerald-200 bg-gradient-to-br from-emerald-50/60 to-white">
+      <CardHeader className="pb-2">
+        <CardTitle className="text-base">📊🔔 নোটিফিকেশন সেন্টার</CardTitle>
+      </CardHeader>
+      <CardContent className="space-y-4">
+        {/* ---- WhatsApp ডেইলি রিপোর্ট ---- */}
+        <div className="space-y-2.5 rounded-lg border border-emerald-200 bg-white/70 p-3">
+          <div className="flex flex-wrap items-center gap-2">
+            <p className="text-sm font-black">📊 ডেইলি অটো রিপোর্ট (WhatsApp)</p>
+            <Switch checked={wa?.enabled ?? true} onCheckedChange={(v) => saveWa({ enabled: v })} disabled={busy === 'wa-save'} />
+            <Badge variant="outline" className="ml-auto border-emerald-300 text-[10px] font-bold text-emerald-700">
+              প্রতিদিন রাত {wa?.time ? toBn(wa.time) : '২২:০০'}-এ অটো যায়
+            </Badge>
+          </div>
+          <p className="text-[11px] leading-relaxed text-stone-600">
+            প্রতিদিন রাতে আজকের বিক্রি/অর্ডার/টপ-আইটেম/বাকি-বিলের সুন্দর বাংলা রিপোর্ট WhatsApp-এ চলে যাবে — <b>admin, owner, partner</b> সবাই পাবেন।
+            কোনো ডকুমেন্ট/রিভিউ লাগে না (CallMeBot — ফ্রি)।
+          </p>
+          {rows.map((r, i) => (
+            <div key={i} className="grid gap-1.5 sm:grid-cols-[1fr_1.2fr_1.2fr_2rem]">
+              <Input value={r.label} onChange={(e) => setRows((p) => p.map((x, j) => (j === i ? { ...x, label: e.target.value } : x)))} placeholder="নাম (Owner)" className="h-9 text-xs" />
+              <Input value={r.phone} onChange={(e) => setRows((p) => p.map((x, j) => (j === i ? { ...x, phone: e.target.value } : x)))} placeholder="WhatsApp নম্বর (8801XXXXXXXXX)" className="h-9 text-xs" inputMode="tel" />
+              <Input value={r.apiKey} onChange={(e) => setRows((p) => p.map((x, j) => (j === i ? { ...x, apiKey: e.target.value } : x)))} placeholder="CallMeBot API key" className="h-9 text-xs" />
+              <Button size="sm" variant="outline" onClick={() => setRows((p) => p.filter((_, j) => j !== i))} className="h-9 border-stone-300 px-2 text-xs">
+                🗑
+              </Button>
+            </div>
+          ))}
+          <div className="flex flex-wrap gap-2">
+            <Button size="sm" variant="outline" onClick={() => setRows((p) => [...p, { label: '', phone: '', apiKey: '' }])} disabled={rows.length >= 10} className="h-8 border-emerald-300 text-[11px] font-black text-emerald-700 hover:bg-emerald-50">
+              ➕ প্রাপক যোগ করুন
+            </Button>
+            <Button size="sm" onClick={saveWa} disabled={busy === 'wa-save'} className="h-8 font-black">
+              {busy === 'wa-save' ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : '💾'} সেভ করুন
+            </Button>
+            <Button size="sm" onClick={sendNow} disabled={busy === 'wa-send'} variant="outline" className="h-8 border-emerald-300 font-black text-emerald-700 hover:bg-emerald-50">
+              {busy === 'wa-send' ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : '🚀'} এখনই রিপোর্ট পাঠান
+            </Button>
+          </div>
+          {wa?.preview && (
+            <details className="rounded-md border border-stone-200 bg-stone-50 p-2 text-[11px]">
+              <summary className="cursor-pointer font-black text-stone-700">👁 আজকের রিপোর্ট প্রিভিউ দেখুন</summary>
+              <pre className="mt-1.5 whitespace-pre-wrap font-sans leading-relaxed text-stone-700">{wa.preview}</pre>
+            </details>
+          )}
+          {wa?.lastResult && <p className="text-[10px] text-stone-500">শেষ অটো-রিপোর্ট: {wa.lastResult}</p>}
+          <div className="rounded-lg border border-stone-200">
+            <button type="button" onClick={() => setGuideOpen((v) => !v)} className="flex w-full items-center justify-between p-2 text-left text-[11px] font-black text-stone-700 hover:bg-stone-50">
+              <span>📖 প্রথমবার সেটআপ (২ মিনিট — প্রতি প্রাপকের জন্য একবারই)</span>
+              <span>{guideOpen ? '▲' : '▼'}</span>
+            </button>
+            {guideOpen && (
+              <div className="space-y-1.5 border-t border-stone-200 p-2.5 text-[11px] leading-relaxed text-stone-700">
+                <p><b>ধাপ ১:</b> প্রাপকের ফোন থেকে WhatsApp-এ এই নম্বরে একটা মেসেজ দিন: <b>+34 621 331 709</b> (CallMeBot বট) — মেসেজ লিখুন <b>&quot;I allow callmebot to send me messages&quot;</b></p>
+                <p><b>ধাপ ২:</b> সাথে সাথে বট একটা <b>API key</b> (যেমন 123456) রিপ্লাই দেবে।</p>
+                <p><b>ধাপ ৩:</b> উপরে প্রাপক যোগ করুন — নাম + WhatsApp নম্বর (দেশের কোডসহ, যেমন 8801XXXXXXXXX) + ওই API key → <b>সেভ করুন</b>।</p>
+                <p><b>ধাপ ৪:</b> <b>🚀 এখনই রিপোর্ট পাঠান</b> চেপে টেস্ট করুন — WhatsApp-এ রিপোর্ট এলেই সেটআপ সম্পূর্ণ!</p>
+              </div>
+            )}
+          </div>
+        </div>
+
+        {/* ---- কাস্টমার ওয়েব পুশ ---- */}
+        <div className="space-y-2.5 rounded-lg border border-amber-200 bg-white/70 p-3">
+          <div className="flex flex-wrap items-center gap-2">
+            <p className="text-sm font-black">🔔 কাস্টমার ওয়েব পুশ (অর্ডার রেডি নোটিফিকেশন)</p>
+            <Switch checked={push?.enabled ?? true} onCheckedChange={togglePush} />
+            <Badge variant="outline" className="ml-auto border-amber-300 text-[10px] font-bold text-amber-700">
+              {toBn(String(push?.count ?? 0))} জন সাবস্ক্রাইবড়
+            </Badge>
+          </div>
+          <p className="text-[11px] leading-relaxed text-stone-600">
+            কাস্টমার মেনু পেজে 🔔 বাটনে একবার চাপলেই সাবস্ক্রাইব — রান্নাঘর থেকে অর্ডার <b>READY</b> করা হলে সাথে সাথে তার ব্রাউজারে নোটিফিকেশন যাবে।
+            <b> কোনো Meta রিভিউ/ডকুমেন্ট লাগে না</b> (ব্রাউজারের নিজস্ব পুশ — ফ্রি)।
+          </p>
+          <div className="grid gap-1.5 sm:grid-cols-[1fr_2fr_auto]">
+            <Input value={bcTitle} onChange={(e) => setBcTitle(e.target.value)} placeholder="টাইটেল (যেমন: 🎁 আজকের অফার!)" className="h-9 text-xs" maxLength={64} />
+            <Input value={bcBody} onChange={(e) => setBcBody(e.target.value)} placeholder="মেসেজ (যেমন: সন্ধ্যা ৪টা-৭টা সব চায়ে ২০% ছাড়!)" className="h-9 text-xs" maxLength={240} />
+            <Button size="sm" onClick={sendBroadcast} disabled={busy === 'push-bc'} className="h-9 font-black">
+              {busy === 'push-bc' ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : '📣'} সবাইকে পাঠান
+            </Button>
+          </div>
+          {push?.lastResult && <p className="text-[10px] text-stone-500">শেষ পুশ: {push.lastResult}</p>}
+        </div>
+      </CardContent>
+    </Card>
+  )
+}
+
 function SettingsTab({ onAuthRequired }: TabProps) {
   const [form, setForm] = useState<Record<string, string> | null>(null)
   const [meta, setMeta] = useState<SettingsMeta | null>(null)
@@ -4835,6 +5018,7 @@ function SettingsTab({ onAuthRequired }: TabProps) {
 
   return (
     <div className="space-y-4">
+      <NotificationsCard />
       {/* ---- session duration: prominent ---- */}
       <Card className="border-2 border-amber-400 bg-gradient-to-br from-amber-50 to-white">
         <CardHeader className="pb-2">
