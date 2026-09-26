@@ -7375,6 +7375,294 @@ function BotActionsManager({ onChanged }: { onChanged?: () => void }) {
   )
 }
 
+/* ═════════ 🧩 মেসেঞ্জার সেটআপ উইজার্ড — ৩টা মান + এক-ক্লিক ১০০% যাচাই ═════════
+ * মালিকের নিয়ম: META_PAGE_ID · META_PAGE_TOKEN · META_VERIFY_TOKEN সব admin
+ * প্যানেল থেকেই সেট হবে (Vercel env ছোঁয়া লাগবে না), আর "সম্পূর্ণ যাচাই" চাপলেই
+ * এক কলে ৫টা চেক বসে: টোকেন-বৈধতা → নিজের webhook-handshake (403/200) → ৮টা
+ * সাবস্ক্রাইব-ফিল্ড → শেষ Meta-ইভেন্ট → শেষ পাঠানো-এরর (💡 সমাধানসহ)। সব সবুজ =
+ * ১০০% কাজ করছে। বিস্তারিত নতুন-অ্যাপ গাইড: প্রজেক্টের MESSENGER_SETUP.md */
+interface SetupCheck {
+  webhookUrl: string
+  pageId: string
+  pageIdFromToken: string | null
+  pageName: string | null
+  tokenTest: { ok: boolean; pageName: string | null; pageId: string | null; error: string | null; isPageToken?: boolean; note?: string | null }
+  tokenInfo: { source: 'admin' | 'env' | 'none'; tail: string }
+  verifyInfo: { source: 'admin' | 'env' | 'none'; tail: string }
+  handshake: { ok: boolean; status: number; echo: boolean; error: string | null }
+  subscribed: { ok: boolean; fields: string[]; missing: string[]; error: string | null }
+  lastWebhookAt: string
+  lastWebhookInfo: string
+  lastSendError: string
+}
+
+function SetupRow({ ok, children }: { ok: boolean; children: React.ReactNode }) {
+  return (
+    <div className={`flex items-start gap-2 rounded-lg border p-2.5 text-xs leading-relaxed ${ok ? 'border-emerald-200 bg-emerald-50 text-emerald-900' : 'border-red-200 bg-red-50 text-red-900'}`}>
+      <span className="mt-0.5 shrink-0 font-black">{ok ? '✅' : '❌'}</span>
+      <div className="min-w-0 flex-1">{children}</div>
+    </div>
+  )
+}
+
+function MessengerSetupWizard({ onChanged }: { onChanged?: () => void }) {
+  const [pageId, setPageId] = useState('')
+  const [pageToken, setPageToken] = useState('')
+  const [verifyToken, setVerifyToken] = useState('')
+  const [showTok, setShowTok] = useState(false)
+  const [busy, setBusy] = useState(false)
+  const [checking, setChecking] = useState(false)
+  const [repairing, setRepairing] = useState(false)
+  const [guideOpen, setGuideOpen] = useState(false)
+  const [st, setSt] = useState<SetupCheck | null>(null)
+
+  const load = useCallback(async () => {
+    const res = await api.get<SetupCheck>('/api/admin/messenger-setup')
+    if (res.ok && res.data) setSt(res.data)
+  }, [])
+  useEffect(() => {
+    const t = setTimeout(load, 0)
+    return () => clearTimeout(t)
+  }, [load])
+
+  const save = async () => {
+    const body: Record<string, string> = {}
+    if (pageId.trim()) body.pageId = pageId
+    if (pageToken.trim()) body.pageToken = pageToken
+    if (verifyToken.trim()) body.verifyToken = verifyToken
+    if (!Object.keys(body).length) return toast.error('অন্তত একটা মান লিখুন — Page Token বা Verify Token')
+    setBusy(true)
+    const res = await api.post<{ saved: string[] }>('/api/admin/messenger-setup', { action: 'save', ...body })
+    setBusy(false)
+    if (!res.ok || !res.data) return toast.error(res.error || 'সেভ করা যায়নি')
+    toast.success(`✅ সেভ হয়েছে (${res.data.saved.length}টা মান) — এখন "সম্পূর্ণ যাচাই" চাপুন`)
+    setPageToken('')
+    setVerifyToken('')
+    void load()
+    onChanged?.()
+  }
+
+  const autoPageId = async () => {
+    setBusy(true)
+    const res = await api.post<{ pageId: string; pageName: string | null }>('/api/admin/messenger-setup', { action: 'auto-page-id' })
+    setBusy(false)
+    if (!res.ok || !res.data) return toast.error(res.error || 'Page ID আনা যায়নি — আগে টোকেন সেভ করুন')
+    setPageId(res.data.pageId)
+    toast.success(`✅ Page ID অটো-পূরণ হয়েছে: ${res.data.pageId}${res.data.pageName ? ` (${res.data.pageName})` : ''}`)
+    void load()
+  }
+
+  const genVerify = () => setVerifyToken(`tt_${Math.random().toString(36).slice(2, 10)}${Date.now().toString(36)}`)
+
+  const copy = async (text: string, label: string) => {
+    try {
+      await navigator.clipboard.writeText(text)
+      toast.success(`📋 ${label} কপি হয়েছে`)
+    } catch {
+      toast.error('কপি করা যায়নি — ম্যানুয়ালি সিলেক্ট করুন')
+    }
+  }
+
+  const runChecks = async () => {
+    setChecking(true)
+    await load()
+    setChecking(false)
+  }
+
+  const repairFields = async () => {
+    setRepairing(true)
+    const res = await api.post<{ fields: string[] }>('/api/admin/messenger-setup', { action: 'subscribe-fields' })
+    setRepairing(false)
+    if (!res.ok || !res.data) return toast.error(res.error || 'সাবস্ক্রাইব করা যায়নি — টোকেনে pages_manage_metadata পারমিশন দরকার (README ধাপ ৩)')
+    toast.success('✅ ৮টা webhook-ফিল্ড সাবস্ক্রাইব হয়েছে')
+    void load()
+  }
+
+  const fmtTime = (iso: string) => {
+    try {
+      return new Date(iso).toLocaleString('bn-BD', { dateStyle: 'medium', timeStyle: 'short' })
+    } catch {
+      return iso
+    }
+  }
+
+  const tokenOk = st?.tokenTest.ok && st?.tokenTest.isPageToken
+  const fieldsOk = Boolean(st?.subscribed.ok && st?.subscribed.missing.length === 0)
+  const allGreen = Boolean(tokenOk && st?.handshake.ok && fieldsOk)
+
+  return (
+    <Card className="border-stone-200">
+      <CardHeader className="pb-2">
+        <CardTitle className="flex flex-wrap items-center gap-2 text-base font-black">
+          🧩 মেসেঞ্জার সেটআপ উইজার্ড
+          <Badge variant="outline" className="border-stone-300 text-[10px] font-bold text-stone-500">
+            META_PAGE_ID · META_PAGE_TOKEN · META_VERIFY_TOKEN
+          </Badge>
+          {st && (
+            <Badge className={`ml-auto ${allGreen ? 'bg-emerald-600' : 'bg-amber-600'}`}>
+              {allGreen ? '✅ সব ঠিক — ১০০% কাজ করছে' : '⚠️ সেটআপ অসম্পূর্ণ'}
+            </Badge>
+          )}
+        </CardTitle>
+      </CardHeader>
+      <CardContent className="space-y-3">
+        <p className="text-xs leading-relaxed text-stone-600">
+          Meta-র ৩টা মান এখান থেকেই সেভ করুন — <b>Vercel env ছোঁয়া/রিডিপ্লয় লাগবে না</b>। সেভের পর <b>✅ সম্পূর্ণ যাচাই</b> চাপুন —
+          নিচের ৫টা চেক সব সবুজ ✅ এলেই Messenger ১০০% কাজ করছে। কোনো লাল ❌ থাকলে ঠিক নিচেই কারণ ও সমাধান লেখা থাকবে।
+        </p>
+
+        {/* ৩টা ফিল্ড */}
+        <div className="grid gap-2.5 sm:grid-cols-3">
+          <div className="space-y-1">
+            <Label className="text-xs font-black">🆔 META_PAGE_ID</Label>
+            <div className="flex gap-1">
+              <Input value={pageId} onChange={(e) => setPageId(e.target.value.replace(/[^0-9]/g, ''))} placeholder={st?.pageId ? `সেভ আছে: ${st.pageId}` : 'টোকেন থেকে অটো আসবে'} className="h-9 text-xs" inputMode="numeric" />
+              <Button size="sm" variant="outline" onClick={autoPageId} disabled={busy} className="h-9 shrink-0 border-stone-300 px-2 text-[11px] font-black">
+                {busy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : '🔍'} অটো
+              </Button>
+            </div>
+          </div>
+          <div className="space-y-1">
+            <Label className="text-xs font-black">🔑 META_PAGE_TOKEN</Label>
+            <div className="flex gap-1">
+              <Input
+                type={showTok ? 'text' : 'password'}
+                value={pageToken}
+                onChange={(e) => setPageToken(e.target.value.trim())}
+                placeholder={st?.tokenInfo.source === 'admin' ? `সেভ আছে (…${st.tokenInfo.tail})` : st?.tokenInfo.source === 'env' ? `env-এ আছে (…${st.tokenInfo.tail})` : 'EAA… Page Access Token পেস্ট করুন'}
+                className="h-9 text-xs"
+                autoComplete="off"
+              />
+              <Button size="sm" variant="outline" onClick={() => setShowTok((v) => !v)} className="h-9 shrink-0 border-stone-300 px-2 text-[11px] font-black">
+                {showTok ? '🙈' : '👁'}
+              </Button>
+            </div>
+          </div>
+          <div className="space-y-1">
+            <Label className="text-xs font-black">🔐 META_VERIFY_TOKEN</Label>
+            <div className="flex gap-1">
+              <Input
+                type={showTok ? 'text' : 'password'}
+                value={verifyToken}
+                onChange={(e) => setVerifyToken(e.target.value.trim())}
+                placeholder={st?.verifyInfo.source === 'admin' ? `সেভ আছে (…${st.verifyInfo.tail})` : st?.verifyInfo.source === 'env' ? `env-এ আছে (…${st.verifyInfo.tail})` : '৬+ অক্ষর — নিজে লিখুন বা 🎲'}
+                className="h-9 text-xs"
+                autoComplete="off"
+              />
+              <Button size="sm" variant="outline" onClick={genVerify} className="h-9 shrink-0 border-stone-300 px-2 text-[11px] font-black" title="নতুন র‍্যান্ডম টোকেন বানান">
+                🎲
+              </Button>
+            </div>
+          </div>
+        </div>
+
+        <div className="flex flex-wrap gap-2">
+          <Button onClick={save} disabled={busy} className="h-9 font-black">
+            {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : '💾'} সেভ করুন
+          </Button>
+          <Button onClick={runChecks} disabled={checking} variant="outline" className="h-9 border-stone-300 font-black text-stone-700 hover:bg-stone-50">
+            {checking ? <Loader2 className="h-4 w-4 animate-spin" /> : '✅'} সম্পূর্ণ যাচাই
+          </Button>
+        </div>
+
+        {/* কপি-করার webhook-তথ্য */}
+        {st?.webhookUrl && (
+          <div className="rounded-lg border border-stone-200 bg-stone-50 p-2.5 text-xs">
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="font-black text-stone-700">🔗 Webhook Callback URL (Meta-তে পেস্ট করুন):</span>
+              <Button size="sm" variant="outline" onClick={() => copy(st.webhookUrl, 'Callback URL')} className="h-6 border-stone-300 px-2 text-[11px] font-black">
+                📋 কপি
+              </Button>
+            </div>
+            <p className="mt-1 break-all font-mono text-[11px] text-stone-600">{st.webhookUrl}</p>
+            {verifyToken && <p className="mt-1 text-[11px] text-stone-500">🔐 Verify Token লেখার ঘরে নিচের ইনপুটে যা লিখলেন সেটাই দিন (🎲 চাপলে নতুন বানিয়ে দেয়)।</p>}
+          </div>
+        )}
+
+        {/* চেকলিস্ট */}
+        {st && (
+          <div className="space-y-1.5">
+            <p className="text-xs font-black text-stone-700">📋 যাচাই-ফলাফল:</p>
+            <SetupRow ok={Boolean(tokenOk)}>
+              {tokenOk ? (
+                <>Page Access Token বৈধ — পেজ: <b>{st.tokenTest.pageName}</b> (ID {st.tokenTest.pageId})। সোর্স: {st.tokenInfo.source === 'admin' ? 'এই প্যানেলের সেটিং' : 'Vercel env'}।</>
+              ) : st?.tokenTest.ok && !st.tokenTest.isPageToken ? (
+                <>⚠️ এটা <b>Page Access Token নয়</b> — User token (ইউজারের নিজের)। এই টোকেনে কাস্টমারকে মেসেজ যাবে না! {st.tokenTest.note}</>
+              ) : (
+                <>টোকেন যাচাই ব্যর্থ — {st?.tokenTest.error || 'টোকেন সেভ করুন'}। গাইড: নিচের 📖 সেটআপ গাইড খুলুন (ধাপ ৩)।</>
+              )}
+            </SetupRow>
+            <SetupRow ok={Boolean(st.handshake.ok)}>
+              {st.handshake.ok ? (
+                <>Webhook handshake HTTP {st.handshake.status} — challenge ফেরত এসেছে। Meta ড্যাশবোর্ডে এই URL+Verify Token সেভ করলেই কাজ করবে।</>
+              ) : (
+                <>Webhook handshake ব্যর্থ ({st.handshake.error})। সমাধান: উপরে Verify Token সেভ করে Meta ড্যাশবোর্ড → Webhooks-এ <b>হুবহু একই টোকেন</b> পেস্ট করুন।</>
+              )}
+            </SetupRow>
+            <SetupRow ok={fieldsOk}>
+              {fieldsOk ? (
+                <>Webhook ফিল্ড ৮/৮ সাবস্ক্রাইব — মেসেজ/বাটন/লাইক/ডেলিভারি সব ইভেন্ট আসবে।</>
+              ) : st?.subscribed.ok ? (
+                <div className="space-y-1.5">
+                  <p>কিছু ফিল্ড সাবস্ক্রাইব নেই — <b>{st.subscribed.missing.join(', ')}</b>। এগুলো ছাড়া ওই ধরনের ইভেন্ট Meta পাঠাবেই না!</p>
+                  <Button size="sm" onClick={repairFields} disabled={repairing} className="h-7 bg-red-600 text-[11px] font-black hover:bg-red-700">
+                    {repairing ? <Loader2 className="h-3 w-3 animate-spin" /> : '🔧'} এখনই ঠিক করুন (সব সাবস্ক্রাইব)
+                  </Button>
+                </div>
+              ) : (
+                <div>
+                  <p>ফিল্ড-তালিকা আনা যায়নি — {st?.subscribed.error}</p>
+                  {st?.subscribed.error?.includes('pages_manage_metadata') ? (
+                    <p className="mt-1 font-bold">
+                      🔧 সমাধান: এই টোকেনে <b>pages_manage_metadata</b> পারমিশন নেই — গাইডের ধাপ ৩ অনুযায়ী ৪ পারমিশনসহ (pages_messaging, pages_manage_metadata, pages_read_engagement, pages_show_list)
+                      নতুন Page Token বানিয়ে উপরে 🔑 ফিল্ডে সেভ করুন। তারপর আবার যাচাই চাপুন।
+                    </p>
+                  ) : null}
+                </div>
+              )}
+            </SetupRow>
+            <SetupRow ok={Boolean(st.lastWebhookAt)}>
+              {st.lastWebhookAt ? (
+                <>Meta থেকে ইভেন্ট আসছে — শেষ: <b>{fmtTime(st.lastWebhookAt)}</b>{st.lastWebhookInfo ? ` (${st.lastWebhookInfo})` : ''}।</>
+              ) : (
+                <>এখনো কোনো webhook-ইভেন্ট আসেনি — Meta ড্যাশবোর্ডে webhook সেভ + কাস্টমার একটা মেসেজ দিলে এখানে দেখা যাবে।</>
+              )}
+            </SetupRow>
+            {st.lastSendError ? (
+              <div className="rounded-lg border border-amber-300 bg-amber-50 p-2.5 text-xs leading-relaxed text-amber-900">
+                <p className="font-black">⚠️ শেষ পাঠানো-এরর (কাস্টমার মেসেজ না পেলে এর কারণ):</p>
+                <p className="mt-0.5 break-words">{st.lastSendError}</p>
+              </div>
+            ) : (
+              <SetupRow ok>পাঠানো-এরর নেই — শেষ মেসেজ সফলভাবে গেছে (বা এখনো কিছু পাঠানো হয়নি)।</SetupRow>
+            )}
+          </div>
+        )}
+
+        {/* গাইড */}
+        <div className="rounded-lg border border-stone-200">
+          <button type="button" onClick={() => setGuideOpen((v) => !v)} className="flex w-full items-center justify-between p-2.5 text-left text-xs font-black text-stone-700 hover:bg-stone-50">
+            <span>📖 নতুন Meta App বানানোর ধাপে ধাপে গাইড (২ মিনিট)</span>
+            <span>{guideOpen ? '▲' : '▼'}</span>
+          </button>
+          {guideOpen && (
+            <div className="space-y-2 border-t border-stone-200 p-3 text-xs leading-relaxed text-stone-700">
+              <p><b>ধাপ ১ — App তৈরি:</b> developers.facebook.com → My Apps → Create App → <b>Business</b> → নাম দিন → Create।</p>
+              <p><b>ধাপ ২ — Messenger যোগ:</b> ড্যাশবোর্ডে <b>Messenger</b> প্রোডাক্টের <b>Set up</b> চাপুন → API Setup খুলুন → আপনার Facebook Page সিলেক্ট করুন।</p>
+              <p><b>ধাপ ৩ — Page Token:</b> একই পেজে <b>Generate Token</b> চাপে যে টোকেন (EAA… দিয়ে শুরু) সেটাই কপি করে উপরের 🔑 ফিল্ডে পেস্ট → সেভ। টোকেনে এই পারমিশনগুলো আছে কি না দেখে নিন: pages_messaging, pages_manage_metadata, pages_read_engagement, pages_show_list।</p>
+              <p><b>ধাপ ৪ — Verify Token:</b> উপরের 🔐 ফিল্ডে 🎲 চেপে টোকেন বানিয়ে সেভ করুন।</p>
+              <p><b>ধাপ ৫ — Webhook (Meta-তে):</b> Messenger → API Setup → Webhooks → Configure → Callback URL: উপরের 🔗 লিংকটা পেস্ট, Verify Token: ধাপ ৪-এর টোকেন → Verify and Save → Subscribed fields-এ উপরের ৮টা ফিল্ড টিক দিন (বা উইজার্ডের 🔧 বাটনেই সব হয়ে যাবে)।</p>
+              <p><b>ধাপ ৬ — App Live:</b> App Settings → Basic → <b>Privacy Policy URL</b> দিন (আপনার সাইটের যেকোনো পাবলিক লিংক চলবে) → উপরে App Mode <b>Development → Live</b>। Live না করলে শুধু app admin/developer/tester-রাই মেসেজ পাবে — বাইরের কাস্টমার নয়!</p>
+              <p><b>ধাপ ৭ — যাচাই:</b> এখানে <b>✅ সম্পূর্ণ যাচাই</b> চাপুন — ৫টা চেক সবুজ হলে শেষ। Messenger-এ পেজে মেসেজ দিয়ে বট-উত্তর দেখুন।</p>
+              <p className="rounded-md bg-stone-100 p-2 text-[11px]">📚 আরও বিস্তারিত + সব এররের সমাধান-টেবিল: প্রজেক্ট ফোল্ডারের <b>MESSENGER_SETUP.md</b> ফাইল (GitHub repo-তেও আছে)।</p>
+            </div>
+          )}
+        </div>
+      </CardContent>
+    </Card>
+  )
+}
+
 /* ───────── ট্যাব র‍্যাপার ───────── */
 function MessengerBotTab() {
   const [reloadKey, setReloadKey] = useState(0)
@@ -7391,6 +7679,7 @@ function MessengerBotTab() {
 
   return (
     <div className="space-y-4">
+      <MessengerSetupWizard />
       <Card className="border-stone-200">
         <CardHeader className="pb-2">
           <CardTitle className="flex flex-wrap items-center gap-2 text-base font-black">

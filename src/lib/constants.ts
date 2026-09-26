@@ -90,6 +90,7 @@ export const SETTING_KEYS = {
   MESSENGER_PAGE_TOKEN: 'messenger_page_token', // Page Access Token (admin সেটিং-ওভাররাইড) — মেয়াদ শেষ হলে Vercel env ছোঁয়া ছাড়াই এখান থেকে নতুন টোকেন; ফাঁকা = env META_PAGE_TOKEN
   META_VERIFY_TOKEN: 'meta_verify_token', // Webhook Verify Token (admin সেটিং-ওভাররাইড) — Meta অ্যাপ ড্যাশবোর্ডে webhook সেভ করার সময় যে টোকেন দেওয়া হয়; ফাঁকা = env META_VERIFY_TOKEN
   MESSENGER_MENU_JSON: 'messenger_menu_json', // পার্সিস্টেন্ট-মেনু বাটন (admin-সম্পাদনযোগ্য) — JSON [{title,payload}]; ফাঁকা = ডিফল্ট
+  META_PAGE_ID: 'meta_page_id', // Facebook Page ID (ডায়াগনস্টিকস; উইজার্ড টোকেন-টেস্ট থেকে অটো-পূরণ করে) — ফাঁকা = ঠিক আছে
   BOT_LANGUAGE: 'bot_language', // বটের গ্লোবাল ভাষা — ফাঁকা = অটো (AI কাস্টমারের ভাষা শিখে নেয়); bn/banglish/en/hi = সব মেসেজ ওই ভাষায়
   META_RN_TITLE: 'meta_rn_title', // opt-in কার্ডের টাইটেল — ২৪ঘ-উইন্ডো-বহির্ভূত notification messages (ফাঁকা = ডিফল্ট)
   GEMINI_ENABLED: 'gemini_enabled',
@@ -135,6 +136,7 @@ export const SETTING_DEFAULTS: Record<string, string> = {
   [SETTING_KEYS.MESSENGER_AUTO_REPLY_ENABLED]: 'true',
   [SETTING_KEYS.MESSENGER_MARKDOWN]: 'true',
   [SETTING_KEYS.MESSENGER_MENU_JSON]: '',
+  [SETTING_KEYS.META_PAGE_ID]: '',
   [SETTING_KEYS.META_VERIFY_TOKEN]: '',
   [SETTING_KEYS.BOT_LANGUAGE]: '',
   [SETTING_KEYS.META_RN_TITLE]: '',

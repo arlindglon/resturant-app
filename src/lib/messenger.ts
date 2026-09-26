@@ -809,3 +809,93 @@ export async function sendRnToToken(token: string, text: string): Promise<GraphS
   }
   return { ok: false, error: lastError }
 }
+
+/* ═══════════ 🧩 সেটআপ-উইজার্ড helpers — এক জায়গা থেকেই সব যাচাই/মেরামত ═══════════
+ * মালিকের নিয়ম: admin প্যানেল থেকেই META_PAGE_ID · META_PAGE_TOKEN ·
+ * META_VERIFY_TOKEN সহজে সেট + এক-ক্লিকে ১০০% যাচাই — Vercel env ছোঁয়া লাগবে না। */
+
+/** Messenger webhook-এর জন্য প্রয়োজনীয় ৮টা ফিল্ড — একটাও বাদ গেলে ওই ধরনের
+ * ইভেন্ট (মেসেজ/বাটন-ট্যাপ/লাইক/ডেলিভারি/রিফেরাল…) Meta পাঠাবেই না */
+export const REQUIRED_MESSAGING_FIELDS = [
+  'messages',
+  'messaging_postbacks',
+  'messaging_optins',
+  'message_deliveries',
+  'message_reads',
+  'message_reactions',
+  'messaging_referrals',
+  'messaging_handovers',
+] as const
+
+/** পেজে এখন কোন কোন webhook-ফিল্ড সাবস্ক্রাইব করা আছে (GET /me/subscribed_apps) */
+export async function subscribedFields(): Promise<{ ok: boolean; fields: string[]; missing: string[]; error: string | null }> {
+  const token = await pageToken()
+  if (!token) return { ok: false, fields: [], missing: [...REQUIRED_MESSAGING_FIELDS], error: 'Page Access Token সেট করা নেই' }
+  try {
+    const res = await fetch(`${GRAPH}/me/subscribed_apps?fields=subscribed_fields&access_token=${encodeURIComponent(token)}`, {
+      signal: AbortSignal.timeout(10_000),
+    })
+    const j = (await res.json().catch(() => ({}))) as {
+      data?: { subscribed_fields?: string[] }[]
+      error?: { message?: string }
+    }
+    if (!res.ok || j.error) {
+      return { ok: false, fields: [], missing: [...REQUIRED_MESSAGING_FIELDS], error: j.error?.message || `Graph API HTTP ${res.status}` }
+    }
+    const fields = j.data?.[0]?.subscribed_fields || []
+    const missing = REQUIRED_MESSAGING_FIELDS.filter((f) => !fields.includes(f))
+    return { ok: true, fields, missing, error: null }
+  } catch (e) {
+    return { ok: false, fields: [], missing: [...REQUIRED_MESSAGING_FIELDS], error: e instanceof Error ? e.message : 'সংযোগ ব্যর্থ' }
+  }
+}
+
+/** প্রয়োজনীয় সব ফিল্ড এক কলে সাবস্ক্রাইব (POST /me/subscribed_apps?subscribed_fields=…) —
+ * উইজার্ডের "🔧 এখনই ঠিক করুন" বাটন এটাই কল করে; এর জন্য টোকেনে
+ * pages_manage_metadata পারমিশন লাগে (না থাকলে হুবহু Graph এরর ফেরত যায়)। */
+export async function subscribeAllMessagingFields(): Promise<{ ok: boolean; fields: string[]; error: string | null }> {
+  const token = await pageToken()
+  if (!token) return { ok: false, fields: [], error: 'Page Access Token সেট করা নেই' }
+  try {
+    const list = REQUIRED_MESSAGING_FIELDS.join(',')
+    const res = await fetch(`${GRAPH}/me/subscribed_apps?subscribed_fields=${encodeURIComponent(list)}&access_token=${encodeURIComponent(token)}`, {
+      method: 'POST',
+      signal: AbortSignal.timeout(10_000),
+    })
+    const j = (await res.json().catch(() => ({}))) as { success?: boolean; error?: { message?: string } }
+    if (!res.ok || j.error) {
+      return { ok: false, fields: [], error: j.error?.message || `Graph API HTTP ${res.status}` }
+    }
+    const after = await subscribedFields()
+    return { ok: after.ok && after.missing.length === 0, fields: after.fields, error: after.ok && after.missing.length ? `এখনো বাকি: ${after.missing.join(', ')}` : after.error }
+  } catch (e) {
+    return { ok: false, fields: [], error: e instanceof Error ? e.message : 'সংযোগ ব্যর্থ' }
+  }
+}
+
+/**
+ * নিজের webhook-কেই সেভ করা verify-token দিয়ে handshake করায় — HTTP 200 +
+ * challenge হুবহু ফেরত এলে Meta ড্যাশবোর্ডের webhook-সেভ বাটনও ঠিক এভাবেই সফল
+ * হবে (৪০৩ হলে টোকেন-মিল নেই — ড্যাশবোর্ডে পেস্ট করা টোকেন বদলাতে হবে)।
+ */
+export async function selfHandshake(baseUrl: string): Promise<{ ok: boolean; status: number; echo: boolean; error: string | null }> {
+  const token = await verifyToken()
+  if (!token) return { ok: false, status: 0, echo: false, error: 'Verify Token সেট করা নেই — উইজার্ডে সেভ করুন' }
+  const challenge = `WZ${Date.now().toString(36)}${Math.floor(Math.random() * 1e6).toString(36)}`
+  try {
+    const res = await fetch(
+      `${baseUrl.replace(/\/+$/, '')}/api/webhook/messenger?hub.mode=subscribe&hub.verify_token=${encodeURIComponent(token)}&hub.challenge=${encodeURIComponent(challenge)}`,
+      { signal: AbortSignal.timeout(10_000) }
+    )
+    const body = (await res.text()).slice(0, 200)
+    if (res.ok && body === challenge) return { ok: true, status: res.status, echo: true, error: null }
+    return {
+      ok: false,
+      status: res.status,
+      echo: false,
+      error: res.status === 403 ? 'HTTP 403 — Verify Token মেলেনি; Meta ড্যাশবোর্ডে হুবহু এই টোকেনটাই পেস্ট করুন' : `HTTP ${res.status} — ${body.slice(0, 140)}`,
+    }
+  } catch (e) {
+    return { ok: false, status: 0, echo: false, error: e instanceof Error ? e.message : 'সংযোগ ব্যর্থ' }
+  }
+}
