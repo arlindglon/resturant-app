@@ -7335,8 +7335,21 @@ function MessengerSetupWizard({ onChanged }: { onChanged?: () => void }) {
   const [busy, setBusy] = useState(false)
   const [checking, setChecking] = useState(false)
   const [repairing, setRepairing] = useState(false)
+  const [retesting, setRetesting] = useState(false)
   const [guideOpen, setGuideOpen] = useState(false)
   const [st, setSt] = useState<SetupCheck | null>(null)
+
+  // লাইভ সেন্ড-প্রোব: কাস্টমার এখন আসলেই মেসেজ পাচ্ছে কি না — হুবহু Graph উত্তরসহ
+  const retestSend = async () => {
+    setRetesting(true)
+    const res = await api.post<{ sendProbe: { ok: boolean; error?: string | null } | null }>('/api/admin/messenger-test', {})
+    setRetesting(false)
+    if (!res.ok || !res.data) return toast.error(res.error || 'টেস্ট করা যায়নি')
+    const probe = res.data.sendProbe
+    if (!probe) return toast.error('কোনো কাস্টমার নেই — আগে পেজে একটা মেসেজ দিন')
+    if (probe.ok) toast.success('✅ কাস্টমার এখন মেসেজ পাচ্ছে — সমস্যা সমাধান হয়েছে!')
+    else toast.error(`❌ এখনো আটকে আছে: ${probe.error || 'অজানা ত্রুটি'} — ৪ ধাপ শেষ হয়েছে কি না দেখুন`)
+  }
 
   const load = useCallback(async () => {
     const res = await api.get<SetupCheck>('/api/admin/messenger-setup')
@@ -7411,6 +7424,8 @@ function MessengerSetupWizard({ onChanged }: { onChanged?: () => void }) {
   const tokenOk = st?.tokenTest.ok && st?.tokenTest.isPageToken
   const fieldsOk = Boolean(st?.subscribed.ok && st?.subscribed.missing.length === 0)
   const allGreen = Boolean(tokenOk && st?.handshake.ok && fieldsOk)
+  // "Application does not have permission" = Development Mode → কাস্টমার নীরব
+  const customerSilenced = Boolean(st?.lastSendError && /does not have permission/i.test(st.lastSendError))
 
   return (
     <Card className="border-stone-200">
@@ -7432,6 +7447,49 @@ function MessengerSetupWizard({ onChanged }: { onChanged?: () => void }) {
           Meta-র ৩টা মান এখান থেকেই সেভ করুন — <b>Vercel env ছোঁয়া/রিডিপ্লয় লাগবে না</b>। সেভের পর <b>✅ সম্পূর্ণ যাচাই</b> চাপুন —
           নিচের ৫টা চেক সব সবুজ ✅ এলেই Messenger ১০০% কাজ করছে। কোনো লাল ❌ থাকলে ঠিক নিচেই কারণ ও সমাধান লেখা থাকবে।
         </p>
+
+        {/* 🔴 কাস্টমার-নীরবতা ফিক্সার — Development Mode ধরা পড়লেই সবার উপরে দেখাবে */}
+        {customerSilenced && (
+          <div className="space-y-2.5 rounded-lg border-2 border-red-300 bg-red-50 p-3 text-xs leading-relaxed text-red-900">
+            <p className="text-sm font-black">🔴 কাস্টমার উত্তর পাচ্ছে না — কারণটা ধরা পড়েছে</p>
+            <p>
+              বট ঠিকই কাজ করছে, webhook-ও ইভেন্ট পাচ্ছে — কিন্তু <b>Meta App এখনো Development Mode-এ আছে</b>। এই মোডে শুধু আপনার নিজের অ্যাকাউন্ট (app admin) উত্তর পায়;
+              বাইরের কাস্টমার যা-ই লিক (fof / hi / যা-ই), Meta নিজেই রিপ্লাই আটকে দেয়। নিচের ৪টা ধাপ শেষ করলেই ১০০% কাজ করবে:
+            </p>
+            <div className="space-y-2 rounded-md bg-white p-2.5">
+              <p><b>ধাপ ১ — Privacy Policy URL বসান:</b></p>
+              <div className="flex flex-wrap items-center gap-1.5">
+                <Button size="sm" onClick={() => copy('https://teantreat.vercel.app/privacy-policy', 'Privacy Policy URL')} className="h-7 bg-red-600 text-[11px] font-black hover:bg-red-700">
+                  📋 https://teantreat.vercel.app/privacy-policy — কপি
+                </Button>
+                <a href="https://teantreat.vercel.app/privacy-policy" target="_blank" rel="noreferrer">
+                  <Button size="sm" variant="outline" className="h-7 border-red-300 px-2 text-[11px] font-black text-red-700 hover:bg-red-50">🔗 পেজটা দেখুন</Button>
+                </a>
+              </div>
+              <p className="text-[11px]">→ Meta Dashboard → আপনার App → <b>App Settings → Basic</b> → নিচের <b>"Privacy Policy URL"</b> ঘরে পেস্ট → <b>Save Changes</b></p>
+            </div>
+            <div className="space-y-2 rounded-md bg-white p-2.5">
+              <p><b>ধাপ ২ — App Mode → Live করুন:</b> <a className="font-bold text-red-700 underline" href="https://developers.facebook.com/apps/" target="_blank" rel="noreferrer">🔗 App Dashboard খুলুন</a></p>
+              <p className="text-[11px]">→ আপনার App খুলুন → উপরে-ডানে/Settings-এ <b>"App Mode: Development"</b> টগলটা <b>Live</b> করুন</p>
+            </div>
+            <div className="space-y-2 rounded-md bg-white p-2.5">
+              <p><b>ধাপ ৩ — (শুধু যদি Live করতে গিয়ে Meta App Review চায়):</b></p>
+              <p className="text-[11px]">→ বাম মেনু → <b>App Review → Permissions</b> → খুঁজুন <b>pages_messaging</b> → <b>Request Advanced Access</b> → স্ক্রিন-রেকর্ডে দেখান: নিজের পেজে মেসেজ দিলে বট যে উত্তর দেয় (এটুকুই লাগে, সাধারণত দ্রুত পাস হয়)</p>
+            </div>
+            <div className="space-y-2 rounded-md bg-white p-2.5">
+              <p><b>ধাপ ৪ — সাথে সাথে টেস্ট করতে চাইলে (অপশনাল):</b></p>
+              <p className="text-[11px]">→ <b>App Settings → App Roles → Testers</b> → বন্ধুর Facebook নাম/ইমেইল দিয়ে যোগ করুন → Development Mode-এও তার কাছে বট-উত্তর সাথে সাথে যাবে</p>
+            </div>
+            <div className="flex flex-wrap items-center gap-2 pt-1">
+              <Button size="sm" onClick={retestSend} disabled={retesting} className="h-8 bg-red-600 text-[11px] font-black hover:bg-red-700">
+                {retesting ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : '🔄'} আবার টেস্ট — কাস্টমার এখন মেসেজ পায় কি না
+              </Button>
+              <Button size="sm" onClick={runChecks} disabled={checking} variant="outline" className="h-8 border-red-300 text-[11px] font-black text-red-700 hover:bg-red-50">
+                {checking ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : '✅'} যাচাই রিফ্রেশ
+              </Button>
+            </div>
+          </div>
+        )}
 
         {/* ৩টা ফিল্ড */}
         <div className="grid gap-2.5 sm:grid-cols-3">

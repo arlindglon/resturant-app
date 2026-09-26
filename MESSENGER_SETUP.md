@@ -16,7 +16,7 @@
 | Facebook অ্যাকাউন্ট (পেজের মালিক) | — |
 | Facebook **Page** (যেটার মেসেঞ্জারে বট কথা বলবে) | facebook.com-এ আপনার পেজ |
 | Meta ডেভেলপার অ্যাকাউন্ট | https://developers.facebook.com |
-| আপনার সাইটের যেকোনো পাবলিক লিংক (Privacy Policy URL হিসেবে) | যেমন `https://teantreat.vercel.app/` |
+| আপনার সাইটের প্রাইভেসি-পলিসি পেজ (Privacy Policy URL হিসেবে) | ✅ আগেই বানানো আছে: `https://teantreat.vercel.app/privacy-policy` |
 | Admin প্যানেলে ঢোকার পাসওয়ার্ড | মালিকের কাছে আছে |
 
 ---
@@ -74,12 +74,14 @@
 ## ধাপ ৬ — App Live করা ⭐ (নইলে বাইরের কাস্টমার মেসেজ পায় না!)
 
 1. Meta ড্যাশবোর্ড → **App Settings → Basic**:
-   - **Privacy Policy URL** দিন — আপনার সাইটের যেকোনো পাবলিক পেজ চলে (যেমন `https://teantreat.vercel.app/`)।
+   - **Privacy Policy URL** ঘরে বসান (হুবহু এটা কপি করুন): `https://teantreat.vercel.app/privacy-policy`
    - Category: `Business and pages` — দিলে ভালো।
    - **Save Changes**।
 2. ড্যাশবোর্ডের উপরে App Mode সুইচ: **Development → Live** → কনফার্ম করুন।
+3. Live করতে গিয়ে Meta যদি **App Review** চায়: বাম মেনু → **App Review → Permissions** → খুঁজুন `pages_messaging` → **Request Advanced Access** → স্ক্রিন-রেকর্ডে দেখান: নিজের পেজে মেসেজ দিলে বট যে উত্তর দেয় (নিজের অ্যাকাউন্ট দিয়েই রেকর্ড করা যায়) — সাধারণত দ্রুত অনুমোদিত হয়।
+4. ⚡ **সাথে সাথে টেস্ট করার শর্টকাট (Live করার আগেও চলে):** ড্যাশবোর্ড → **App Settings → App Roles → Testers → Add People** → বন্ধুর Facebook নাম/ইমেইল দিন → সে **Testers লিস্টে নিজে কনফার্ম** করলেই Development Mode-এও তার কাছে বট-উত্তর যেতে থাকবে।
 
-> 🔑 **মনে রাখুন:** **Development Mode**-এ বট শুধু অ্যাপের **Admin / Developer / Tester** রোলধারীদের সাথে কথা বলতে পারে। সাধারণ কাস্টমার মেসেজ দিলে উত্তর যায় না এবং admin-এর পাঠানো মেসেজে *«Application does not have permission for this action»* এরর দেখায় — **এই এররের মানেই App Live হয়নি।**
+> 🔑 **মনে রাখুন:** **Development Mode**-এ বট শুধু অ্যাপের **Admin / Developer / Tester** রোলধারীদের সাথে কথা বলতে পারে। সাধারণ কাস্টমার মেসেজ দিলে উত্তর যায় না এবং admin-এর পাঠানো মেসেজে *«Application does not have permission for this action»* এরর দেখায় — **এই এররের মানেই App Live হয়নি।** অ্যাডমিন প্যানেলের 🤖 মেসেঞ্জার ট্যাবে এই এরর ধরা পড়লেই উপরে **🔴 লাল কার্ডে ৪ ধাপের গাইড** দেখা যাবে (কপি-বাটনসহ)।
 >
 > 📝 App Review: `pages_messaging` Live করার সময় Advanced Access চাইতে পারে — Messenger অ্যাপে এটা সাধারণত সঙ্গে সঙ্গে অনুমোদিত হয় (App Review → Permissions → pages_messaging → Request Advanced Access)। ব্যবসায়িক যাচাই চাইলে Meta-র নির্দেশ মেনে করুন।
 
@@ -103,7 +105,7 @@ Admin প্যানেল → 🤖 মেসেঞ্জার ট্যাব
 
 | এরর / লক্ষণ | কারণ | সমাধান |
 |---|---|---|
-| «Application does not have permission for this action» | App **Development Mode**-এ আছে (শুধু admin/developer/tester পায়) | ধাপ ৬: Privacy Policy URL দিয়ে App **Live** করুন |
+| «Application does not have permission for this action» | App **Development Mode**-এ আছে (শুধু admin/developer/tester পায়) — কাস্টমার যা-ই লিক (hi/fof/বাংলা), উত্তর যায় না | ধাপ ৬: Privacy Policy URL (`https://teantreat.vercel.app/privacy-policy`) দিয়ে App **Live** করুন; তাড়াতাড়ি টেস্ট করতে বন্ধুকে **Tester** রোল দিন |
 | «(#200) … pages_messaging» / permission এরর | টোকেনে `pages_messaging` নেই | ধাপ ৩: ৪ পারমিশনসহ নতুন Page token বানিয়ে উইজার্ডে সেভ |
 | «(#100) Invalid keys "text_format"» | পুরনো কোড মার্কডাউন-ফিল্ড পাঠাত | ✅ আর হয় না (কোডে ফিল্ডটা বাদ দেওয়া হয়েছে); দেখালে Vercel-এ সর্বশেষ deploy আছে কি না দেখুন |
 | «(#551)/outside the allowed window / ২৪ ঘণ্টা» | কাস্টমার শেষ মেসেজ করার ২৪ ঘণ্টা পেরিয়েছে (Meta-র নিয়ম) | কাস্টমার মেসেজ দিলেই ২৪ ঘণ্টা খুলে যায়; উইন্ডো-বাইরে পাঠাতে হলে 🔔 RN অপট-ইন (ব্রডকাস্ট ট্যাব) |
@@ -129,6 +131,21 @@ admin প্যানেলের সেটিং না থাকলে এই 
 | `META_APP_SECRET` | App Secret (webhook-সিগনেচার যাচাই) | 〃 (ঐচ্ছিক, বাড়তি নিরাপত্তা) |
 
 > বদলালে **Redeploy** লাগে — তাই সহজ পথ হলো admin প্যানেলের 🧩 উইজার্ড (সঙ্গে সঙ্গে কার্যকর)।
+
+---
+
+## 🔄 পুরনো App ডিলিট হয়ে গেলে / নতুন App-এ শুরু করলে (৫ মিনিটের চেকলিস্ট)
+
+পুরনো Meta App ডিলিট হলে (বা নতুন App বানালে) এই ক্রমেই সব আবার লাগান — কিছু বাদ দিলে কাস্টমার নীরব থাকে:
+
+1. **ধাপ ৩-এর নিয়মে নতুন Page Token** (৪ পারমিশনসহ) বানিয়ে উইজার্ডের 🔑 ঘরে সেভ → ✅ যাচাই সবুজ করুন।
+2. **ধাপ ৫:** নতুন App-এ Webhook আবার সেট করুন (Callback URL + Verify Token) + ৮ ফিল্ড সাবস্ক্রাইব (উইজার্ডের 🔧)।
+3. **ধাপ ৬:** Privacy Policy URL + App **Live** (নইলে কাস্টমার উত্তর পাবে না — এটাই সবচেয়ে বেশি ভুল হয়!)।
+4. **ধাপ ৬.৪:** বন্ধু/টেস্টারদের আবার **Testers** রোল দিন (নতুন App-এ পুরনো রোল থাকে না)।
+5. 🤖 ট্যাবে **"📋 পার্সিস্টেন্ট মেনু সেট করুন"** একবার চাপুন — ☰ মেনু + "শুরু করুন" বাটন নতুন App-এ ফের সেট হবে।
+6. Messenger-এ নিজে ১টা মেসেজ দিয়ে দেখুন; তারপর **🔄 আবার টেস্ট** (লাল কার্ড) চেপে কাস্টমার-পাঠানো প্রোব সবুজ করুন।
+
+> 💡 কাস্টমারের PSID অ্যাপভেদে বদলায় — নতুন App-এ কাস্টমার একবার মেসেজ দিলেই নতুন PSID নিজে থেকে জমা হয়, পুরনো চ্যাট-হিস্ট্রি শুধু নাম-ছাড়া দেখাবে।
 
 ---
 

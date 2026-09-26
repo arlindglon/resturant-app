@@ -29,7 +29,7 @@ function recordSendError(msg: string, psid?: string) {
 export function sendErrorHint(msg: string): string {
   const m = (msg || '').toLowerCase()
   if (/not admins, developers or testers|not authorized to.*message|cannot message users|application does not have permission for this action/.test(m))
-    return 'Meta App এখন Development Mode-এ আছে — শুধু app admin/developer/tester-রা মেসেজ পান (তাই মালিকের নিজের অ্যাকাউন্টে রিপ্লাই যায়, বাইরের কাস্টমারের কাছে যায় না)। Meta App Dashboard → App Settings-এ অ্যাপটি Live করুন (Privacy Policy URL দিতে হয়) — তাহলেই সব কাস্টমারের কাছে যাবে।'
+    return 'Meta App এখন Development Mode-এ আছে — শুধু app admin/developer/tester-রা মেসেজ পান, বাইরের কাস্টমার পায় না। সমাধান (অ্যাডমিন প্যানেলের 🔴 লাল কার্ডে ৪ ধাপের গাইড আছে): ① App Settings → Basic → Privacy Policy URL-এ https://teantreat.vercel.app/privacy-policy বসান ② App Mode → Live করুন ③ সাথে সাথে টেস্ট করতে App Roles → Testers-এ কাস্টমারের অ্যাকাউন্ট যোগ করুন।'
   if (/pages_messaging|does not have permission|requires.*permission|permission.*required/.test(m))
     return 'টোকেনে pages_messaging পারমিশন নেই — Meta Dashboard → App Review → Permissions-এ pages_messaging (Advanced Access) চান, অথবা টোকেন আবার Generate করুন।'
   if (/outside.*window|24.?hour|window.*expired|messaging window/.test(m))
