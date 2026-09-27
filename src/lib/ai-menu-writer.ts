@@ -11,7 +11,7 @@
 // ensurePushTable-এর সেইম প্যাটার্ন, TiDB/MySQL উভয়ে চলে)।
 // ============================================================
 import { db } from '@/lib/db'
-import { adminStructuredGenerate, extractJson } from '@/lib/gemini'
+import { adminStructuredGenerate } from '@/lib/gemini'
 
 let draftTableReady: Promise<void> | null = null
 
@@ -70,7 +70,7 @@ const SYSTEM_PROMPT = `তুমি একটি রেস্টুরেন্�
 - advice: মালিকের জন্য ১ লাইনের ব্যবসা-পরামর্শ — দাম কেমন রাখা ভালো, কী সাথে বিক্রি হবে, লাভ-মার্জিন বা জনপ্রিয়তার টিপস।
 - নোটের ভাষা যেটাতেই লেখা (বাংলা/বাংলিশ/English) — বুঝে নেবে; বিবরণ ও পরামর্শ সবসময় সহজ বাংলায়।
 
-আউটপুট কঠোরভাবে এই JSON-ই হবে — কোনো ব্যাখ্যা নয়:
+আউটপুট-ফরম্যাট (সবচেয়ে গুরুত্বপূর্ণ): কোনো ভূমিকা, বিশ্লেষণ, বুলেট, ব্যাখ্যা বা ফরম্যাট-নমুনা কখনো লিখবে না। প্রথম অক্ষর থেকেই JSON দিয়ে শুরু করবে এবং শুধুমাত্র একটাই JSON অবজেক্ট লিখবে — মালিকের নোট থেকে বানানো আসল ডেটা সহ:
 {"items":[{"name":"","category":"","description":"","price":0,"isSetMenu":false,"spiceLevels":[],"advice":""}]}`
 
 export interface GeneratedDraft {
@@ -84,7 +84,7 @@ export interface GeneratedDraft {
 }
 
 function parseDraftItems(raw: string): GeneratedDraft[] | null {
-  const j = extractJson(raw)
+  const j = findDraftJson(raw)
   const items = j?.items
   if (!Array.isArray(items) || items.length === 0) return null
   const out: GeneratedDraft[] = []
@@ -108,6 +108,69 @@ function parseDraftItems(raw: string): GeneratedDraft[] | null {
     })
   }
   return out.length > 0 ? out.slice(0, 10) : null
+}
+
+/**
+ * Gemma-জাতীয় মডেল অনেক সময় আগে বিশ্লেষণ/ফরম্যাট-নমুনা লিখে JSON-টা শেষে দেয়
+ * (analysis-flood)। স্ট্রিং-সচেতন balanced-brace স্ক্যানে পুরো টেক্সটের সব সম্পূর্ণ
+ * JSON অবজেক্ট বের করে, যেগুলোতে অসামান্য name/category-সহ items অ্যারে আছে
+ * সেগুলোর মধ্যে সবচেয়ে ভালো প্রার্থী বাছে — ফরম্যাট-টেমপ্লেট ইকো ({"items":[{"name":""…})
+ * তখন আপনা-আপনি বাদ পড়ে।
+ */
+function findDraftJson(text: string): Record<string, unknown> | null {
+  // দ্রুত-পথ: পুরো টেক্সটই একটা JSON
+  try {
+    const direct = JSON.parse(text)
+    if (direct && typeof direct === 'object') return direct as Record<string, unknown>
+  } catch {
+    /* analysis-সহ আউটপুট → নিচের balanced স্ক্যান */
+  }
+  const objects: Record<string, unknown>[] = []
+  let depth = 0
+  let start = -1
+  let inStr = false
+  let esc = false
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i]
+    if (inStr) {
+      if (esc) esc = false
+      else if (ch === '\\') esc = true
+      else if (ch === '"') inStr = false
+      continue
+    }
+    if (ch === '"') {
+      inStr = true
+      continue
+    }
+    if (ch === '{') {
+      if (depth === 0) start = i
+      depth++
+    } else if (ch === '}') {
+      if (depth > 0) {
+        depth--
+        if (depth === 0 && start >= 0) {
+          try {
+            const o = JSON.parse(text.slice(start, i + 1))
+            if (o && typeof o === 'object') objects.push(o as Record<string, unknown>)
+          } catch {
+            /* ভাঙা টুকরো — নিরীহ */
+          }
+          start = -1
+        }
+      }
+    }
+  }
+  let best: { items: unknown[]; score: number } | null = null
+  for (const o of objects) {
+    const items = o.items
+    if (!Array.isArray(items) || items.length === 0) continue
+    const score = items.filter((it) => {
+      const x = (it ?? {}) as Record<string, unknown>
+      return typeof x.name === 'string' && x.name.trim() && typeof x.category === 'string' && x.category.trim()
+    }).length
+    if (score > 0 && (!best || score >= best.score)) best = { items, score }
+  }
+  return best ? ({ items: best.items } as Record<string, unknown>) : null
 }
 
 /**
