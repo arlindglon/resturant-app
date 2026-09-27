@@ -251,6 +251,10 @@ const simpleModelBodies = new Set<string>()
  * নেটিভ narration-এর মাঝেও ডিটারমিনিস্টিকভাবে পার্স হয় (লাইভ টেস্ট-প্রমাণ)।
  */
 function gemmaOutputRule(sysFull: string): string {
+  if (sysFull.includes('[FLOW:MENU_WRITER]')) {
+    // AI মেনু-লেখক — নিজস্ব ব্লক-ফরম্যাট: ITEM:/NAME:/… ব্লকই একমাত্র আউটপুট
+    return 'তোমার প্রথম লাইন থেকেই শুধুমাত্র ITEM: ব্লক লিখবে (NAME:/CATEGORY:/PRICE:/DESC:/SET:/SPICE:/ADVICE: সহ) — একাধিক খাবার হলে ব্লক একের পর এক। কোনো ভূমিকা, বিশ্লেষণ, বুলেট, ব্যাখ্যা বা নমুনা কিছুই নয়।'
+  }
   if (sysFull.includes('extractedData')) {
     // verify ফ্লো — দরকারি তথ্য + ASK/CANCEL সিদ্ধান্ত শেষ লাইনে
     return 'রিপ্লি: কাস্টমারকে পাঠানোর মতো ১-৩ বাক্যের কথা — কোনো ব্যাখ্যা/বিশ্লেষণ নয়। তারপর একদম শেষ লাইনে ঠিক এই ফরম্যাট লিখবে (কাস্টমারের মেসেজে দরকারি তারিখ/নম্বর/তথ্য থাকলে DATA-তে, অফারটি তার প্রযোজ্য নয় স্পষ্ট বললে CANCEL, অন্যথায় ASK):\nDATA: <তারিখ/নম্বর/তথ্য বা ফাঁকা> | ACTION: ASK'
@@ -291,8 +295,13 @@ function bodyForModel(body: Record<string, unknown>, model: string): Record<stri
       const langLine = lines.find((l) => l.includes('ভাষায়') && (l.includes('সবসময়') || l.includes('অবশ্যই'))) || ''
       const isVerify = sysFull.includes('extractedData')
       const isBlast = /আউটপুট JSON:\s*\{"text"/.test(sysFull)
+      const isMenuWriter = sysFull.includes('[FLOW:MENU_WRITER]')
       let persona: string
-      if (isVerify) {
+      if (isMenuWriter) {
+        // মেনু-লেখক: এর নিজস্ব কমপ্যাক্ট ব্লক-ফরম্যাট নির্দেশটাই persona —
+        // চ্যাট-পার্সোনা ঢোকালে মডেল কাস্টমার-উত্তরের দিকে চলে যায় (লাইভ-প্রমাণ)
+        persona = sysFull.replace('[FLOW:MENU_WRITER]', '').trim()
+      } else if (isVerify) {
         // verify: ভূমিকা-অনুচ্ছেদেই অফার+askText আছে; সিদ্ধান্ত-নিয়ম (১/২/৩ —
         // CANCEL সহ) আর typeHint লাইনগুলো ধরে রাখতেই হয়
         const numbered = lines.filter((l) => /^\s*[123]\.\s/.test(l)).join('\n')
