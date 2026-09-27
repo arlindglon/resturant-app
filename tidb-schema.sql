@@ -413,6 +413,7 @@ CREATE TABLE IF NOT EXISTS `push_subscriptions` (
     `auth` TEXT NOT NULL,
     `deviceId` VARCHAR(191) NULL,
     `tableNumber` INTEGER NULL,
+    `role` VARCHAR(20) NOT NULL DEFAULT 'customer',
     `userAgent` TEXT NULL,
     `lastError` TEXT NULL,
     `createdAt` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
@@ -421,3 +422,4 @@ CREATE TABLE IF NOT EXISTS `push_subscriptions` (
 ) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
 CREATE INDEX IF NOT EXISTS `push_subscriptions_deviceId_idx` ON `push_subscriptions`(`deviceId`);
 CREATE INDEX IF NOT EXISTS `push_subscriptions_tableNumber_idx` ON `push_subscriptions`(`tableNumber`);
+CREATE INDEX IF NOT EXISTS `push_subscriptions_role_idx` ON `push_subscriptions`(`role`);

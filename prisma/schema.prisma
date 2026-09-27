@@ -270,12 +270,14 @@ model PushSubscription {
   auth        String   @db.Text // subscription.keys.auth
   deviceId    String? // sticky qr_device id (link to the ordering device)
   tableNumber Int? // table snapshot at subscribe time (broadcast/report context)
+  role        String   @default("customer") // customer | admin — admin devices get instant order/waiter alerts
   userAgent   String?  @db.Text // diagnostics
   lastError   String?  @db.Text // last send error (auto-cleaned on 404/410)
   createdAt   DateTime @default(now())
 
   @@index([deviceId])
   @@index([tableNumber])
+  @@index([role])
   @@map("push_subscriptions")
 }
 

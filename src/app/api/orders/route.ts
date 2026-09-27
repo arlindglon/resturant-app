@@ -159,6 +159,18 @@ export async function POST(req: NextRequest) {
       items: order.items.map((i) => ({ itemName: i.itemName, quantity: i.quantity, spiceLevel: i.spiceLevel, addons: i.addons, specialNote: i.specialNote })),
     })
 
+    // 🔔 অ্যাডমিন/মালিকের ডিভাইসে সাথে সাথে পুশ (best-effort — কখনো অর্ডার প্লেসমেন্ট ফেল করাবে না)
+    void import('@/lib/webpush-server')
+      .then(({ notifyAdmins }) =>
+        notifyAdmins({
+          title: `🛎️ নতুন অর্ডার #${order.orderNo} — টেবিল ${order.tableNumber}`,
+          body: `${order.items.length} টা আইটেম • মোট ৳${order.total} — কিচেনে দেখুন`,
+          tag: `new-order-${order.id}`,
+          url: '/kds',
+        })
+      )
+      .catch(() => {})
+
     return ok({
       order: {
         id: order.id,

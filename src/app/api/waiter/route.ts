@@ -33,6 +33,25 @@ export async function POST(req: NextRequest) {
   })
 
   emitEvent('waiter:new', { id: call.id, tableNumber: call.tableNumber, type: call.type, createdAt: call.createdAt })
+
+  // 🔔 অ্যাডমিন/মালিকের ডিভাইসে সাথে সাথে পুশ (best-effort — কখনো ওয়েটার-কল ফেল করাবে না)
+  const waiterLabels: Record<string, string> = {
+    WAITER: 'ওয়েটার ডাকছে',
+    WATER: 'পানি চাই',
+    CLEAN: 'টেবিল পরিষ্কার চাই',
+    BILL: 'বিল চাই',
+  }
+  void import('@/lib/webpush-server')
+    .then(({ notifyAdmins }) =>
+      notifyAdmins({
+        title: `🔔 টেবিল ${call.tableNumber} — ${waiterLabels[call.type] || 'সিগন্যাল'}`,
+        body: 'KDS বা অ্যাডমিন প্যানেল থেকে রেসপন্স দিন।',
+        tag: `waiter-${call.id}`,
+        url: '/kds',
+      })
+    )
+    .catch(() => {})
+
   return ok({ call, throttled: false })
 }
 

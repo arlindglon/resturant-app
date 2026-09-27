@@ -322,7 +322,7 @@ export default function KdsPage() {
       'waiter:resolved': () => refetch(false),
       'table:cleared': () => refetch(false),
     },
-    5000,
+    3000,
     () => {
       refetch(true)
     }

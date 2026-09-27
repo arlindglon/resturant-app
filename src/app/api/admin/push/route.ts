@@ -5,7 +5,7 @@ import { db } from '@/lib/db'
 import { requirePerm } from '@/lib/staff-auth'
 import { getSetting, setSettings } from '@/lib/settings'
 import { SETTING_KEYS } from '@/lib/constants'
-import { allSubs, pushEnabled, sendWebPush } from '@/lib/webpush-server'
+import { allSubs, ensurePushTable, pushEnabled, sendWebPush } from '@/lib/webpush-server'
 
 export async function GET() {
   const denied = await requirePerm('tables')
@@ -14,6 +14,7 @@ export async function GET() {
   return ok({
     enabled: await pushEnabled(),
     count: subs.length,
+    adminCount: subs.filter((s) => s.role === 'admin').length,
     publicKeySet: Boolean((await getSetting(SETTING_KEYS.PUSH_VAPID_PUBLIC)).trim()),
     lastResult: await getSetting(SETTING_KEYS.PUSH_LAST_RESULT),
     subs: subs.slice(0, 30).map((s) => ({
@@ -44,6 +45,33 @@ export async function POST(req: NextRequest) {
     if (!id) return fail('id প্রয়োজন')
     const res = await db.pushSubscription.deleteMany({ where: { id } })
     return ok({ removed: res.count })
+  }
+
+  // 📱 এই ডিভাইসকে অ্যাডমিন-অ্যালার্ট ডিভাইস হিসেবে নেওয়া — নতুন অর্ডার + ওয়েটার-কল এখানেই পুশ হবে
+  if (action === 'subscribe-device') {
+    await ensurePushTable()
+    const keys = (body.keys || {}) as { p256dh?: unknown; auth?: unknown }
+    const endpoint = typeof body.endpoint === 'string' ? body.endpoint.trim() : ''
+    const p256dh = typeof keys.p256dh === 'string' ? keys.p256dh : ''
+    const auth = typeof keys.auth === 'string' ? keys.auth : ''
+    if (!endpoint.startsWith('https://') || !p256dh || !auth) return fail('সাবস্ক্রিপশন ডেটা অসম্পূর্ণ')
+    const userAgent = (req.headers.get('user-agent') || '').slice(0, 300) || null
+    await db.pushSubscription.upsert({
+      where: { endpoint },
+      create: { endpoint, p256dh, auth, role: 'admin', userAgent },
+      update: { p256dh, auth, role: 'admin', lastError: null },
+    })
+    // সাথে সাথেই একটা টেস্ট পুশ — মালিক নিশ্চিত হতে পারেন অ্যালার্ট আসছে
+    const sub = await db.pushSubscription.findUnique({ where: { endpoint } })
+    if (sub) {
+      void sendWebPush([sub], {
+        title: '✅ অ্যালার্ট চালু হয়েছে!',
+        body: 'এখন থেকে নতুন অর্ডার আর ওয়েটার-কল এই ডিভাইসেই সাথে সাথে পাবেন।',
+        tag: 'admin-welcome',
+        url: '/kds',
+      }).catch(() => {})
+    }
+    return ok({ saved: true })
   }
 
   if (action === 'test' || action === 'broadcast') {

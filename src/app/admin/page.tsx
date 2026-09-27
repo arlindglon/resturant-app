@@ -4594,7 +4594,17 @@ interface WaReportState {
 interface PushState {
   enabled: boolean
   count: number
+  adminCount?: number
   lastResult: string
+}
+
+function urlBase64ToUint8Array(base64String: string): Uint8Array {
+  const padding = '='.repeat((4 - (base64String.length % 4)) % 4)
+  const base64 = (base64String + padding).replace(/-/g, '+').replace(/_/g, '/')
+  const raw = atob(base64)
+  const output = new Uint8Array(raw.length)
+  for (let i = 0; i < raw.length; i++) output[i] = raw.charCodeAt(i)
+  return output
 }
 
 function NotificationsCard() {
@@ -4670,6 +4680,45 @@ function NotificationsCard() {
     void load()
   }
 
+  // 📱 মালিকের এই ফোন/কম্পিউটারকে অ্যালার্ট-ডিভাইস বানানো — নতুন অর্ডার + ওয়েটার-কল এখানেই আসবে
+  const enableDeviceAlerts = async () => {
+    setBusy('push-dev')
+    try {
+      if (!('serviceWorker' in navigator) || !('PushManager' in window) || typeof Notification === 'undefined') {
+        toast.error('এই ব্রাউজারে নোটিফিকেশন সাপোর্ট নেই')
+        return
+      }
+      const perm = await Notification.requestPermission()
+      if (perm !== 'granted') {
+        toast.error('পারমিশন ছাড়া অ্যালার্ট আসবে না — ব্রাউজারে Allow দিন')
+        return
+      }
+      const keyRes = await api.get<{ enabled: boolean; publicKey: string | null }>('/api/push/key')
+      if (!keyRes.ok || !keyRes.data?.enabled || !keyRes.data.publicKey) {
+        toast.error('পুশ এখন বন্ধ আছে — উপরের 🔔 সুইচটা চালু করুন')
+        return
+      }
+      const reg = await navigator.serviceWorker.register('/sw.js')
+      await navigator.serviceWorker.ready
+      const sub = await reg.pushManager.subscribe({
+        userVisibleOnly: true,
+        applicationServerKey: urlBase64ToUint8Array(keyRes.data.publicKey),
+      })
+      const json = sub.toJSON()
+      const res = await api.post<{ saved: boolean }>('/api/admin/push', { action: 'subscribe-device', endpoint: json.endpoint, keys: json.keys })
+      if (!res.ok || !res.data?.saved) {
+        toast.error(res.error || 'সেভ হয়নি — আবার চেষ্টা করুন')
+        return
+      }
+      toast.success('✅ এই ডিভাইসে অ্যালার্ট চালু — টেস্ট নোটিফিকেশন পাঠানো হয়েছে')
+      void load()
+    } catch {
+      toast.error('চালু করা যায়নি — আবার চেষ্টা করুন')
+    } finally {
+      setBusy('')
+    }
+  }
+
   return (
     <Card className="border-emerald-200 bg-gradient-to-br from-emerald-50/60 to-white">
       <CardHeader className="pb-2">
@@ -4743,7 +4792,7 @@ function NotificationsCard() {
             </Badge>
           </div>
           <p className="text-[11px] leading-relaxed text-stone-600">
-            কাস্টমার মেনু পেজে 🔔 বাটনে একবার চাপলেই সাবস্ক্রাইব — রান্নাঘর থেকে অর্ডার <b>READY</b> করা হলে সাথে সাথে তার ব্রাউজারে নোটিফিকেশন যাবে।
+            কাস্টমার মেনু পেজে ঢুকলেই ব্রাউজারের Allow-বাবল নিজে থেকেই ওঠে (🔔 অটো-পুশ) — রান্নাঘর থেকে অর্ডার <b>READY</b> করা হলে সাথে সাথে তার ব্রাউজারে নোটিফিকেশন যাবে।
             <b> কোনো Meta রিভিউ/ডকুমেন্ট লাগে না</b> (ব্রাউজারের নিজস্ব পুশ — ফ্রি)।
           </p>
           <div className="grid gap-1.5 sm:grid-cols-[1fr_2fr_auto]">
@@ -4754,6 +4803,23 @@ function NotificationsCard() {
             </Button>
           </div>
           {push?.lastResult && <p className="text-[10px] text-stone-500">শেষ পুশ: {push.lastResult}</p>}
+        </div>
+
+        {/* ---- মালিক/অ্যাডমিন ইনস্ট্যান্ট অ্যালার্ট ---- */}
+        <div className="space-y-2.5 rounded-lg border border-rose-200 bg-white/70 p-3">
+          <div className="flex flex-wrap items-center gap-2">
+            <p className="text-sm font-black">🛎️ মালিক/অ্যাডমিন ইনস্ট্যান্ট অ্যালার্ট</p>
+            <Badge variant="outline" className="ml-auto border-rose-300 text-[10px] font-bold text-rose-700">
+              {toBn(String(push?.adminCount ?? 0))} টা ডিভাইস চালু
+            </Badge>
+          </div>
+          <p className="text-[11px] leading-relaxed text-stone-600">
+            একবার চাপলেই এই ফোন/কম্পিউটারে <b>নতুন অর্ডার</b> (🛎️ টেবিল + টাকা সহ) আর <b>ওয়েটার-কল</b> সাথে সাথে নোটিফিকেশনে আসবে — প্যানেল বন্ধ থাকলেও।
+            কোনো ডকুমেন্ট/রিভিউ লাগে না। একাধিক ফোনে চাইলে প্রতিটাতে একবার করে চাপুন।
+          </p>
+          <Button size="sm" onClick={enableDeviceAlerts} disabled={busy === 'push-dev'} className="h-8 font-black">
+            {busy === 'push-dev' ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : '🔔'} এই ডিভাইসে অ্যালার্ট চালু করুন
+          </Button>
         </div>
       </CardContent>
     </Card>

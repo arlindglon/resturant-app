@@ -802,7 +802,7 @@ export default function MenuPage() {
   // "আমার অর্ডার" glow + bill button fresh
   useEffect(() => {
     if (phase !== 'ready') return
-    const t = setInterval(fetchOrders, ordersOpen ? 5000 : 20000)
+    const t = setInterval(fetchOrders, ordersOpen ? 5000 : 10000)
     return () => clearInterval(t)
   }, [phase, ordersOpen, fetchOrders])
 

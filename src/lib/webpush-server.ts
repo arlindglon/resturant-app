@@ -28,6 +28,7 @@ export function ensurePushTable(): Promise<void> {
           \`auth\` TEXT NOT NULL,
           \`deviceId\` VARCHAR(191) NULL,
           \`tableNumber\` INTEGER NULL,
+          \`role\` VARCHAR(20) NOT NULL DEFAULT 'customer',
           \`userAgent\` TEXT NULL,
           \`lastError\` TEXT NULL,
           \`createdAt\` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
@@ -35,9 +36,21 @@ export function ensurePushTable(): Promise<void> {
           PRIMARY KEY (\`id\`)
         ) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci`
       )
+      // পুরনো টেবিলে role কলাম না থাকলে লেজি ALTER (admin-device অ্যালার্ট — Task 41)
+      try {
+        const rows = await db.$queryRawUnsafe<{ c: bigint }[]>(
+          "SELECT COUNT(*) AS c FROM information_schema.columns WHERE table_schema = DATABASE() AND table_name = 'push_subscriptions' AND column_name = 'role'"
+        )
+        if (!rows.length || Number(rows[0].c) === 0) {
+          await db.$executeRawUnsafe("ALTER TABLE `push_subscriptions` ADD COLUMN `role` VARCHAR(20) NOT NULL DEFAULT 'customer'")
+        }
+      } catch {
+        /* চেক/ALTER ব্যর্থ হলেও বাকি সেটআপ চলবে — পরের কলে আবার */
+      }
       for (const ddl of [
         'CREATE INDEX IF NOT EXISTS `push_subscriptions_deviceId_idx` ON `push_subscriptions`(`deviceId`)',
         'CREATE INDEX IF NOT EXISTS `push_subscriptions_tableNumber_idx` ON `push_subscriptions`(`tableNumber`)',
+        'CREATE INDEX IF NOT EXISTS `push_subscriptions_role_idx` ON `push_subscriptions`(`role`)',
       ]) {
         try {
           await db.$executeRawUnsafe(ddl)
@@ -134,4 +147,25 @@ export async function notifySessionDevices(sessionId: string, tableNumber: numbe
   const uniq = new Map<string, (typeof subs)[number]>()
   for (const s of subs) if (!uniq.has(s.endpoint)) uniq.set(s.endpoint, s)
   return sendWebPush([...uniq.values()], payload)
+}
+
+/** অ্যাডমিন/মালিকের সাবস্ক্রিপশন (role='admin' — admin প্যানেলের "এই ডিভাইসে অ্যালার্ট" বাটনে সাবস্ক্রাইব হয়) */
+export async function adminSubs() {
+  await ensurePushTable()
+  return db.pushSubscription.findMany({ where: { role: 'admin' }, orderBy: { createdAt: 'desc' }, take: 100 })
+}
+
+/**
+ * 🔔 অ্যাডমিন/মালিকের সব ডিভাইসে ইনস্ট্যান্ট অ্যালার্ট — নতুন অর্ডার, ওয়েটার-কল।
+ * fire-and-forget: কোনো অবস্থাতেই অর্ডার/ওয়েটার ফ্লো ফেল করাবে না।
+ */
+export async function notifyAdmins(payload: PushPayload): Promise<PushSendResult> {
+  try {
+    if (!(await pushEnabled())) return { total: 0, sent: 0, failed: 0, cleaned: 0, errors: [] }
+    const subs = await adminSubs()
+    if (!subs.length) return { total: 0, sent: 0, failed: 0, cleaned: 0, errors: [] }
+    return await sendWebPush(subs, payload)
+  } catch {
+    return { total: 0, sent: 0, failed: 0, cleaned: 0, errors: [] }
+  }
 }
