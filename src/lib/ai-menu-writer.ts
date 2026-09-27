@@ -96,8 +96,16 @@ const BN_DIGITS: Record<string, string> = { '০': '0', '১': '1', '২': '2', 
 
 /** টেমপ্লেট-মান ফিল্টার: উদ্ধৃতি-চিহ্ন খোলা + "..."/"…"-জাতীয় ফাঁকা প্লেসহোল্ডার → '' */
 function cleanField(v: string): string {
-  const t = v.trim().replace(/^["'“”‘’]+|["'“”‘’]+$/g, '').trim()
-  return /[\p{L}\p{N}]/u.test(t.replace(/[.।…·\s-]+/g, '')) ? t : ''
+  const t = v.trim().replace(/^["'“”‘’]+|["'“”‘’]+$/g, '').replace(/[।.\s]+$/, '').trim()
+  if (!/[\p{L}\p{N}]/u.test(t.replace(/[.।…·\s-]+/g, ''))) return ''
+  if (/^<[^>]+>$/.test(t)) return '' // <name>/<description>-জাতীয় টেমপ্লেট প্লেসহোল্ডার
+  return t
+}
+
+/** Gemma-র নেটিভ self-correction narration ADVICE/DESC-এ লিক করে — সেখানেই কাটা */
+function stripMetaLeak(v: string): string {
+  const m = v.match(/(?:First character must|No analysis|Self-?Corr|The prompt says|I should (?:include|add)|CRITICAL OUTPUT|Let me|Actually,)/i)
+  return (m && m.index !== undefined ? v.slice(0, m.index) : v).replace(/[\s।.]+$/, '').trim()
 }
 
 function parsePrice(raw: string): number | null {
@@ -125,11 +133,11 @@ export function parseDraftItems(raw: string): GeneratedDraft[] | null {
     out.push({
       name: name.slice(0, 80),
       category: category.slice(0, 40),
-      description: cleanField(typeof o.description === 'string' ? o.description : '').slice(0, 500),
+      description: stripMetaLeak(cleanField(typeof o.description === 'string' ? o.description : '')).slice(0, 500),
       price: typeof o.price === 'number' && isFinite(o.price) && o.price > 0 ? Math.round(o.price) : null,
       isSetMenu: o.isSetMenu === true,
       spiceLevels: Array.isArray(o.spiceLevels) ? o.spiceLevels.filter((s): s is string => typeof s === 'string').slice(0, 4) : [],
-      advice: cleanField(typeof o.advice === 'string' ? o.advice : '').slice(0, 300),
+      advice: stripMetaLeak(cleanField(typeof o.advice === 'string' ? o.advice : '')).slice(0, 300),
     })
   }
   return out.length > 0 ? out.slice(0, 10) : null
@@ -190,11 +198,11 @@ function pushBlock(cur: { name?: string; category?: string; description?: string
   out.push({
     name: name.slice(0, 80),
     category: category.slice(0, 40),
-    description: cleanField(cur.description || '').slice(0, 500),
+    description: stripMetaLeak(cleanField(cur.description || '')).slice(0, 500),
     price: cur.price ?? null,
     isSetMenu: cur.isSetMenu === true,
     spiceLevels: (cur.spiceLevels || []).slice(0, 4),
-    advice: cleanField(cur.advice || '').slice(0, 300),
+    advice: stripMetaLeak(cleanField(cur.advice || '')).slice(0, 300),
   })
 }
 
