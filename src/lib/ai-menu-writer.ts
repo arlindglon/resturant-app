@@ -94,6 +94,12 @@ export interface GeneratedDraft {
 
 const BN_DIGITS: Record<string, string> = { '০': '0', '১': '1', '২': '2', '৩': '3', '৪': '4', '৫': '5', '৬': '6', '৭': '7', '৮': '8', '৯': '9' }
 
+/** টেমপ্লেট-মান ফিল্টার: উদ্ধৃতি-চিহ্ন খোলা + "..."/"…"-জাতীয় ফাঁকা প্লেসহোল্ডার → '' */
+function cleanField(v: string): string {
+  const t = v.trim().replace(/^["'“”‘’]+|["'“”‘’]+$/g, '').trim()
+  return /[\p{L}\p{N}]/u.test(t.replace(/[.।…·\s-]+/g, '')) ? t : ''
+}
+
 function parsePrice(raw: string): number | null {
   const norm = raw.replace(/[০-৯]/g, (d) => BN_DIGITS[d] || d)
   const m = norm.replace(/,/g, '').match(/\d+(?:\.\d+)?/)
@@ -113,17 +119,17 @@ export function parseDraftItems(raw: string): GeneratedDraft[] | null {
   const out: GeneratedDraft[] = []
   for (const it of items) {
     const o = (it ?? {}) as Record<string, unknown>
-    const name = typeof o.name === 'string' ? o.name.trim() : ''
-    const category = typeof o.category === 'string' ? o.category.trim() : ''
+    const name = cleanField(typeof o.name === 'string' ? o.name : '')
+    const category = cleanField(typeof o.category === 'string' ? o.category : '')
     if (!name || !category) continue
     out.push({
       name: name.slice(0, 80),
       category: category.slice(0, 40),
-      description: typeof o.description === 'string' ? o.description.trim().slice(0, 500) : '',
+      description: cleanField(typeof o.description === 'string' ? o.description : '').slice(0, 500),
       price: typeof o.price === 'number' && isFinite(o.price) && o.price > 0 ? Math.round(o.price) : null,
       isSetMenu: o.isSetMenu === true,
       spiceLevels: Array.isArray(o.spiceLevels) ? o.spiceLevels.filter((s): s is string => typeof s === 'string').slice(0, 4) : [],
-      advice: typeof o.advice === 'string' ? o.advice.trim().slice(0, 300) : '',
+      advice: cleanField(typeof o.advice === 'string' ? o.advice : '').slice(0, 300),
     })
   }
   return out.length > 0 ? out.slice(0, 10) : null
@@ -177,18 +183,18 @@ function parseDraftBlocks(raw: string): GeneratedDraft[] | null {
 }
 
 function pushBlock(cur: { name?: string; category?: string; description?: string; price?: number | null; isSetMenu?: boolean; spiceLevels?: string[]; advice?: string }, out: GeneratedDraft[]) {
-  const name = (cur.name || '').trim()
-  const category = (cur.category || '').trim()
+  const name = cleanField(cur.name || '')
+  const category = cleanField(cur.category || '')
   if (!name || !category) return
   if (out.some((o) => o.name === name)) return // একই নাম দুবার এলে একটাই
   out.push({
     name: name.slice(0, 80),
     category: category.slice(0, 40),
-    description: (cur.description || '').trim().slice(0, 500),
+    description: cleanField(cur.description || '').slice(0, 500),
     price: cur.price ?? null,
     isSetMenu: cur.isSetMenu === true,
     spiceLevels: (cur.spiceLevels || []).slice(0, 4),
-    advice: (cur.advice || '').trim().slice(0, 300),
+    advice: cleanField(cur.advice || '').slice(0, 300),
   })
 }
 
