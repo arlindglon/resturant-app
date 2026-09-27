@@ -774,6 +774,37 @@ async function generateRotating(
 }
 let rotationCursor = 0
 
+/* ───────────────────── admin tools (AI মেনু-লেখক ইত্যাদি) ───────────────────── */
+
+/**
+ * অ্যাডমিন টুলের জন্য এক-শট structured জেনারেটর — কাস্টমার-চ্যাট ইঞ্জিনের সেইম
+ * multi-key × multi-model কোটা-সচেতন রোটেশন ব্যবহার করে। JSON আউটপুট চাওয়া হয়,
+ * ভাঙা আউটপুট এলে validate রিজেক্ট করে পরের মডেল/কি-তে আবার চেষ্টা হয়।
+ */
+export async function adminStructuredGenerate(opts: {
+  system: string
+  user: string
+  temperature?: number
+  maxOutputTokens?: number
+  /** ভাঙা/নিয়ম-বহির্ভূত আউটপুট রিজেক্ট করলে ইঞ্জিন পরের মডেলে চেষ্টা করে */
+  validate?: (text: string) => boolean
+}): Promise<{ ok: boolean; text: string | null; error: string | null }> {
+  const cfg = await getGeminiConfig()
+  if (!cfg.enabled || cfg.keys.length === 0) {
+    return { ok: false, text: null, error: 'AI চালু নেই — সেটিংসে Gemini API key যোগ করে AI চালু করুন' }
+  }
+  return generateRotating(cfg, {
+    systemInstruction: { parts: [{ text: opts.system }] },
+    contents: [{ role: 'user', parts: [{ text: opts.user }] }],
+    generationConfig: {
+      temperature: opts.temperature ?? 0.8,
+      thinkingConfig: { thinkingBudget: 0 },
+      maxOutputTokens: opts.maxOutputTokens ?? 8192,
+      responseMimeType: 'application/json',
+    },
+  }, opts.validate)
+}
+
 /* ─────────────────────────── conversation history ─────────────────────────── */
 
 /** store one chat turn (best-effort — history must never break the chat) */
@@ -907,7 +938,7 @@ ${opts.formatting !== false ? MESSENGER_FORMAT_RULES + '\n- এটা একট�
   return { ok: true, text, error: null }
 }
 
-function extractJson(text: string): Record<string, unknown> | null {
+export function extractJson(text: string): Record<string, unknown> | null {
   try {
     return JSON.parse(text) as Record<string, unknown>
   } catch {

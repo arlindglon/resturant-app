@@ -423,3 +423,24 @@ CREATE TABLE IF NOT EXISTS `push_subscriptions` (
 CREATE INDEX IF NOT EXISTS `push_subscriptions_deviceId_idx` ON `push_subscriptions`(`deviceId`);
 CREATE INDEX IF NOT EXISTS `push_subscriptions_tableNumber_idx` ON `push_subscriptions`(`tableNumber`);
 CREATE INDEX IF NOT EXISTS `push_subscriptions_role_idx` ON `push_subscriptions`(`role`);
+
+-- CreateTable (AI মেনু-লেখক — pending drafts)
+CREATE TABLE IF NOT EXISTS `ai_menu_drafts` (
+    `id` VARCHAR(191) NOT NULL,
+    `rawText` TEXT NOT NULL,
+    `name` VARCHAR(191) NOT NULL,
+    `category` VARCHAR(191) NOT NULL,
+    `description` TEXT NULL,
+    `price` DOUBLE NULL,
+    `imageUrl` TEXT NULL,
+    `tags` TEXT NULL,
+    `isSetMenu` BOOLEAN NOT NULL DEFAULT false,
+    `spiceLevels` TEXT NULL,
+    `status` VARCHAR(20) NOT NULL DEFAULT 'PENDING',
+    `note` TEXT NULL,
+    `createdAt` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+    `decidedAt` DATETIME(3) NULL,
+
+    INDEX `ai_menu_drafts_status_createdAt_idx`(`status`, `createdAt`),
+    PRIMARY KEY (`id`)
+) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;

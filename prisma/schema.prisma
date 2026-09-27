@@ -489,3 +489,27 @@ model BotAction {
 
   @@map("bot_actions")
 }
+
+// ---------------- AI মেনু-লেখক (Admin approval flow) ----------------
+// মালিক এলোমেলো নোট লিখে দেয় → AI থেকে ক্যাটাগরি/নাম/বিবরণ/দাম/পরামর্শ তৈরি হয় →
+// PENDING ড্রাফট হিসেবে জমা থাকে → admin চেক করে অ্যাপ্রুভ দিলে আসল menu_items-এ
+// ঢুকে যায় (নতুন ক্যাটাগরি হলে নিজেই তৈরি হয়)।
+model AiMenuDraft {
+  id          String    @id @default(cuid())
+  rawText     String    @db.Text // মালিকের হাতে-লেখা মূল নোট
+  name        String
+  category    String // AI-প্রস্তাব ক্যাটাগরির নাম (অ্যাপ্রুভে তৈরি/ম্যাচ হয়)
+  description String?   @db.Text // AI-লেখা মুখরোচক বাংলা বিবরণ
+  price       Float? // AI-প্রস্তাব দাম (টাকা)
+  imageUrl    String?   @db.Text // AI-বানানো ছবি (ImgBB URL) — optional
+  tags        String?   @db.Text // JSON string[]
+  isSetMenu   Boolean   @default(false)
+  spiceLevels String?   @db.Text // JSON string[] — ["Mild","Medium","Hot"]
+  status      String    @default("PENDING") // PENDING | APPROVED | REJECTED
+  note        String?   @db.Text // AI-র দাম/ব্যবসা-পরামর্শ (admin-এর জন্য)
+  createdAt   DateTime  @default(now())
+  decidedAt   DateTime?
+
+  @@index([status, createdAt])
+  @@map("ai_menu_drafts")
+}

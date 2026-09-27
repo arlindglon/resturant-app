@@ -1561,6 +1561,288 @@ function ItemForm({
   )
 }
 
+interface AiDraftRow {
+  id: string
+  rawText: string
+  name: string
+  category: string
+  description: string | null
+  price: number | null
+  imageUrl: string | null
+  isSetMenu: boolean
+  spiceLevels: string | null
+  status: string
+  note: string | null
+  createdAt: string
+}
+
+// ============================================================
+// ✍️ AI মেনু-লেখক — মালিক যা-মন চায় লেখেন, AI ক্যাটাগরি/বিবরণ/দাম ঠিক করে
+// পেন্ডিংয়ে রাখে; admin চেক করে ✅ দিলেই তখনই মেনুতে (সাইটে) যায়।
+// ============================================================
+function AiMenuWriterCard({
+  categories,
+  onApproved,
+  onAuthRequired,
+}: {
+  categories: Category[]
+  onApproved: () => void
+  onAuthRequired: () => void
+}) {
+  const [text, setText] = useState('')
+  const [withImage, setWithImage] = useState(false)
+  const [generating, setGenerating] = useState(false)
+  const [pending, setPending] = useState<AiDraftRow[]>([])
+  const [decided, setDecided] = useState<AiDraftRow[]>([])
+  const [loadingDrafts, setLoadingDrafts] = useState(true)
+  const [busyId, setBusyId] = useState<string | null>(null)
+  const [imageNote, setImageNote] = useState('')
+  const [edits, setEdits] = useState<Record<string, { name: string; category: string; description: string; price: string }>>({})
+
+  const loadDrafts = useCallback(async () => {
+    const res = await api.get<{ pending: AiDraftRow[]; decided: AiDraftRow[] }>('/api/admin/ai-menu-drafts', NO_TIMEOUT_MS)
+    if (isAuthError(res)) return onAuthRequired()
+    if (res.ok && res.data) {
+      setPending(res.data.pending)
+      setDecided(res.data.decided)
+      setEdits((prev) => {
+        const next: typeof prev = {}
+        for (const d of res.data!.pending) {
+          next[d.id] =
+            prev[d.id] ||
+            {
+              name: d.name,
+              category: d.category,
+              description: d.description || '',
+              price: d.price != null ? String(d.price) : '',
+            }
+        }
+        return next
+      })
+    }
+    setLoadingDrafts(false)
+  }, [onAuthRequired])
+
+  useEffect(() => {
+    const t = setTimeout(loadDrafts, 0)
+    return () => clearTimeout(t)
+  }, [loadDrafts])
+
+  const setEdit = (id: string, key: 'name' | 'category' | 'description' | 'price', v: string) =>
+    setEdits((prev) => ({ ...prev, [id]: { ...prev[id], [key]: v } }))
+
+  const generate = async () => {
+    if (text.trim().length < 2) return toast.error('আগে বক্সে আইটেমের কথা লিখুন')
+    setGenerating(true)
+    setImageNote('')
+    const res = await api.post<{ count: number; imageErrors: string[] }>('/api/admin/ai-menu-drafts', { text, withImage }, NO_TIMEOUT_MS)
+    setGenerating(false)
+    if (isAuthError(res)) return onAuthRequired()
+    if (!res.ok || !res.data) return toast.error(res.error || 'AI ড্রাফট বানাতে পারেনি')
+    toast.success(`✍️ ${toBn(res.data.count)} টা আইটেম পেন্ডিংয়ে যোগ হয়েছে — চেক করে ✅ দিন`)
+    if (res.data.imageErrors?.length) setImageNote(res.data.imageErrors.slice(0, 3).join(' • '))
+    setText('')
+    loadDrafts()
+  }
+
+  const approve = async (d: AiDraftRow) => {
+    const e = edits[d.id]
+    if (!e) return
+    const price = parseFloat(e.price)
+    if (!e.name.trim()) return toast.error('আইটেমের নাম দিন')
+    if (!e.category.trim()) return toast.error('ক্যাটাগরির নাম দিন')
+    if (isNaN(price) || price <= 0) return toast.error('সঠিক দাম দিন')
+    setBusyId(d.id)
+    const res = await api.post(`/api/admin/ai-menu-drafts/${d.id}`, {
+      action: 'approve',
+      name: e.name,
+      category: e.category,
+      description: e.description,
+      price,
+    }, NO_TIMEOUT_MS)
+    setBusyId(null)
+    if (isAuthError(res)) return onAuthRequired()
+    if (!res.ok) return toast.error(res.error || 'অ্যাপ্রুভ ব্যর্থ')
+    toast.success(`✅ ${e.name} — মেনুতে যোগ হয়েছে, কাস্টমার এখনই দেখতে পাবে`)
+    onApproved()
+    loadDrafts()
+  }
+
+  const reject = async (d: AiDraftRow) => {
+    setBusyId(d.id)
+    const res = await api.post(`/api/admin/ai-menu-drafts/${d.id}`, { action: 'reject' }, NO_TIMEOUT_MS)
+    setBusyId(null)
+    if (isAuthError(res)) return onAuthRequired()
+    if (!res.ok) return toast.error(res.error || 'বাতিল ব্যর্থ')
+    toast.success('ড্রাফট বাতিল হয়েছে')
+    loadDrafts()
+  }
+
+  const remove = async (d: AiDraftRow) => {
+    const res = await api.del(`/api/admin/ai-menu-drafts/${d.id}`)
+    if (isAuthError(res)) return onAuthRequired()
+    if (!res.ok) return toast.error(res.error || 'ডিলিট ব্যর্থ')
+    loadDrafts()
+  }
+
+  return (
+    <Card className="border-amber-200 bg-gradient-to-b from-amber-50/70 to-white">
+      <CardHeader className="pb-2">
+        <CardTitle className="flex items-center gap-2 text-base">
+          ✍️ AI মেনু-লেখক
+          <Badge className="bg-amber-100 text-[10px] text-amber-700 hover:bg-amber-100">নতুন</Badge>
+        </CardTitle>
+        <p className="text-xs leading-relaxed text-stone-500">
+          যা মন চায় লিখুন — নাম, দাম, উপকরণ, এলোমেলো নোট, যা-ই হোক। AI নিজেই <b>ক্যাটাগরি, বিবরণ, দাম, ঝাল-মাত্রা</b> ঠিক করে
+          পেন্ডিংয়ে রাখবে। আপনি চেক করে ✅ অ্যাপ্রুভ দিলেই তখন সাইটের মেনুতে কাস্টমার দেখবে।
+        </p>
+      </CardHeader>
+      <CardContent className="space-y-3">
+        <Textarea
+          value={text}
+          onChange={(e) => setText(e.target.value)}
+          rows={3}
+          placeholder="যেমন: &quot;chicken biriyani 280 taka, বেসনের জালি সহ — খাসির রেজালা ৪৫০, আর নতুন একটা ফ্রুট লাচ্ছি&quot; … এলোমেলো হলেও সমস্যা নেই"
+          className="border-stone-200 bg-white"
+        />
+        <div className="flex flex-wrap items-center gap-3">
+          <label className="flex cursor-pointer items-center gap-2 text-xs font-bold text-stone-600">
+            <Checkbox checked={withImage} onCheckedChange={(v) => setWithImage(v === true)} />
+            🖼️ AI দিয়ে খাবারের ছবিও বানাও (সময় একটু বেশি লাগবে)
+          </label>
+          <Button
+            onClick={generate}
+            disabled={generating}
+            className="ml-auto bg-amber-500 font-black text-white hover:bg-amber-600"
+          >
+            {generating ? (
+              <>
+                <Loader2 className="h-4 w-4 animate-spin" /> AI লিখছে…
+              </>
+            ) : (
+              <>
+                <Sparkles className="h-4 w-4" /> AI দিয়ে বানাও
+              </>
+            )}
+          </Button>
+        </div>
+        {generating && (
+          <p className="text-[11px] font-bold text-amber-700">
+            ⏳ AI কাজ করছে — ১০-৯০ সেকেন্ড লাগতে পারে (ছবি বানালে আরও)। পাতা বন্ধ করবেন না।
+          </p>
+        )}
+        {imageNote && (
+          <p className="rounded-lg border border-amber-200 bg-amber-50 p-2 text-[11px] text-amber-800">
+            🖼️ ছবি: {imageNote} — ছবি ছাড়াই ড্রাফট তৈরি হয়েছে, পরে আইটেমে ছবি দিতে পারবেন।
+          </p>
+        )}
+
+        {/* ---- pending drafts ---- */}
+        <div className="flex items-center gap-2 pt-1">
+          <h4 className="text-sm font-black text-stone-700">⏳ অ্যাপ্রুভের অপেক্ষায়</h4>
+          {pending.length > 0 && (
+            <Badge variant="outline" className="border-amber-300 text-xs font-bold text-amber-700">
+              {toBn(pending.length)}
+            </Badge>
+          )}
+        </div>
+        {loadingDrafts ? (
+          <Loading label="ড্রাফট লোড হচ্ছে…" />
+        ) : pending.length === 0 ? (
+          <p className="text-xs text-stone-400">এখনো কোনো পেন্ডিং ড্রাফট নেই।</p>
+        ) : (
+          <div className="thin-scroll max-h-[28rem] space-y-3 overflow-y-auto pr-1">
+            {pending.map((d) => {
+              const e = edits[d.id] || { name: d.name, category: d.category, description: d.description || '', price: d.price != null ? String(d.price) : '' }
+              const busy = busyId === d.id
+              return (
+                <div key={d.id} className="space-y-2 rounded-xl border border-stone-200 bg-white p-3">
+                  <div className="flex items-start gap-3">
+                    {d.imageUrl ? (
+                      <img src={d.imageUrl} alt={d.name} className="h-14 w-14 shrink-0 rounded-lg object-cover" />
+                    ) : (
+                      <div className="flex h-14 w-14 shrink-0 items-center justify-center rounded-lg bg-stone-100">
+                        <UtensilsCrossed className="h-6 w-6 text-stone-300" />
+                      </div>
+                    )}
+                    <div className="grid min-w-0 flex-1 grid-cols-[1fr_auto] gap-2">
+                      <Input value={e.name} onChange={(ev) => setEdit(d.id, 'name', ev.target.value)} placeholder="আইটেমের নাম" className="h-9 font-bold" />
+                      <Input
+                        value={e.price}
+                        onChange={(ev) => setEdit(d.id, 'price', ev.target.value)}
+                        placeholder="দাম"
+                        inputMode="decimal"
+                        className="h-9 w-24 text-right font-black text-amber-700"
+                      />
+                    </div>
+                  </div>
+                  <Input
+                    value={e.category}
+                    onChange={(ev) => setEdit(d.id, 'category', ev.target.value)}
+                    placeholder="ক্যাটাগরি"
+                    list="ai-menu-cats"
+                    className="h-9"
+                  />
+                  <Textarea
+                    value={e.description}
+                    onChange={(ev) => setEdit(d.id, 'description', ev.target.value)}
+                    rows={2}
+                    placeholder="বিবরণ"
+                    className="text-sm"
+                  />
+                  {d.note && (
+                    <p className="flex items-start gap-1.5 rounded-lg bg-amber-50 p-2 text-[11px] leading-relaxed text-amber-800">
+                      <Lightbulb className="mt-0.5 h-3.5 w-3.5 shrink-0 text-amber-500" />
+                      {d.note}
+                    </p>
+                  )}
+                  <p className="truncate text-[10px] italic text-stone-400">📝 আপনার লেখা: {d.rawText}</p>
+                  <div className="flex items-center gap-2">
+                    <Button onClick={() => approve(d)} disabled={busy} size="sm" className="bg-emerald-600 font-black text-white hover:bg-emerald-500">
+                      {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <CheckCircle2 className="h-4 w-4" />} অ্যাপ্রুভ করে মেনুতে দাও
+                    </Button>
+                    <Button onClick={() => reject(d)} disabled={busy} size="sm" variant="outline" className="border-red-200 font-bold text-red-600 hover:bg-red-50">
+                      <XCircle className="h-4 w-4" /> বাতিল
+                    </Button>
+                  </div>
+                </div>
+              )
+            })}
+          </div>
+        )}
+        <datalist id="ai-menu-cats">
+          {categories.map((c) => (
+            <option key={c.id} value={c.name} />
+          ))}
+        </datalist>
+
+        {/* ---- decided drafts ---- */}
+        {decided.length > 0 && (
+          <details className="rounded-lg border border-stone-100 bg-stone-50 p-2">
+            <summary className="cursor-pointer text-xs font-black text-stone-500">
+              🗂️ সিদ্ধান্ত নেওয়া ড্রাফট ({toBn(decided.length)})
+            </summary>
+            <div className="mt-2 space-y-1">
+              {decided.map((d) => (
+                <div key={d.id} className="flex items-center gap-2 rounded-lg bg-white px-2 py-1.5">
+                  <Badge className={`text-[10px] ${d.status === 'APPROVED' ? 'bg-emerald-100 text-emerald-700 hover:bg-emerald-100' : 'bg-red-100 text-red-700 hover:bg-red-100'}`}>
+                    {d.status === 'APPROVED' ? '✅ মেনুতে' : '❌ বাতিল'}
+                  </Badge>
+                  <span className="min-w-0 flex-1 truncate text-xs font-bold text-stone-700">{d.name}</span>
+                  <span className="text-[10px] text-stone-400">{d.category}</span>
+                  <Button size="sm" variant="ghost" className="h-7 text-stone-400 hover:bg-red-50 hover:text-red-600" onClick={() => remove(d)}>
+                    <Trash2 className="h-3.5 w-3.5" />
+                  </Button>
+                </div>
+              ))}
+            </div>
+          </details>
+        )}
+      </CardContent>
+    </Card>
+  )
+}
+
 function MenuTab({ onAuthRequired }: TabProps) {
   const [categories, setCategories] = useState<Category[]>([])
   const [items, setItems] = useState<MenuItemRow[]>([])
@@ -1665,6 +1947,9 @@ function MenuTab({ onAuthRequired }: TabProps) {
 
   return (
     <div className="space-y-4">
+      {/* ---- AI মেনু-লেখক ---- */}
+      <AiMenuWriterCard categories={categories} onApproved={load} onAuthRequired={onAuthRequired} />
+
       {/* ---- categories ---- */}
       <Card className="border-stone-200">
         <CardHeader className="pb-2">
