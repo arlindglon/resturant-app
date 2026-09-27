@@ -61,17 +61,26 @@ const SYSTEM_PROMPT = `তুমি একটি রেস্টুরেন্�
 
 কঠোর নিয়ম:
 - মালিকের নোটে এক বা একাধিক খাবারের কথা থাকতে পারে — প্রতিটি আলাদা আইটেম করো। খাবার না-ও থাকতে পারে (যেমন শুধু চা-কফি/ডেজার্ট) — সেগুলোও আইটেম।
-- name: পরিষ্কার আকর্ষণীয় বাংলা নাম। মালিক নাম দিয়ে থাকলে হুবহু সেটাই রাখো (শুধু বানান পরিষ্কার করো)।
-- category: খাবারটির সঠিক ক্যাটাগরি — দেওয়া ক্যাটাগরি-তালিকার কোনো একটির হুবহু নাম ব্যবহার করো যদি মানানসই হয়; না হলে স্বাভাবিক ছোট বাংলা ক্যাটাগরি (যেমন: ভাত, বিরিয়ানি, বার্গার, স্ন্যাকস, নাস্তা, চা-কফি, ডেজার্ট, ড্রিংকস, সেট মেনু)।
-- description: ১-২ বাক্যের মুখে-জল-আনা বাংলা বিবরণ — গন্ধ, টেক্সচার, উপকরণ, কবে খেতে সবচেয়ে ভালো। যেমন: "গরম গরম নরম লুচি, সাথে ঘন আলুর দম ঝোল — সকালের নাস্তায় অতুলনীয়।" মিথ্যা অতিরঞ্জন নয়; মালিকের নোটে যা আছে বা স্বাভাবিক-সাধারণ জিনিস তার ভেতরেই থাকবে।
-- price: মালিক দাম লিখে থাকলে ঠিক সেটাই (শুধু সংখ্যা, টাকায়)। লিখে না থাকলে ঢাকা-শহরের মাঝারি রেস্টুরেন্ট ধরে যুক্তিসঙ্গত দাম প্রস্তাব করো।
-- isSetMenu: একসাথে বেশ কিছু জিনিস এক প্লেট/প্যাকেজে হলে true, নাহলে false।
-- spiceLevels: ঝাল-মাত্রা বাছার অপশন মানানসই হলে ["Mild","Medium","Hot"]; মিষ্টি/ড্রিংকস/চা-কফি হলে []।
-- advice: মালিকের জন্য ১ লাইনের ব্যবসা-পরামর্শ — দাম কেমন রাখা ভালো, কী সাথে বিক্রি হবে, লাভ-মার্জিন বা জনপ্রিয়তার টিপস।
+- NAME: পরিষ্কার আকর্ষণীয় বাংলা নাম। মালিক নাম দিয়ে থাকলে হুবহু সেটাই রাখো (শুধু বানান পরিষ্কার করো)।
+- CATEGORY: খাবারটির সঠিক ক্যাটাগরি — দেওয়া ক্যাটাগরি-তালিকার কোনো একটির হুবহু নাম ব্যবহার করো যদি মানানসই হয়; না হলে স্বাভাবিক ছোট বাংলা ক্যাটাগরি (যেমন: ভাত, বিরিয়ানি, বার্গার, স্ন্যাকস, নাস্তা, চা-কফি, ডেজার্ট, ড্রিংকস, সেট মেনু)।
+- DESC: ১-২ বাক্যের মুখে-জল-আনা বাংলা বিবরণ — গন্ধ, টেক্সচার, উপকরণ, কবে খেতে সবচেয়ে ভালো। যেমন: "গরম গরম নরম লুচি, সাথে ঘন আলুর দম ঝোল — সকালের নাস্তায় অতুলনীয়।" মিথ্যা অতিরঞ্জন নয়; মালিকের নোটে যা আছে বা স্বাভাবিক-সাধারণ জিনিস তার ভেতরেই থাকবে।
+- PRICE: মালিক দাম লিখে থাকলে ঠিক সেটাই। লিখে না থাকলে ঢাকা-শহরের মাঝারি রেস্টুরেন্ট ধরে যুক্তিসঙ্গত দাম প্রস্তাব করো। শুধু সংখ্যা (টাকা)।
+- SET: একসাথে বেশ কিছু জিনিস এক প্লেট/প্যাকেজে হলে yes, নাহলে no।
+- SPICE: ঝাল-মাত্রা বাছার অপশন মানানসই হলে Mild/Medium/Hot (একাধিক হলে কমা দিয়ে); মিষ্টি/ড্রিংকস/চা-কফি হলে none।
+- ADVICE: মালিকের জন্য ১ লাইনের ব্যবসা-পরামর্শ — দাম কেমন রাখা ভালো, কী সাথে বিক্রি হবে, লাভ-মার্জিন বা জনপ্রিয়তার টিপস।
 - নোটের ভাষা যেটাতেই লেখা (বাংলা/বাংলিশ/English) — বুঝে নেবে; বিবরণ ও পরামর্শ সবসময় সহজ বাংলায়।
 
-আউটপুট-ফরম্যাট (সবচেয়ে গুরুত্বপূর্ণ): কোনো ভূমিকা, বিশ্লেষণ, বুলেট, ব্যাখ্যা বা ফরম্যাট-নমুনা কখনো লিখবে না। প্রথম অক্ষর থেকেই JSON দিয়ে শুরু করবে এবং শুধুমাত্র একটাই JSON অবজেক্ট লিখবে — মালিকের নোট থেকে বানানো আসল ডেটা সহ:
-{"items":[{"name":"","category":"","description":"","price":0,"isSetMenu":false,"spiceLevels":[],"advice":""}]}`
+আউটপুট-ফরম্যাট (সবচেয়ে গুরুত্বপূর্ণ): কোনো ভূমিকা, বিশ্লেষণ, বুলেট, ব্যাখ্যা বা নমুনা কখনো লিখবে না — প্রতিটি আইটেমের জন্য ঠিক নিচের ব্লকটাই লিখবে। একাধিক আইটেম হলে ব্লকগুলো একের পর এক, খালি লাইন ছাড়াছাড়া:
+ITEM:
+NAME: <আইটেমের নাম>
+CATEGORY: <ক্যাটাগরি>
+PRICE: <শুধু সংখ্যা>
+DESC: <১-২ বাক্য মুখরোচক বাংলা, এক লাইনে>
+SET: <yes/no>
+SPICE: <Mild/Medium/Hot কমা দিয়ে, নাহলে none>
+ADVICE: <১ লাইন পরামর্শ>
+
+তোমার উত্তরের প্রথম লাইনটাই অবশ্যই "ITEM:" হবে।`
 
 export interface GeneratedDraft {
   name: string
@@ -83,7 +92,21 @@ export interface GeneratedDraft {
   advice: string
 }
 
-function parseDraftItems(raw: string): GeneratedDraft[] | null {
+const BN_DIGITS: Record<string, string> = { '০': '0', '১': '1', '২': '2', '৩': '3', '৪': '4', '৫': '5', '৬': '6', '৭': '7', '৮': '8', '৯': '9' }
+
+function parsePrice(raw: string): number | null {
+  const norm = raw.replace(/[০-৯]/g, (d) => BN_DIGITS[d] || d)
+  const m = norm.replace(/,/g, '').match(/\d+(?:\.\d+)?/)
+  if (!m) return null
+  const n = parseFloat(m[0])
+  return isFinite(n) && n > 0 ? Math.round(n) : null
+}
+
+export function parseDraftItems(raw: string): GeneratedDraft[] | null {
+  // ১) প্রাধান্য: লাইন-ব্লক ফরম্যাট (ITEM:/NAME:/…) — Gemma-র analysis-flood সহজে সহ্য করে
+  const blocks = parseDraftBlocks(raw)
+  if (blocks) return blocks
+  // ২) ব্যাকআপ: মডেল তবু JSON লিখলে ({"items":[…]}) balanced স্ক্যানে খোঁজা
   const j = findDraftJson(raw)
   const items = j?.items
   if (!Array.isArray(items) || items.length === 0) return null
@@ -93,21 +116,80 @@ function parseDraftItems(raw: string): GeneratedDraft[] | null {
     const name = typeof o.name === 'string' ? o.name.trim() : ''
     const category = typeof o.category === 'string' ? o.category.trim() : ''
     if (!name || !category) continue
-    const price = typeof o.price === 'number' && isFinite(o.price) && o.price > 0 ? Math.round(o.price) : null
-    const spice = Array.isArray(o.spiceLevels)
-      ? o.spiceLevels.filter((s): s is string => typeof s === 'string').slice(0, 4)
-      : []
     out.push({
       name: name.slice(0, 80),
       category: category.slice(0, 40),
       description: typeof o.description === 'string' ? o.description.trim().slice(0, 500) : '',
-      price,
+      price: typeof o.price === 'number' && isFinite(o.price) && o.price > 0 ? Math.round(o.price) : null,
       isSetMenu: o.isSetMenu === true,
-      spiceLevels: spice,
+      spiceLevels: Array.isArray(o.spiceLevels) ? o.spiceLevels.filter((s): s is string => typeof s === 'string').slice(0, 4) : [],
       advice: typeof o.advice === 'string' ? o.advice.trim().slice(0, 300) : '',
     })
   }
   return out.length > 0 ? out.slice(0, 10) : null
+}
+
+/**
+ * লাইন-ব্লক পার্সার: ITEM:/NAME:/CATEGORY:/PRICE:/DESC:/SET:/SPICE:/ADVICE: মার্কার
+ * যেকোনো জায়গায় থাকলে ধরে নেয় — মডেল আগে বিশ্লেষণ লিখলেও আসল ব্লকগুলো পড়া যায়।
+ * DESC/ADVICE একাধিক লাইনে গেলে পরের মার্কার পর্যন্ত জুড়ে নেয়।
+ */
+function parseDraftBlocks(raw: string): GeneratedDraft[] | null {
+  const lines = raw.split(/\r?\n/)
+  const fieldRe = /^(NAME|CATEGORY|PRICE|DESC|SET|SPICE|ADVICE)\s*[:：]\s*(.*)$/i
+  const items: GeneratedDraft[] = []
+  let cur: { name?: string; category?: string; description?: string; price?: number | null; isSetMenu?: boolean; spiceLevels?: string[]; advice?: string } | null = null
+  let lastKey = ''
+  let started = false
+  for (const rawLine of lines) {
+    // markdown সাজসজ্জা (**ITEM:** ইত্যাদি) খুলে ফেলা
+    const line = rawLine.replace(/^[\s*`_>-]+/, '').replace(/[\s*`_]+$/, '').trim()
+    if (/^ITEM\b\s*[:：]?\s*(\d+)?\s*$/i.test(line)) {
+      if (cur) pushBlock(cur, items)
+      cur = {}
+      lastKey = ''
+      started = true
+      continue
+    }
+    if (!cur) continue
+    const m = line.match(fieldRe)
+    if (m) {
+      const key = m[1].toUpperCase()
+      const val = m[2].trim()
+      if (key === 'NAME') cur.name = val
+      else if (key === 'CATEGORY') cur.category = val
+      else if (key === 'PRICE') cur.price = parsePrice(val)
+      else if (key === 'DESC') cur.description = val
+      else if (key === 'SET') cur.isSetMenu = /yes|true|হ্যাঁ|সেট/i.test(val)
+      else if (key === 'SPICE') cur.spiceLevels = /none|না|nil/i.test(val) ? [] : val.split(/[,\/]/).map((s) => s.trim()).filter(Boolean).slice(0, 4)
+      else if (key === 'ADVICE') cur.advice = val
+      lastKey = key
+      continue
+    }
+    // মার্কার-হীন লাইন: DESC/ADVICE-এর ধারাবাহিকতা হতে পারে (অন্য সব বিশ্লেষণ ফেলে দাও)
+    if (!line) continue
+    if (lastKey === 'DESC' && cur.description) cur.description = (cur.description + ' ' + line).slice(0, 500)
+    else if (lastKey === 'ADVICE' && cur.advice) cur.advice = (cur.advice + ' ' + line).slice(0, 300)
+  }
+  if (cur) pushBlock(cur, items)
+  if (!started || items.length === 0) return null
+  return items.slice(0, 10)
+}
+
+function pushBlock(cur: { name?: string; category?: string; description?: string; price?: number | null; isSetMenu?: boolean; spiceLevels?: string[]; advice?: string }, out: GeneratedDraft[]) {
+  const name = (cur.name || '').trim()
+  const category = (cur.category || '').trim()
+  if (!name || !category) return
+  if (out.some((o) => o.name === name)) return // একই নাম দুবার এলে একটাই
+  out.push({
+    name: name.slice(0, 80),
+    category: category.slice(0, 40),
+    description: (cur.description || '').trim().slice(0, 500),
+    price: cur.price ?? null,
+    isSetMenu: cur.isSetMenu === true,
+    spiceLevels: (cur.spiceLevels || []).slice(0, 4),
+    advice: (cur.advice || '').trim().slice(0, 300),
+  })
 }
 
 /**
@@ -181,7 +263,7 @@ export async function generateMenuDrafts(rawText: string, existingCategories: st
   const user = [
     `রেস্টুরেন্টের বর্তমান ক্যাটাগরিগুলো: ${catList.length ? catList.join(', ') : '(এখনো কোনো ক্যাটাগরি নেই)'}`,
     `মালিকের নোট:\n"""${rawText.slice(0, 3000)}"""`,
-    'এই নোট থেকে সব খাবার বের করে উপরের JSON ফরম্যাটে দাও।',
+    'এই নোট থেকে সব খাবার বের করে উপরের ব্যবস্থার ফরম্যাটে (প্রতিটি আইটেম = একটা ITEM: ব্লক) দাও — ব্লকের আগে/পরে কিছুই লিখবে না।',
   ].join('\n\n')
   const res = await adminStructuredGenerate({
     system: SYSTEM_PROMPT,
